@@ -1,4 +1,5 @@
 /// The RedPanda Light Client Core Library.
+library;
 ///
 /// This library provides the strictly isolated networking and protocol logic.
 /// It must NOT import Flutter or any UI components.

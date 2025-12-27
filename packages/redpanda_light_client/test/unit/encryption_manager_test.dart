@@ -1,7 +1,5 @@
 import 'dart:typed_data';
 import 'package:test/test.dart';
-import 'package:pointycastle/export.dart';
-import 'package:pointycastle/ecc/api.dart'; // For ECPoint
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/security/encryption_manager.dart';
 
@@ -35,7 +33,7 @@ void main() {
       // RandomThem = randomServer
       clientManager.deriveAndInitialize(
         selfKeys: clientKeys.asAsymmetricKeyPair(),
-        peerPublicKey: serverKeys.publicKey as ECPublicKey,
+        peerPublicKey: serverKeys.publicKey,
         randomFromUs: randomClient,
         randomFromThem: randomServer,
       );
@@ -103,7 +101,7 @@ void main() {
       final randomServer = serverManager.generateRandomFromUs();
       clientManager.deriveAndInitialize(
         selfKeys: clientKeys.asAsymmetricKeyPair(),
-        peerPublicKey: serverKeys.publicKey as ECPublicKey,
+        peerPublicKey: serverKeys.publicKey,
         randomFromUs: randomClient,
         randomFromThem: randomServer,
       );

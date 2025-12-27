@@ -282,18 +282,18 @@ class RedPandaLightClient implements RedPandaClient {
 
 /// Represents a single active connection attempt or established connection.
 class ActivePeer {
-  static const String MAGIC = "k3gV";
-  static const int PROTOCOL_VERSION = 22;
-  static const int HANDSHAKE_LENGTH = 30;
+  static const String _magic = "k3gV";
+  static const int _protocolVersion = 22;
+  static const int _handshakeLength = 30;
 
   // Commands
-  static const int REQUEST_PUBLIC_KEY = 1;
-  static const int SEND_PUBLIC_KEY = 2;
-  static const int ACTIVATE_ENCRYPTION = 3;
-  static const int PING = 5;
-  static const int PONG = 6;
-  static const int REQUEST_PEERLIST = 7;
-  static const int SEND_PEERLIST = 8;
+  static const int _cmdRequestPublicKey = 1;
+  static const int _cmdSendPublicKey = 2;
+  static const int _cmdActivateEncryption = 3;
+  static const int _cmdPing = 5;
+  static const int _cmdPong = 6;
+  static const int _cmdRequestPeerList = 7;
+  static const int _cmdSendPeerList = 8;
 
   final String address;
   final NodeId selfNodeId;
@@ -308,7 +308,6 @@ class ActivePeer {
 
   // State
   bool _handshakeVerified = false;
-  bool _publicKeySent = false;
   Future<void>? _handshakeInitiationFuture;
 
   final EncryptionManager _encryptionManager = EncryptionManager();
@@ -323,7 +322,6 @@ class ActivePeer {
   Uint8List? _randomFromUs;
   bool _pongSent = false;
   bool _isProcessingBuffer = false;
-  ConnectionStatus _status = ConnectionStatus.disconnected;
 
   ActivePeer({
     required this.address,
@@ -371,7 +369,6 @@ class ActivePeer {
     _isDisconnecting = true;
     _socket?.destroy(); // or close
     _socket = null;
-    _status = ConnectionStatus.disconnected;
     _handshakeVerified = false;
     onStatusChange(ConnectionStatus.disconnected);
     onDisconnect();
@@ -383,8 +380,8 @@ class ActivePeer {
 
   void _sendHandshake() {
     final buffer = BytesBuilder();
-    buffer.add(MAGIC.codeUnits);
-    buffer.addByte(PROTOCOL_VERSION);
+    buffer.add(_magic.codeUnits);
+    buffer.addByte(_protocolVersion);
     buffer.addByte(0xFF);
     buffer.add(selfNodeId.bytes);
     final portData = ByteData(4);
@@ -417,7 +414,7 @@ class ActivePeer {
         if (_buffer.isEmpty) break;
 
         if (!_handshakeVerified) {
-          if (_buffer.length >= HANDSHAKE_LENGTH) {
+          if (_buffer.length >= _handshakeLength) {
             _processHandshake();
             continue;
           } else {
@@ -426,12 +423,12 @@ class ActivePeer {
         } else {
           final command = _buffer[0];
 
-          if (command == REQUEST_PUBLIC_KEY) {
-            print('ActivePeer($address): Received REQUEST_PUBLIC_KEY');
+          if (command == _cmdRequestPublicKey) {
+            print('ActivePeer($address): Received requestPublicKey');
             _buffer.removeAt(0);
             _sendPublicKey();
-          } else if (command == ACTIVATE_ENCRYPTION) {
-            print('ActivePeer($address): Received ACTIVATE_ENCRYPTION');
+          } else if (command == _cmdActivateEncryption) {
+            print('ActivePeer($address): Received activateEncryption');
             if (_buffer.length < 1 + 8) {
               break;
             }
@@ -447,8 +444,8 @@ class ActivePeer {
             await _handlePeerEncryptionRandom(
               Uint8List.fromList(randomFromThem),
             );
-          } else if (command == SEND_PUBLIC_KEY) {
-            print('ActivePeer($address): Received SEND_PUBLIC_KEY');
+          } else if (command == _cmdSendPublicKey) {
+            print('ActivePeer($address): Received sendPublicKey');
             if (_buffer.length < 1 + 65) {
               break;
             }
@@ -457,17 +454,17 @@ class ActivePeer {
             _buffer.removeRange(0, 65);
 
             _parsePeerPublicKey(keyBytes);
-          } else if (command == PING) {
+          } else if (command == _cmdPing) {
             print(
-              'ActivePeer($address): Received PING (Encrypted). Sending PONG...',
+              'ActivePeer($address): Received ping (Encrypted). Sending pong...',
             );
             _buffer.removeAt(0);
             _sendPong();
-          } else if (command == PONG) {
-            print('ActivePeer($address): Received PONG (Encrypted).');
+          } else if (command == _cmdPong) {
+            print('ActivePeer($address): Received pong (Encrypted).');
             _buffer.removeAt(0);
-          } else if (command == SEND_PEERLIST) {
-            print('ActivePeer($address): Received SEND_PEERLIST');
+          } else if (command == _cmdSendPeerList) {
+            print('ActivePeer($address): Received sendPeerList');
             if (_buffer.length < 1 + 4) {
               break; // wait for length
             }
@@ -506,9 +503,9 @@ class ActivePeer {
 
   void _processHandshake() {
     final magicBytes = _buffer.sublist(0, 4);
-    final magic = String.fromCharCodes(magicBytes);
-    if (magic != MAGIC) {
-      print('ActivePeer($address): Invalid Magic. Disconnecting.');
+    final magicVal = String.fromCharCodes(magicBytes);
+    if (magicVal != _magic) {
+      print('ActivePeer($address): Invalid magic. Disconnecting.');
       _shutdown();
       return;
     }
@@ -517,19 +514,18 @@ class ActivePeer {
     _handshakeVerified = true;
     onStatusChange(ConnectionStatus.connected); // Notify manager
 
-    _buffer.removeRange(0, HANDSHAKE_LENGTH);
+    _buffer.removeRange(0, _handshakeLength);
 
     print('ActivePeer($address): Requesting Peer Public Key...');
-    _socket!.add([REQUEST_PUBLIC_KEY]);
+    _socket!.add([_cmdRequestPublicKey]);
   }
 
   void _sendPublicKey() {
     print('ActivePeer($address): Sending Public Key...');
     final buffer = BytesBuilder();
-    buffer.addByte(SEND_PUBLIC_KEY);
+    buffer.addByte(_cmdSendPublicKey);
     buffer.add(selfKeys.publicKeyBytes);
     _sendData(buffer.toBytes());
-    _publicKeySent = true;
   }
 
   Uint8List? _pendingRandomFromThem;
@@ -562,10 +558,10 @@ class ActivePeer {
       const Duration(milliseconds: 100),
     ); // Buffer anti-glitch
     final buffer = BytesBuilder();
-    buffer.addByte(ACTIVATE_ENCRYPTION);
+    buffer.addByte(_cmdActivateEncryption);
     buffer.add(_randomFromUs!);
     _sendData(buffer.toBytes(), forceUnencrypted: true);
-    print('ActivePeer($address): Sent ACTIVATE_ENCRYPTION request.');
+    print('ActivePeer($address): Sent activateEncryption request.');
   }
 
   Future<void> _handlePeerEncryptionRandom(Uint8List randomFromThem) async {
@@ -601,8 +597,8 @@ class ActivePeer {
       );
 
       print('ActivePeer($address): Encryption Active!');
-      print('ActivePeer($address): Sending Initial PING (Encrypted)...');
-      _sendData([PING]);
+      print('ActivePeer($address): Sending Initial ping (Encrypted)...');
+      _sendData([_cmdPing]);
 
       // Auto-bootstrap: Request Peer List
       print('ActivePeer($address): Requesting Peer List (Encrypted)...');
@@ -623,8 +619,8 @@ class ActivePeer {
   }
 
   void _sendPong() {
-    print('ActivePeer($address): Sending PONG...');
-    _sendData([PONG]);
+    print('ActivePeer($address): Sending pong...');
+    _sendData([_cmdPong]);
     _pongSent = true;
   }
 
@@ -640,7 +636,7 @@ class ActivePeer {
   }
 
   void requestPeerList() {
-    _sendData([REQUEST_PEERLIST]);
+    _sendData([_cmdRequestPeerList]);
   }
 
   void _handlePeerList(List<int> payload) {

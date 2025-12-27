@@ -4,7 +4,7 @@ import 'dart:typed_data';
 import 'package:pointycastle/export.dart';
 
 class EncryptionManager {
-  static const int ACTIVATE_ENCRYPTION = 3;
+  static const int activateEncryption = 3;
 
   CTRStreamCipher? _cipherSend;
   CTRStreamCipher? _cipherReceive;
