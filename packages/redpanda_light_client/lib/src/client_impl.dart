@@ -243,6 +243,11 @@ class RedPandaLightClient implements RedPandaClient {
               addPeer(p);
             }
           },
+          onPeerListRequested: () {
+            // Return known addresses to share
+            // We filter out the requestor's address if possible (ActivePeer knows it)
+            return _knownAddresses.toList();
+          },
         );
         _peers[address] = peer;
         peer.connect(); // Fire and forget (it is async inside)
@@ -350,6 +355,7 @@ class ActivePeer {
   final void Function(ConnectionStatus) onStatusChange;
   final void Function() onDisconnect;
   final void Function(List<String>)? onPeersReceived;
+  final List<String> Function()? onPeerListRequested;
 
   Socket? _socket;
   final List<int> _buffer = [];
@@ -379,6 +385,7 @@ class ActivePeer {
     required this.onStatusChange,
     required this.onDisconnect,
     this.onPeersReceived,
+    this.onPeerListRequested,
   });
 
   Future<void> connect() async {
@@ -430,7 +437,7 @@ class ActivePeer {
     final buffer = BytesBuilder();
     buffer.add(_magic.codeUnits);
     buffer.addByte(_protocolVersion);
-    buffer.addByte(0xFF);
+    buffer.addByte(1); // 1 = isLightClient
     buffer.add(selfNodeId.bytes);
     final portData = ByteData(4);
     portData.setInt32(0, 0, Endian.big);
@@ -511,6 +518,13 @@ class ActivePeer {
           } else if (command == _cmdPong) {
             print('ActivePeer($address): Received pong (Encrypted).');
             _buffer.removeAt(0);
+          } else if (command == _cmdRequestPeerList) {
+            print('ActivePeer($address): Received requestPeerList');
+            _buffer.removeAt(0);
+            if (onPeerListRequested != null) {
+              final peers = onPeerListRequested!();
+              sendPeerList(peers);
+            }
           } else if (command == _cmdSendPeerList) {
             print('ActivePeer($address): Received sendPeerList');
             if (_buffer.length < 1 + 4) {
@@ -685,6 +699,34 @@ class ActivePeer {
 
   void requestPeerList() {
     _sendData([_cmdRequestPeerList]);
+  }
+
+  void sendPeerList(List<String> peers) {
+    print('ActivePeer($address): Sending Peer List (${peers.length})...');
+    final msg = SendPeerList();
+    for (final p in peers) {
+      try {
+        final parts = p.split(':');
+        if (parts.length == 2) {
+          msg.peers.add(
+            PeerInfoProto()
+              ..ip = parts[0]
+              ..port = int.parse(parts[1]),
+          );
+        }
+      } catch (e) {
+        print('ActivePeer($address): Error parsing peer for send: $p');
+      }
+    }
+    final protoBytes = msg.writeToBuffer();
+    final buffer = BytesBuilder();
+    buffer.addByte(_cmdSendPeerList);
+    final lengthData = ByteData(4);
+    lengthData.setInt32(0, protoBytes.length, Endian.big);
+    buffer.add(lengthData.buffer.asUint8List());
+    buffer.add(protoBytes);
+
+    _sendData(buffer.toBytes());
   }
 
   void _handlePeerList(List<int> payload) {

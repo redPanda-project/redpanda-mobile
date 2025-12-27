@@ -6,7 +6,7 @@ description: Formats, analyzes, tests, and pushes changes to the repository.
 
 1. Format the code to ensure style consistency
 ```bash
-dart format .
+flutter format .
 ```
 
 2. Run static analysis to catch potential issues
@@ -24,11 +24,10 @@ flutter test
 git add .
 ```
 
-5. Commit the changes with a default message
-> [!NOTE]
-> For a custom message, use `git commit -m "your message"` manually before or instead of this step.
+5. Commit the changes
+> agent should decide for a commit message
 ```bash
-git commit -m "chore: ship updates via workflow"
+git commit
 ```
 
 6. Push the committed changes to the remote repository
