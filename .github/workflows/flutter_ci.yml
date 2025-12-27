@@ -1,0 +1,63 @@
+name: Flutter CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.x'
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies (Light Client)
+        run: |
+          cd packages/redpanda_light_client
+          flutter pub get
+
+      - name: Download RedPanda JAR (Backend)
+        run: |
+          mkdir -p references/redPandaj/target
+          gh release download latest --repo redPanda-project/redpandaj --pattern 'redpanda.jar' --dir references/redPandaj/target
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check Formatting (Light Client)
+        run: |
+          cd packages/redpanda_light_client
+          dart format --output=none --set-exit-if-changed .
+
+      - name: Analyze (Light Client)
+        run: |
+          cd packages/redpanda_light_client
+          flutter analyze
+
+      - name: Run Tests (Light Client)
+        run: |
+          cd packages/redpanda_light_client
+          flutter test
+
+      - name: Install dependencies (App)
+        run: flutter pub get
+
+      - name: Check Formatting (App)
+        run: dart format --output=none --set-exit-if-changed .
+
+      - name: Generate code (App)
+        run: flutter pub run build_runner build --delete-conflicting-outputs
+
+      - name: Analyze (App)
+        run: flutter analyze
+
+      - name: Run Tests (App)
+        run: flutter test
