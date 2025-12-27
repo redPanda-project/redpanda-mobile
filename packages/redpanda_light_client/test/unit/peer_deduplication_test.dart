@@ -3,7 +3,6 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
-import 'package:redpanda_light_client/src/client_impl.dart';
 
 // Mock Socket
 class MockSocket implements Socket {
@@ -85,7 +84,7 @@ void main() {
       // Allow initial connection
       await Future.delayed(Duration(milliseconds: 100));
       expect(connectionAttempts, contains('localhost:5000'));
-      int initialCount = connectionAttempts.length;
+      connectionAttempts.length;
 
       // Add alias
       await client.addPeer('127.0.0.1:5000');

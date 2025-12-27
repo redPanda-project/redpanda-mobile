@@ -1,6 +1,4 @@
-import 'dart:io';
 import 'package:test/test.dart';
-import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
 import 'package:redpanda_light_client/src/client_impl.dart';

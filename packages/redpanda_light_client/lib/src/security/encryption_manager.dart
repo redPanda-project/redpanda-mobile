@@ -2,10 +2,6 @@ import 'dart:typed_data';
 
 // PointyCastle imports
 import 'package:pointycastle/export.dart';
-import 'package:pointycastle/ecc/api.dart';
-import 'package:pointycastle/api.dart' as p_api;
-import 'package:pointycastle/block/aes.dart';
-import 'package:pointycastle/stream/ctr.dart';
 
 class EncryptionManager {
   static const int ACTIVATE_ENCRYPTION = 3;
@@ -26,7 +22,7 @@ class EncryptionManager {
     for (int i = 0; i < 32; i++) {
       seedSource[i] = (now >> (i % 8)) & 0xFF;
     }
-    random.seed(p_api.KeyParameter(seedSource));
+    random.seed(KeyParameter(seedSource));
     return random.nextBytes(8);
   }
 
@@ -94,14 +90,14 @@ class EncryptionManager {
     _cipherSend = CTRStreamCipher(AESEngine());
     _cipherSend!.init(
       true,
-      p_api.ParametersWithIV(p_api.KeyParameter(keySend), ivSend),
+      ParametersWithIV(KeyParameter(keySend), ivSend),
     );
 
     // Initialize Receive Cipher (Decryption)
     _cipherReceive = CTRStreamCipher(AESEngine());
     _cipherReceive!.init(
       false,
-      p_api.ParametersWithIV(p_api.KeyParameter(keyReceive), ivReceive),
+      ParametersWithIV(KeyParameter(keyReceive), ivReceive),
     );
   }
 

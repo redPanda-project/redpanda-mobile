@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:hex/hex.dart';
 import 'package:pointycastle/ecc/api.dart'; // Needed for ECPublicKey field
 
 import 'package:redpanda_light_client/src/security/encryption_manager.dart';

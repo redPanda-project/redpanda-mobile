@@ -1,5 +1,3 @@
-import 'dart:io';
-import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
@@ -19,7 +17,7 @@ void main() {
       await launcher.start();
 
       // 2. Init client
-      final keys = NodeId.generateValidKeyPair();
+      final keys = KeyPair.generate();
       client = RedPandaLightClient(
         selfNodeId: NodeId.fromPublicKey(keys),
         selfKeys: keys,

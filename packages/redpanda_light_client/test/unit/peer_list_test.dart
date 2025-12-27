@@ -2,12 +2,9 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:pointycastle/ecc/api.dart';
-import 'package:pointycastle/api.dart';
 import 'package:redpanda_light_client/src/client_impl.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
-import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/generated/commands.pb.dart';
 import 'package:test/test.dart';
 

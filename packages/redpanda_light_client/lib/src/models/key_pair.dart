@@ -1,8 +1,5 @@
 import 'dart:typed_data';
-import 'package:equatable/equatable.dart';
 import 'package:pointycastle/export.dart';
-import 'package:pointycastle/ecc/api.dart';
-import 'package:pointycastle/api.dart'; // For KeyParameter/ParametersWithRandom
 
 /// Represents an Ed25519 or X25519 key pair.
 /// The RedPanda protocol primarily uses Ed25519 for identity and signing,
@@ -28,8 +25,8 @@ class KeyPair {
 
     final pair = generator.generateKeyPair();
     return KeyPair(
-      publicKey: pair.publicKey as ECPublicKey,
-      privateKey: pair.privateKey as ECPrivateKey,
+      publicKey: pair.publicKey,
+      privateKey: pair.privateKey,
     );
   }
 

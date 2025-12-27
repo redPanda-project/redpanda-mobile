@@ -49,7 +49,7 @@ void main() {
       // Note: EncryptionManager.deriveAndInitialize expects 'randomFromUs' to be the logic's own random.
       serverManager.deriveAndInitialize(
         selfKeys: serverKeys.asAsymmetricKeyPair(),
-        peerPublicKey: clientKeys.publicKey as ECPublicKey,
+        peerPublicKey: clientKeys.publicKey,
         randomFromUs: randomServer,
         randomFromThem: randomClient,
       );
