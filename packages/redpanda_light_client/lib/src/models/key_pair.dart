@@ -24,10 +24,7 @@ class KeyPair {
     generator.init(ParametersWithRandom(keyParams, random));
 
     final pair = generator.generateKeyPair();
-    return KeyPair(
-      publicKey: pair.publicKey,
-      privateKey: pair.privateKey,
-    );
+    return KeyPair(publicKey: pair.publicKey, privateKey: pair.privateKey);
   }
 
   Uint8List get publicKeyBytes {

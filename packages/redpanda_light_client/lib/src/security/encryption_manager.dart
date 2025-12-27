@@ -88,10 +88,7 @@ class EncryptionManager {
   ) {
     // Initialize Send Cipher (Encryption)
     _cipherSend = CTRStreamCipher(AESEngine());
-    _cipherSend!.init(
-      true,
-      ParametersWithIV(KeyParameter(keySend), ivSend),
-    );
+    _cipherSend!.init(true, ParametersWithIV(KeyParameter(keySend), ivSend));
 
     // Initialize Receive Cipher (Decryption)
     _cipherReceive = CTRStreamCipher(AESEngine());

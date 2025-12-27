@@ -83,9 +83,7 @@ class RedPandaNodeLauncher {
 
   Future<bool> _processIsDead() async {
     try {
-      await _process!.exitCode.timeout(
-        const Duration(milliseconds: 100),
-      );
+      await _process!.exitCode.timeout(const Duration(milliseconds: 100));
       return true; // If we get an exit code, it's dead
     } on TimeoutException {
       return false; // Still running
