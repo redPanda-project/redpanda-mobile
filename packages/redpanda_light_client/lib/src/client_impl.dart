@@ -11,6 +11,7 @@ import 'package:redpanda_light_client/src/client_facade.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
+import 'package:redpanda_light_client/src/generated/commands.pb.dart';
 
 /// The implementation of the RedPanda Light Client.
 /// Manages network connections, encryption, and routing.
@@ -27,6 +28,7 @@ class RedPandaLightClient implements RedPandaClient {
   // final NetworkManager _networkManager;
 
   final _connectionStatusController = StreamController<ConnectionStatus>.broadcast();
+  final _peerCountController = StreamController<int>.broadcast();
 
   static const List<String> defaultSeeds = [
     'localhost:59558',
@@ -57,7 +59,17 @@ class RedPandaLightClient implements RedPandaClient {
     yield* _connectionStatusController.stream;
   }
   
+  @override
+  Stream<int> get peerCountStream async* {
+    yield _peers.values.where((p) => p.isHandshakeVerified).length;
+    yield* _peerCountController.stream;
+  }
+  
   void _updateStatus(ConnectionStatus status) {
+    // Recalculate connected peers
+    int connectedCount = _peers.values.where((p) => p.isHandshakeVerified).length;
+    _peerCountController.add(connectedCount);
+
     // Simple aggregation: If ANY connected -> Connected.
     // If ALL disconnected -> Disconnected.
     // Logic:
@@ -97,6 +109,28 @@ class RedPandaLightClient implements RedPandaClient {
 
   Future<void> _runConnectionCheck() async {
     print('RedPandaLightClient: Running connection check on ${_knownAddresses.length} addresses.');
+    
+    // Resolve all connected peers to their IPs for deduplication
+    final connectedIps = <String>{};
+    for (final peer in _peers.values) {
+        if (!peer.isDisconnected) {
+             // We can't easily get the resolved IP of an active socket exposed via ActivePeer if strict encapsulation.
+             // But we can try to resolve the *configured* address of the peer.
+             try {
+                final parts = peer.address.split(':');
+                final host = parts[0];
+                // For simplicity, we re-resolve. Optimized way would be to store resolved IP on peer.
+                // NOTE: 'localhost' might resolve to multiple (ipv4/ipv6). We check if ANY match.
+                final lookup = await InternetAddress.lookup(host);
+                for (final addr in lookup) {
+                    connectedIps.add('${addr.address}:${parts[1]}');
+                }
+             } catch (e) {
+                 // ignore
+             }
+        }
+    }
+
     for (final address in _knownAddresses) {
       if (_peers.containsKey(address)) {
         final peer = _peers[address]!;
@@ -106,6 +140,31 @@ class RedPandaLightClient implements RedPandaClient {
         } else {
           continue; // Already connected or connecting
         }
+      }
+
+      // Check if we are already connected to this target via another alias
+      try {
+          final parts = address.split(':');
+          final host = parts[0];
+          final port = parts[1];
+          final lookup = await InternetAddress.lookup(host);
+          
+          bool alreadyConnected = false;
+          for (final addr in lookup) {
+              if (connectedIps.contains('${addr.address}:$port')) {
+                  alreadyConnected = true;
+                  break;
+              }
+          }
+          
+          if (alreadyConnected) {
+              print('RedPandaLightClient: Skipping $address (Already connected via alias).');
+              continue;
+          }
+      } catch (e) {
+          print('RedPandaLightClient: DNS resolution failed for $address: $e');
+          // Fallthrough: Try to connect anyway? Or skip? 
+          // If we can't resolve, connect call will likely fail too.
       }
 
       // Start new connection
@@ -120,6 +179,12 @@ class RedPandaLightClient implements RedPandaClient {
              // Peer calls this when socket closes
              // We don't remove immediately, routine will clean up
           },
+          onPeersReceived: (peers) {
+            print('RedPandaLightClient: Received ${peers.length} peers from $address');
+            for (final p in peers) {
+              addPeer(p);
+            }
+          }
         );
         _peers[address] = peer;
         peer.connect(); // Fire and forget (it is async inside)
@@ -130,13 +195,58 @@ class RedPandaLightClient implements RedPandaClient {
   }
 
   @override
-  void addPeer(String address) {
-    if (!_knownAddresses.contains(address)) {
-      print('RedPandaLightClient: Adding new peer $address');
-      _knownAddresses.add(address);
-      // Optional: trigger immediate check?
-      // For now wait for next tick or logic flow
+  Future<void> addPeer(String address) async {
+    if (_knownAddresses.contains(address)) {
+      return;
     }
+
+    // Strict deduplication: Check if we are already connected to this peer via an alias
+    try {
+        final parts = address.split(':');
+        if (parts.length != 2) return; // Invalid format
+        
+        final host = parts[0];
+        final port = parts[1];
+        
+        final newPeerIps = await InternetAddress.lookup(host);
+        
+        // Check active peers
+        for (final peer in _peers.values) {
+           if (peer.isDisconnected) continue;
+           
+           try {
+               final peerParts = peer.address.split(':');
+               final peerHost = peerParts[0];
+               // Check port match first
+               if (peerParts[1] != port) continue; 
+               
+               // Resolve peer host
+               final peerIps = await InternetAddress.lookup(peerHost);
+               
+               // Intersection check
+               for (final newIp in newPeerIps) {
+                   for (final peerIp in peerIps) {
+                       if (newIp.address == peerIp.address) {
+                           print('RedPandaLightClient: duplicate addPeer denied: $address resolves to same IP (${newIp.address}) as connected peer ${peer.address}');
+                           return; // Duplicate found, reject
+                       }
+                   }
+               }
+           } catch (e) {
+               // Ignore resolution errors for peers
+           }
+        }
+    } catch (e) {
+        print('RedPandaLightClient: Error resolving $address during addPeer: $e');
+        // On error, maybe we allow it? or reject? 
+        // If we can't resolve it, we can't connect anyway likely. But safe to add?
+        // Let's add it if resolution fails, logic below handles connecting.
+    }
+
+    print('RedPandaLightClient: Adding new peer $address');
+    _knownAddresses.add(address);
+    // Trigger immediate check or let the timer handle it?
+    // Timer handles it.
   }
 
   @override
@@ -168,6 +278,8 @@ class ActivePeer {
   static const int ACTIVATE_ENCRYPTION = 3;
   static const int PING = 5;
   static const int PONG = 6;
+  static const int REQUEST_PEERLIST = 7;
+  static const int SEND_PEERLIST = 8;
 
   final String address;
   final NodeId selfNodeId;
@@ -175,6 +287,7 @@ class ActivePeer {
   final SocketFactory socketFactory;
   final void Function(ConnectionStatus) onStatusChange;
   final void Function() onDisconnect;
+  final void Function(List<String>)? onPeersReceived;
 
   Socket? _socket;
   final List<int> _buffer = []; 
@@ -205,6 +318,7 @@ class ActivePeer {
     required this.socketFactory,
     required this.onStatusChange,
     required this.onDisconnect,
+    this.onPeersReceived,
   });
 
   Future<void> connect() async {
@@ -334,6 +448,25 @@ class ActivePeer {
           } else if (command == PONG) {
             print('ActivePeer($address): Received PONG (Encrypted).');
             _buffer.removeAt(0);
+          } else if (command == SEND_PEERLIST) {
+             print('ActivePeer($address): Received SEND_PEERLIST');
+             if (_buffer.length < 1 + 4) {
+               break; // wait for length
+             }
+             // Peek length
+             final lengthData = Uint8List.fromList(_buffer.sublist(1, 5));
+             final length = ByteData.view(lengthData.buffer).getInt32(0, Endian.big);
+             
+             if (_buffer.length < 1 + 4 + length) {
+               break; // wait for full payload
+             }
+             
+             _buffer.removeAt(0); // Remove Command
+             _buffer.removeRange(0, 4); // Remove Length
+             
+             final payload = _buffer.sublist(0, length);
+             _handlePeerList(payload);
+             _buffer.removeRange(0, length);
           } else {
              print('ActivePeer($address): Unknown command byte: $command. Discarding.');
              _buffer.removeAt(0);
@@ -377,6 +510,8 @@ class ActivePeer {
     _publicKeySent = true;
   }
 
+  Uint8List? _pendingRandomFromThem;
+
   void _parsePeerPublicKey(List<int> keyBytes) {
       final ecParams = ECDomainParameters('brainpoolp256r1');
       final curve = ecParams.curve;
@@ -387,9 +522,16 @@ class ActivePeer {
       if (_randomFromUs == null) {
           _handshakeInitiationFuture = _initiateEncryptionHandshake();
       }
+
+      if (_pendingRandomFromThem != null) {
+        print('ActivePeer($address): Found pending encryption request. Finalizing now.');
+        _finalizeEncryption(_pendingRandomFromThem!);
+        _pendingRandomFromThem = null;
+      }
   }
 
   Future<void> _initiateEncryptionHandshake() async {
+      if (_randomFromUs != null) return; // Already initiated
       print('ActivePeer($address): Initiating Encryption Handshake...');
       _randomFromUs = _encryptionManager.generateRandomFromUs();
       await Future.delayed(const Duration(milliseconds: 100)); // Buffer anti-glitch
@@ -410,8 +552,13 @@ class ActivePeer {
 
   void _finalizeEncryption(Uint8List randomFromThem) {
     try {
-      if (selfKeys.privateKey == null || _peerPublicKey == null || _randomFromUs == null) {
-        print('ActivePeer($address): Cannot activate encryption, missing state.');
+      if (_peerPublicKey == null) {
+         print('ActivePeer($address): Peer Public Key missing. Deferring encryption finalization.');
+         _pendingRandomFromThem = randomFromThem;
+         return;
+      }
+      if (selfKeys.privateKey == null || _randomFromUs == null) {
+        print('ActivePeer($address): Cannot activate encryption, missing self state.');
         return;
       }
 
@@ -426,6 +573,10 @@ class ActivePeer {
       print('ActivePeer($address): Encryption Active!');
       print('ActivePeer($address): Sending Initial PING (Encrypted)...');
       _sendData([PING]);
+      
+      // Auto-bootstrap: Request Peer List
+      print('ActivePeer($address): Requesting Peer List (Encrypted)...');
+      requestPeerList();
       
       if (_buffer.isNotEmpty) {
           final remaining = Uint8List.fromList(_buffer);
@@ -456,5 +607,27 @@ class ActivePeer {
       output = Uint8List.fromList(data);
     }
     _socket!.add(output);
+  }
+
+  void requestPeerList() {
+    _sendData([REQUEST_PEERLIST]);
+  }
+  
+  void _handlePeerList(List<int> payload) {
+    try {
+      final msg = SendPeerList.fromBuffer(payload);
+      final peers = <String>[];
+      for (final peerProto in msg.peers) {
+        if (peerProto.ip.isNotEmpty && peerProto.port > 0) {
+          final peerAddr = '${peerProto.ip}:${peerProto.port}';
+          // Filter out our own address if possible, but we might not know it easily.
+          // The client will deduplicate anyway.
+          peers.add(peerAddr);
+        }
+      }
+      onPeersReceived?.call(peers);
+    } catch (e) {
+      print('ActivePeer($address): Failed to parse peer list: $e');
+    }
   }
 }

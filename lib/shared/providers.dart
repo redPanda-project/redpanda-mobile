@@ -25,3 +25,8 @@ final connectionStatusProvider = StreamProvider<ConnectionStatus>((ref) {
   final client = ref.watch(redPandaClientProvider);
   return client.connectionStatus;
 });
+
+final peerCountProvider = StreamProvider<int>((ref) {
+  final client = ref.watch(redPandaClientProvider);
+  return client.peerCountStream;
+});

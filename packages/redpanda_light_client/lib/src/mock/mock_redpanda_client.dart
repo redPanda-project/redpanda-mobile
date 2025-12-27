@@ -10,6 +10,10 @@ class MockRedPandaClient implements RedPandaClient {
   Stream<ConnectionStatus> get connectionStatus => _connectionStatusController.stream;
 
   @override
+  Stream<int> get peerCountStream => Stream.value(1); // Mock 1 peer
+
+
+  @override
   Future<void> connect() async {
     _connectionStatusController.add(ConnectionStatus.connecting);
     await Future.delayed(const Duration(seconds: 3)); // Simulate network delay
@@ -28,7 +32,7 @@ class MockRedPandaClient implements RedPandaClient {
     return "mock-message-id-${DateTime.now().millisecondsSinceEpoch}";
   }
   @override
-  void addPeer(String address) {
+  Future<void> addPeer(String address) async {
     // Mock implementation - do nothing or log
     print('MockRedPandaClient: Added peer $address');
   }

@@ -9,6 +9,9 @@ class ConnectionStatusBadge extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final statusAsync = ref.watch(connectionStatusProvider);
+    final countAsync = ref.watch(peerCountProvider);
+    
+    final count = countAsync.value ?? 0;
 
     return statusAsync.when(
       data: (status) {
@@ -20,7 +23,7 @@ class ConnectionStatusBadge extends ConsumerWidget {
           case ConnectionStatus.connected:
             color = Colors.greenAccent;
             icon = Icons.cloud_done;
-            tooltip = "Connected to RedPanda Network";
+            tooltip = "Connected to RedPanda Network ($count peers)";
             break;
           case ConnectionStatus.connecting:
             color = Colors.orangeAccent;
@@ -29,20 +32,50 @@ class ConnectionStatusBadge extends ConsumerWidget {
             break;
           case ConnectionStatus.offline:
           case ConnectionStatus.disconnected:
-            color = Colors.orangeAccent;
+            color = Colors.grey;
             icon = Icons.cloud_off;
             tooltip = "Offline";
             break;
         }
 
-        return IconButton(
-          icon: Icon(icon, color: color),
-          tooltip: tooltip,
-          onPressed: () {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(tooltip)),
-            );
-          },
+        return Stack(
+          alignment: Alignment.topRight,
+          children: [
+            IconButton(
+              icon: Icon(icon, color: color),
+              tooltip: tooltip,
+              onPressed: () {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(tooltip)),
+                );
+              },
+            ),
+            if (status == ConnectionStatus.connected && count > 0)
+              Positioned(
+                right: 8,
+                top: 8,
+                child: Container(
+                  padding: const EdgeInsets.all(2),
+                  decoration: BoxDecoration(
+                    color: Colors.red,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  constraints: const BoxConstraints(
+                    minWidth: 14,
+                    minHeight: 14,
+                  ),
+                  child: Text(
+                    '$count',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 8,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              )
+          ],
         );
       },
       loading: () => const SizedBox(

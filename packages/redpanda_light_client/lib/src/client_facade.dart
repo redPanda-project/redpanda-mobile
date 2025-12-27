@@ -4,6 +4,9 @@ import 'package:redpanda_light_client/src/models/connection_status.dart';
 abstract class RedPandaClient {
   /// Stream of connection status updates.
   Stream<ConnectionStatus> get connectionStatus;
+  
+  /// Stream of connected peer count.
+  Stream<int> get peerCountStream;
 
   /// Connects to the network (starts background services).
   Future<void> connect();
@@ -16,5 +19,5 @@ abstract class RedPandaClient {
   Future<String> sendMessage(String recipientPublicKey, String content);
 
   /// Adds a peer address (host:port) to the connection pool.
-  void addPeer(String address);
+  Future<void> addPeer(String address);
 }

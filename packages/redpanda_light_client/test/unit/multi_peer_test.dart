@@ -112,7 +112,7 @@ void main() {
       connectionAttempts.clear();
       
       // Add new peer
-      client.addPeer('localhost:1003');
+      await client.addPeer('localhost:1003');
       
       // Wait for next tick (max 3s)
       await Future.delayed(Duration(milliseconds: 3500));
