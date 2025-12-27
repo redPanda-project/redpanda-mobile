@@ -21,19 +21,18 @@ class NodeId extends Equatable {
     // For crypto keys we will use SecureRandom
     final secureRandom = SecureRandom("Fortuna")
       ..seed(KeyParameter(Uint8List.fromList(List.generate(32, (i) => i))));
-    
+
     return NodeId(secureRandom.nextBytes(length));
   }
 
   factory NodeId.fromPublicKey(KeyPair keys) {
-      final pubKeyBytes = keys.publicKeyBytes;
-      final digest = SHA256Digest();
-      // KademliaId is computed from SINGLE SHA-256 of the uncompressed public key (65 bytes)
-      final hash = digest.process(pubKeyBytes); 
-      
-      return NodeId(hash.sublist(0, length));
-  }
+    final pubKeyBytes = keys.publicKeyBytes;
+    final digest = SHA256Digest();
+    // KademliaId is computed from SINGLE SHA-256 of the uncompressed public key (65 bytes)
+    final hash = digest.process(pubKeyBytes);
 
+    return NodeId(hash.sublist(0, length));
+  }
 
   String toHex() => HEX.encode(bytes);
 
@@ -42,6 +41,6 @@ class NodeId extends Equatable {
 
   @override
   String toString() => toHex();
-  
+
   // TODO: Add distance calculation (XOR) if needed for routing logic
 }

@@ -15,10 +15,7 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/onboarding',
         builder: (context, state) => const OnboardingScreen(),
       ),
-      GoRoute(
-        path: '/',
-        builder: (context, state) => const HomeScreen(),
-      ),
+      GoRoute(path: '/', builder: (context, state) => const HomeScreen()),
       GoRoute(
         path: '/chat/:uuid',
         builder: (context, state) {
@@ -28,20 +25,20 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
     ],
     redirect: (context, state) async {
-       // Check if user exists
-       final db = ref.read(dbProvider);
-       final users = await db.select(db.users).get();
-       final userCount = users.length;
-       
-       final loggingIn = state.uri.toString() == '/onboarding';
-       if (userCount == 0) {
-         return '/onboarding';
-       }
+      // Check if user exists
+      final db = ref.read(dbProvider);
+      final users = await db.select(db.users).get();
+      final userCount = users.length;
 
-       if (loggingIn) {
-         return '/';
-       }
-       return null;
+      final loggingIn = state.uri.toString() == '/onboarding';
+      if (userCount == 0) {
+        return '/onboarding';
+      }
+
+      if (loggingIn) {
+        return '/';
+      }
+      return null;
     },
   );
 });

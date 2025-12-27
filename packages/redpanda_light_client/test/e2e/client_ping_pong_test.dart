@@ -34,17 +34,25 @@ void main() {
       // Note: In a real unit test we might want to mock the logger or expose a stream.
       // For this E2E, we assume if the connection holds and encryption is active, PINGs are flowing.
       // But we can also check if the client stays connected for > 5 seconds, as the server usually pings every few seconds.
-      
+
       await client.connect();
-      
+
       // Wait for handshake
       await Future.delayed(const Duration(seconds: 4));
-      expect(client.isEncryptionActive, isTrue, reason: "Encryption should be active");
+      expect(
+        client.isEncryptionActive,
+        isTrue,
+        reason: "Encryption should be active",
+      );
 
       // Wait for PING/PONG exchange (Server pings shortly after handshake)
       await Future.delayed(const Duration(seconds: 4));
-      
-      expect(client.isPongSent, isTrue, reason: "Client should have responded to PING with PONG");
+
+      expect(
+        client.isPongSent,
+        isTrue,
+        reason: "Client should have responded to PING with PONG",
+      );
     });
   });
 }

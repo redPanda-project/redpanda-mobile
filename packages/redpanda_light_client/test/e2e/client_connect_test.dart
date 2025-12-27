@@ -32,24 +32,31 @@ void main() {
       await launcher.stop();
     });
 
-    test('Client connects to local node and transitions to connected state', () async {
-      final statusExpectation = expectLater(
-        client.connectionStatus,
-        emitsInOrder([
-          ConnectionStatus.connecting,
-          ConnectionStatus.connected,
-        ]),
-      );
+    test(
+      'Client connects to local node and transitions to connected state',
+      () async {
+        final statusExpectation = expectLater(
+          client.connectionStatus,
+          emitsInOrder([
+            ConnectionStatus.connecting,
+            ConnectionStatus.connected,
+          ]),
+        );
 
-      await client.connect();
-      
-      // Wait for status to be connected
-      await statusExpectation;
+        await client.connect();
 
-      // Wait for handshake and encryption to complete
-      await Future.delayed(const Duration(seconds: 5));
-      
-      expect(client.isEncryptionActive, isTrue, reason: "Encryption should be active after handshake");
-    });
+        // Wait for status to be connected
+        await statusExpectation;
+
+        // Wait for handshake and encryption to complete
+        await Future.delayed(const Duration(seconds: 5));
+
+        expect(
+          client.isEncryptionActive,
+          isTrue,
+          reason: "Encryption should be active after handshake",
+        );
+      },
+    );
   });
 }

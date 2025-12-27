@@ -15,7 +15,7 @@ class Users extends Table {
   TextColumn get username => text()();
   TextColumn get avatarUrl => text().nullable()();
   TextColumn get publicKey => text().nullable()();
-  
+
   @override
   Set<Column> get primaryKey => {uuid};
 }
@@ -26,14 +26,15 @@ class Channels extends Table {
   TextColumn get privateKey => text().nullable()(); // Added privateKey
   DateTimeColumn get lastSeen => dateTime().nullable()();
   BoolColumn get isOnline => boolean().withDefault(const Constant(false))();
-  
+
   @override
   Set<Column> get primaryKey => {uuid};
 }
 
 class Messages extends Table {
   IntColumn get id => integer().autoIncrement()();
-  TextColumn get conversationId => text().references(Channels, #uuid)(); // Updated reference
+  TextColumn get conversationId =>
+      text().references(Channels, #uuid)(); // Updated reference
   TextColumn get senderId => text()();
   TextColumn get content => text()();
   DateTimeColumn get timestamp => dateTime()();
@@ -60,7 +61,7 @@ class AppDatabase extends _$AppDatabase {
           // For now, let's just create the new table and drop the old one if needed, or better:
           // Since we changed the class name, Drift sees it as a new table 'channels'.
           // 'Contacts' table will remain but be unused unless we drop it.
-          await m.createTable(channels); 
+          await m.createTable(channels);
           // Note: In real app we might want to migrate data from contacts to channels.
         }
       },
@@ -70,9 +71,7 @@ class AppDatabase extends _$AppDatabase {
   static QueryExecutor _openConnection() {
     return driftDatabase(
       name: 'redpanda_db',
-      native: const DriftNativeOptions(
-        shareAcrossIsolates: true,
-      ),
+      native: const DriftNativeOptions(shareAcrossIsolates: true),
       web: DriftWebOptions(
         sqlite3Wasm: Uri.parse('sqlite3.wasm'),
         driftWorker: Uri.parse('drift_worker.js'),

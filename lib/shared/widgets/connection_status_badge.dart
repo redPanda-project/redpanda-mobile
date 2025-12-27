@@ -10,7 +10,7 @@ class ConnectionStatusBadge extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final statusAsync = ref.watch(connectionStatusProvider);
     final countAsync = ref.watch(peerCountProvider);
-    
+
     final count = countAsync.value ?? 0;
 
     return statusAsync.when(
@@ -45,9 +45,9 @@ class ConnectionStatusBadge extends ConsumerWidget {
               icon: Icon(icon, color: color),
               tooltip: tooltip,
               onPressed: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(tooltip)),
-                );
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(SnackBar(content: Text(tooltip)));
               },
             ),
             if (status == ConnectionStatus.connected && count > 0)
@@ -74,7 +74,7 @@ class ConnectionStatusBadge extends ConsumerWidget {
                     textAlign: TextAlign.center,
                   ),
                 ),
-              )
+              ),
           ],
         );
       },

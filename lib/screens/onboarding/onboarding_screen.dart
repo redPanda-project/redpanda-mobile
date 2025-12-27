@@ -25,22 +25,21 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
 
     try {
       final db = ref.read(dbProvider);
-      
-      await db.into(db.users).insert(
-        UsersCompanion.insert(
-          uuid: const Uuid().v4(),
-          username: name,
-        ),
-      );
+
+      await db
+          .into(db.users)
+          .insert(
+            UsersCompanion.insert(uuid: const Uuid().v4(), username: name),
+          );
 
       if (mounted) {
         GoRouter.of(context).go('/');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: $e')));
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -69,9 +68,9 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               const SizedBox(height: 8),
               Text(
                 "Your private, local chat.",
-                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                  color: Colors.grey[600],
-                ),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodyLarge?.copyWith(color: Colors.grey[600]),
               ),
               const SizedBox(height: 48),
               TextField(
@@ -96,7 +95,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                       borderRadius: BorderRadius.circular(12),
                     ),
                   ),
-                  child: _isLoading 
+                  child: _isLoading
                       ? const CircularProgressIndicator(color: Colors.white)
                       : const Text("Get Started"),
                 ),

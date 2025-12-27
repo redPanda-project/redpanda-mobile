@@ -4,14 +4,15 @@ import 'package:redpanda_light_client/src/models/connection_status.dart';
 
 /// A mock implementation of [RedPandaClient] for testing and UI development.
 class MockRedPandaClient implements RedPandaClient {
-  final _connectionStatusController = StreamController<ConnectionStatus>.broadcast();
-  
+  final _connectionStatusController =
+      StreamController<ConnectionStatus>.broadcast();
+
   @override
-  Stream<ConnectionStatus> get connectionStatus => _connectionStatusController.stream;
+  Stream<ConnectionStatus> get connectionStatus =>
+      _connectionStatusController.stream;
 
   @override
   Stream<int> get peerCountStream => Stream.value(1); // Mock 1 peer
-
 
   @override
   Future<void> connect() async {
@@ -31,6 +32,7 @@ class MockRedPandaClient implements RedPandaClient {
     await Future.delayed(Duration(milliseconds: 500));
     return "mock-message-id-${DateTime.now().millisecondsSinceEpoch}";
   }
+
   @override
   Future<void> addPeer(String address) async {
     // Mock implementation - do nothing or log

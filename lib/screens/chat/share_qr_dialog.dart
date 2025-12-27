@@ -30,12 +30,9 @@ class ShareChannelDialog extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-          Text(
-            "Private Key", 
-            style: Theme.of(context).textTheme.labelSmall,
-          ),
+          Text("Private Key", style: Theme.of(context).textTheme.labelSmall),
           SelectableText(
-            privateKey, 
+            privateKey,
             style: const TextStyle(fontFamily: 'Courier', fontSize: 12),
             textAlign: TextAlign.center,
           ),

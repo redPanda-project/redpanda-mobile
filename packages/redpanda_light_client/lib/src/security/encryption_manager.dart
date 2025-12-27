@@ -1,4 +1,3 @@
-
 import 'dart:typed_data';
 
 // PointyCastle imports
@@ -13,7 +12,7 @@ class EncryptionManager {
 
   CTRStreamCipher? _cipherSend;
   CTRStreamCipher? _cipherReceive;
-  
+
   bool _isEncryptionActive = false;
   bool get isEncryptionActive => _isEncryptionActive;
 
@@ -25,7 +24,7 @@ class EncryptionManager {
     final seedSource = Uint8List(32);
     final now = DateTime.now().millisecondsSinceEpoch;
     for (int i = 0; i < 32; i++) {
-       seedSource[i] = (now >> (i % 8)) & 0xFF;
+      seedSource[i] = (now >> (i % 8)) & 0xFF;
     }
     random.seed(p_api.KeyParameter(seedSource));
     return random.nextBytes(8);
@@ -54,7 +53,7 @@ class EncryptionManager {
     sendBuffer.add(randomFromUs);
     sendBuffer.add(randomFromThem);
     final sendKeyInput = sendBuffer.toBytes();
-    
+
     final sharedSecretSend = Uint8List(32);
     digest.update(sendKeyInput, 0, sendKeyInput.length);
     digest.doFinal(sharedSecretSend, 0);
@@ -85,14 +84,25 @@ class EncryptionManager {
     _isEncryptionActive = true;
   }
 
-  void _initCiphers(Uint8List keySend, Uint8List ivSend, Uint8List keyReceive, Uint8List ivReceive) {
+  void _initCiphers(
+    Uint8List keySend,
+    Uint8List ivSend,
+    Uint8List keyReceive,
+    Uint8List ivReceive,
+  ) {
     // Initialize Send Cipher (Encryption)
     _cipherSend = CTRStreamCipher(AESEngine());
-    _cipherSend!.init(true, p_api.ParametersWithIV(p_api.KeyParameter(keySend), ivSend));
+    _cipherSend!.init(
+      true,
+      p_api.ParametersWithIV(p_api.KeyParameter(keySend), ivSend),
+    );
 
     // Initialize Receive Cipher (Decryption)
     _cipherReceive = CTRStreamCipher(AESEngine());
-    _cipherReceive!.init(false, p_api.ParametersWithIV(p_api.KeyParameter(keyReceive), ivReceive));
+    _cipherReceive!.init(
+      false,
+      p_api.ParametersWithIV(p_api.KeyParameter(keyReceive), ivReceive),
+    );
   }
 
   Uint8List encrypt(Uint8List data) {
@@ -113,7 +123,7 @@ class EncryptionManager {
     var bytes = number.toRadixString(16).padLeft(length * 2, '0');
     var list = Uint8List(length);
     for (var i = 0; i < length; i++) {
-        list[i] = int.parse(bytes.substring(i * 2, i * 2 + 2), radix: 16);
+      list[i] = int.parse(bytes.substring(i * 2, i * 2 + 2), radix: 16);
     }
     return list;
   }

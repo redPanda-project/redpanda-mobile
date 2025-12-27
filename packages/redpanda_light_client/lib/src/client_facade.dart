@@ -4,7 +4,7 @@ import 'package:redpanda_light_client/src/models/connection_status.dart';
 abstract class RedPandaClient {
   /// Stream of connection status updates.
   Stream<ConnectionStatus> get connectionStatus;
-  
+
   /// Stream of connected peer count.
   Stream<int> get peerCountStream;
 

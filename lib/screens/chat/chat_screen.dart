@@ -7,7 +7,7 @@ import 'package:redpanda/shared/providers.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
   final String peerUuid;
-  
+
   const ChatScreen({super.key, required this.peerUuid});
 
   @override
@@ -23,35 +23,39 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _messageController.clear();
 
     final db = ref.read(dbProvider);
-    
+
     // Get current user (assumed singleton for now)
     final currentUser = await db.select(db.users).getSingleOrNull();
     if (currentUser == null) return;
 
-    await db.into(db.messages).insert(
-       MessagesCompanion.insert(
-         conversationId: widget.peerUuid,
-         senderId: currentUser.uuid,
-         content: content,
-         timestamp: DateTime.now(),
-         status: 0, // MessageStatus.pending
-         type: 0, // MessageType.text
-       ),
-    );
-    
+    await db
+        .into(db.messages)
+        .insert(
+          MessagesCompanion.insert(
+            conversationId: widget.peerUuid,
+            senderId: currentUser.uuid,
+            content: content,
+            timestamp: DateTime.now(),
+            status: 0, // MessageStatus.pending
+            type: 0, // MessageType.text
+          ),
+        );
+
     // START: Simulate receiving a reply (Mock logic)
     Future.delayed(const Duration(seconds: 1), () async {
-       if (!mounted) return;
-       await db.into(db.messages).insert(
-         MessagesCompanion.insert(
-           conversationId: widget.peerUuid,
-           senderId: widget.peerUuid, // From them
-           content: "Replying to: $content",
-           timestamp: DateTime.now(),
-           status: 1, // Delivered
-           type: 0,
-         ),
-       );
+      if (!mounted) return;
+      await db
+          .into(db.messages)
+          .insert(
+            MessagesCompanion.insert(
+              conversationId: widget.peerUuid,
+              senderId: widget.peerUuid, // From them
+              content: "Replying to: $content",
+              timestamp: DateTime.now(),
+              status: 1, // Delivered
+              type: 0,
+            ),
+          );
     });
     // END: Mock logic
   }
@@ -70,13 +74,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             children: [
               Text(channel?.username ?? "Unknown"),
               Text(
-                channel?.isOnline == true ? "Online" : "Offline", 
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.normal),
+                channel?.isOnline == true ? "Online" : "Offline",
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.normal,
+                ),
               ),
             ],
           ),
           loading: () => const Text("Loading..."),
-          error: (_,__) => const Text("Chat"),
+          error: (_, __) => const Text("Chat"),
         ),
         actions: [
           channelAsync.when(
@@ -109,23 +116,33 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   return const Center(child: Text("Say hi!"));
                 }
                 return ListView.builder(
-                  reverse: true, // Show newest at bottom (requires list to be reversed order)
+                  reverse:
+                      true, // Show newest at bottom (requires list to be reversed order)
                   itemCount: messages.length,
                   itemBuilder: (context, index) {
                     final msg = messages[index];
-                    final isMe = msg.conversationId == widget.peerUuid && msg.senderId != widget.peerUuid; 
+                    final isMe =
+                        msg.conversationId == widget.peerUuid &&
+                        msg.senderId != widget.peerUuid;
                     // Note: Logic above is a bit simplified. Usually check if senderId == myUuid.
                     // But here, if senderId != peerUuid, assume it's me.
-                    
+
                     return Align(
-                      alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                      alignment: isMe
+                          ? Alignment.centerRight
+                          : Alignment.centerLeft,
                       child: Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                        margin: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 4,
+                        ),
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
-                          color: isMe 
-                              ? Theme.of(context).colorScheme.primaryContainer 
-                              : Theme.of(context).colorScheme.surfaceContainerHighest,
+                          color: isMe
+                              ? Theme.of(context).colorScheme.primaryContainer
+                              : Theme.of(
+                                  context,
+                                ).colorScheme.surfaceContainerHighest,
                           borderRadius: BorderRadius.circular(16),
                         ),
                         child: Text(msg.content),
@@ -147,8 +164,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     controller: _messageController,
                     decoration: InputDecoration(
                       hintText: "Type a message...",
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(24)),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                      ),
                     ),
                     onSubmitted: (_) => _sendMessage(),
                   ),
@@ -169,15 +190,28 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 // ... (imports)
 
 // Providers
-final messagesStreamProvider = StreamProvider.family<List<Message>, String>((ref, conversationId) {
+final messagesStreamProvider = StreamProvider.family<List<Message>, String>((
+  ref,
+  conversationId,
+) {
   final db = ref.watch(dbProvider);
   return (db.select(db.messages)
-      ..where((t) => t.conversationId.equals(conversationId))
-      ..orderBy([(t) => drift.OrderingTerm(expression: t.timestamp, mode: drift.OrderingMode.desc)]))
+        ..where((t) => t.conversationId.equals(conversationId))
+        ..orderBy([
+          (t) => drift.OrderingTerm(
+            expression: t.timestamp,
+            mode: drift.OrderingMode.desc,
+          ),
+        ]))
       .watch();
 });
 
-final channelProvider = FutureProvider.family<Channel?, String>((ref, uuid) async {
+final channelProvider = FutureProvider.family<Channel?, String>((
+  ref,
+  uuid,
+) async {
   final db = ref.watch(dbProvider);
-  return (db.select(db.channels)..where((t) => t.uuid.equals(uuid))).getSingleOrNull();
+  return (db.select(
+    db.channels,
+  )..where((t) => t.uuid.equals(uuid))).getSingleOrNull();
 });

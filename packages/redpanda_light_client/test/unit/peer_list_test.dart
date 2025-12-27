@@ -29,14 +29,17 @@ void main() {
 
     mockSocket = MockSocket();
     socketStreamController = StreamController<Uint8List>();
-    
-    when(() => mockSocket.listen(
-      any(),
-      onError: any(named: 'onError'),
-      onDone: any(named: 'onDone'),
-      cancelOnError: any(named: 'cancelOnError'),
-    )).thenAnswer((invocation) {
-      final onData = invocation.positionalArguments[0] as void Function(Uint8List);
+
+    when(
+      () => mockSocket.listen(
+        any(),
+        onError: any(named: 'onError'),
+        onDone: any(named: 'onDone'),
+        cancelOnError: any(named: 'cancelOnError'),
+      ),
+    ).thenAnswer((invocation) {
+      final onData =
+          invocation.positionalArguments[0] as void Function(Uint8List);
       return socketStreamController.stream.listen(onData);
     });
 
@@ -47,7 +50,6 @@ void main() {
     // Use the KeyPair.generate() factory which creates a valid dummy pair
     selfKeys = KeyPair.generate();
     selfNodeId = NodeId(Uint8List(20)); // Dummy NodeId
-    
   });
 
   tearDown(() {
@@ -56,7 +58,7 @@ void main() {
 
   test('ActivePeer handles SEND_PEERLIST command correctly', () async {
     final receivedPeers = Completer<List<String>>();
-    
+
     activePeer = ActivePeer(
       address: 'localhost:1234',
       selfNodeId: selfNodeId,
@@ -79,7 +81,7 @@ void main() {
     handshakeResponse.addByte(0xFF);
     handshakeResponse.add(Uint8List(20)); // Peer NodeId
     handshakeResponse.add(Uint8List(4)); // Port
-    
+
     socketStreamController.add(handshakeResponse.toBytes());
 
     // Allow loop to process
@@ -90,22 +92,30 @@ void main() {
     // 2. Send SEND_PEERLIST command
     // Create Proto
     final sendPeerList = SendPeerList();
-    sendPeerList.peers.add(PeerInfoProto()..ip = '192.168.1.50'..port = 5000);
-    sendPeerList.peers.add(PeerInfoProto()..ip = '10.0.0.5'..port = 6000);
-    
+    sendPeerList.peers.add(
+      PeerInfoProto()
+        ..ip = '192.168.1.50'
+        ..port = 5000,
+    );
+    sendPeerList.peers.add(
+      PeerInfoProto()
+        ..ip = '10.0.0.5'
+        ..port = 6000,
+    );
+
     final protoBytes = sendPeerList.writeToBuffer();
-    
+
     final commandBuilder = BytesBuilder();
     commandBuilder.addByte(8); // SEND_PEERLIST
-    
+
     final lengthData = ByteData(4);
     lengthData.setInt32(0, protoBytes.length, Endian.big);
     commandBuilder.add(lengthData.buffer.asUint8List());
-    
+
     commandBuilder.add(protoBytes);
-    
+
     socketStreamController.add(commandBuilder.toBytes());
-    
+
     final peers = await receivedPeers.future;
     expect(peers.length, 2);
     expect(peers, contains('192.168.1.50:5000'));
@@ -113,7 +123,7 @@ void main() {
   });
 
   test('ActivePeer sends REQUEST_PEERLIST command', () async {
-     activePeer = ActivePeer(
+    activePeer = ActivePeer(
       address: 'localhost:1234',
       selfNodeId: selfNodeId,
       selfKeys: selfKeys,
@@ -121,22 +131,22 @@ void main() {
       onStatusChange: (_) {},
       onDisconnect: () {},
     );
-     
+
     await activePeer.connect();
-    // Verify handshake logic is bypassed or just inject message directly? 
+    // Verify handshake logic is bypassed or just inject message directly?
     // We want to test requestPeerList which calls _sendData
-    
+
     // We can just call the method directly
     activePeer.requestPeerList();
-    
+
     // Capture what was sent to socket
     // verify(() => mockSocket.add(any())).called(greaterThan(0));
     // But we need to inspect arguments.
-    
+
     final captured = verify(() => mockSocket.add(captureAny())).captured;
-    // captured might contain connection setup, handshake etc? 
+    // captured might contain connection setup, handshake etc?
     // We expect [7] (REQUEST_PEERLIST)
-    
+
     // Find the one that is [7]
     bool foundStart = false;
     for (final c in captured) {

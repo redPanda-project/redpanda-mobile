@@ -11,19 +11,16 @@ class KeyPair {
   final ECPublicKey publicKey;
   final ECPrivateKey? privateKey;
 
-  KeyPair({
-    required this.publicKey,
-    this.privateKey,
-  });
+  KeyPair({required this.publicKey, this.privateKey});
 
   factory KeyPair.generate() {
     final ecParams = ECDomainParameters('brainpoolp256r1');
     final keyParams = ECKeyGeneratorParameters(ecParams);
-    
+
     final random = FortunaRandom();
     // Seed the random generator (INSECURE: using fixed seed for dev/test consistency for now)
     // In prod, use platform secure random source
-    final seed = Uint8List.fromList(List.generate(32, (i) => i)); 
+    final seed = Uint8List.fromList(List.generate(32, (i) => i));
     random.seed(KeyParameter(seed));
 
     final generator = ECKeyGenerator();
@@ -37,9 +34,11 @@ class KeyPair {
   }
 
   Uint8List get publicKeyBytes {
-    return publicKey.Q!.getEncoded(false); // false = uncompressed (0x04 + X + Y)
+    return publicKey.Q!.getEncoded(
+      false,
+    ); // false = uncompressed (0x04 + X + Y)
   }
-  
+
   AsymmetricKeyPair<PublicKey, PrivateKey> asAsymmetricKeyPair() {
     return AsymmetricKeyPair(publicKey, privateKey!);
   }

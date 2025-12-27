@@ -24,7 +24,7 @@ class HomeScreen extends ConsumerWidget {
             onPressed: () {
               // TODO: Settings
             },
-          )
+          ),
         ],
       ),
       body: channelsAsync.when(
@@ -34,9 +34,16 @@ class HomeScreen extends ConsumerWidget {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                   Icon(Icons.perm_contact_calendar_outlined, size: 64, color: Colors.grey[400]),
-                   const SizedBox(height: 16),
-                   Text("No channels yet", style: TextStyle(color: Colors.grey[600])),
+                  Icon(
+                    Icons.perm_contact_calendar_outlined,
+                    size: 64,
+                    color: Colors.grey[400],
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    "No channels yet",
+                    style: TextStyle(color: Colors.grey[600]),
+                  ),
                 ],
               ),
             );
@@ -47,11 +54,15 @@ class HomeScreen extends ConsumerWidget {
               final channel = channels[index];
               return ListTile(
                 leading: CircleAvatar(
-                  backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+                  backgroundColor: Theme.of(
+                    context,
+                  ).colorScheme.primaryContainer,
                   child: Text(channel.username[0].toUpperCase()),
                 ),
                 title: Text(channel.username),
-                subtitle: Text(channel.isOnline == true ? 'Online' : 'Last seen recently'),
+                subtitle: Text(
+                  channel.isOnline == true ? 'Online' : 'Last seen recently',
+                ),
                 onTap: () {
                   context.push('/chat/${channel.uuid}');
                 },
@@ -73,16 +84,18 @@ class HomeScreen extends ConsumerWidget {
     final db = ref.read(dbProvider);
     final mockNames = ["Alice", "Bob", "Charlie", "David", "Eve"];
     final name = mockNames[DateTime.now().second % mockNames.length];
-    
-    await db.into(db.channels).insert(
-       ChannelsCompanion.insert(
-         uuid: const Uuid().v4(),
-         username: "$name ${DateTime.now().minute}",
-         privateKey: const Value("MOCK-PRIVATE-KEY-12345"), // Mock data
-         lastSeen: Value(DateTime.now()),
-         isOnline: const Value(true),
-       ),
-    );
+
+    await db
+        .into(db.channels)
+        .insert(
+          ChannelsCompanion.insert(
+            uuid: const Uuid().v4(),
+            username: "$name ${DateTime.now().minute}",
+            privateKey: const Value("MOCK-PRIVATE-KEY-12345"), // Mock data
+            lastSeen: Value(DateTime.now()),
+            isOnline: const Value(true),
+          ),
+        );
   }
 }
 

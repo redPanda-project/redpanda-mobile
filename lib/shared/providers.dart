@@ -9,15 +9,13 @@ final dbProvider = Provider<AppDatabase>((ref) {
   return AppDatabase();
 });
 
-
-
 final redPandaClientProvider = Provider<RedPandaClient>((ref) {
   // Direct initialization is now fast (HashCash loop removed)
   final keys = KeyPair.generate();
-  
+
   return RedPandaLightClient(
     selfNodeId: NodeId.fromPublicKey(keys),
-    selfKeys: keys, 
+    selfKeys: keys,
   );
 });
 

@@ -1,4 +1,3 @@
-
 import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:pointycastle/export.dart';
@@ -24,12 +23,12 @@ void main() {
       // 1. Simluulate Handshake Randoms
       final randomClient = clientManager.generateRandomFromUs();
       final randomServer = serverManager.generateRandomFromUs();
-      
+
       expect(randomClient.length, 8);
       expect(randomServer.length, 8);
 
       // 2. Client Side Derivation
-      // Client perspective: 
+      // Client perspective:
       // Self = ClientKeys
       // Peer = ServerKeys.publicKey
       // RandomUs = randomClient
@@ -40,7 +39,7 @@ void main() {
         randomFromUs: randomClient,
         randomFromThem: randomServer,
       );
-      
+
       // 3. Server Side Derivation
       // Server perspective:
       // Self = ServerKeys
@@ -51,10 +50,10 @@ void main() {
       serverManager.deriveAndInitialize(
         selfKeys: serverKeys.asAsymmetricKeyPair(),
         peerPublicKey: clientKeys.publicKey as ECPublicKey,
-        randomFromUs: randomServer, 
+        randomFromUs: randomServer,
         randomFromThem: randomClient,
       );
-      
+
       expect(clientManager.isEncryptionActive, isTrue);
       expect(serverManager.isEncryptionActive, isTrue);
 
@@ -62,20 +61,26 @@ void main() {
       final plainText = Uint8List.fromList([1, 2, 3, 4, 5, 255, 0, 128]);
       final encryptedByClient = clientManager.encrypt(plainText);
       final decryptedByServer = serverManager.decrypt(encryptedByClient);
-      
-      expect(decryptedByServer, equals(plainText), reason: "Server should decrypt Client's message");
-      
+
+      expect(
+        decryptedByServer,
+        equals(plainText),
+        reason: "Server should decrypt Client's message",
+      );
+
       // 5. Verify Encryption: Server -> Client
       final serverMsg = Uint8List.fromList([10, 20, 30]);
-      final encryptedByServer = serverManager.encrypt(serverMsg); // Warning: EncryptionManager encrypt uses _cipherSend?
-      
+      final encryptedByServer = serverManager.encrypt(
+        serverMsg,
+      ); // Warning: EncryptionManager encrypt uses _cipherSend?
+
       // Wait, let's check symmetry.
       // Client:
       //   SendKey = SHA(Secret + ClientRandom + ServerRandom)
       //   RecvKey = SHA(Secret + ServerRandom + ClientRandom)
       //   IVSend = ClientRandom + ServerRandom
       //   IVRecv = ServerRandom + ClientRandom
-      
+
       // Server:
       //   randomFromUs = ServerRandom
       //   randomFromThem = ClientRandom
@@ -83,22 +88,26 @@ void main() {
       //   RecvKey = SHA(Secret + ClientRandom + ServerRandom)  Match Client SendKey? YES.
       //   IVSend = ServerRandom + ClientRandom               Match Client IVRecv? YES.
       //   IVRecv = ClientRandom + ServerRandom               Match Client IVSend? YES.
-      
+
       final decryptedByClient = clientManager.decrypt(encryptedByServer);
-      expect(decryptedByClient, equals(serverMsg), reason: "Client should decrypt Server's message");
+      expect(
+        decryptedByClient,
+        equals(serverMsg),
+        reason: "Client should decrypt Server's message",
+      );
     });
-    
+
     test('should fail to decrypt garbage', () {
       // ... setup ...
-       final randomClient = clientManager.generateRandomFromUs();
+      final randomClient = clientManager.generateRandomFromUs();
       final randomServer = serverManager.generateRandomFromUs();
-       clientManager.deriveAndInitialize(
+      clientManager.deriveAndInitialize(
         selfKeys: clientKeys.asAsymmetricKeyPair(),
         peerPublicKey: serverKeys.publicKey as ECPublicKey,
         randomFromUs: randomClient,
         randomFromThem: randomServer,
       );
-      
+
       final garbage = Uint8List.fromList([1, 2, 3]);
       // CTR mode will just decrypt it to something else, checking it doesn't crash
       expect(() => clientManager.decrypt(garbage), returnsNormally);

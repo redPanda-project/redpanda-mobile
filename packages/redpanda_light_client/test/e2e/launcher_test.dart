@@ -17,7 +17,7 @@ void main() {
 
     test('starts and stops the java process', () async {
       await launcher.start();
-      
+
       // Verify port is open (simple socket connect)
       final socket = await Socket.connect('127.0.0.1', port);
       expect(socket, isNotNull);
