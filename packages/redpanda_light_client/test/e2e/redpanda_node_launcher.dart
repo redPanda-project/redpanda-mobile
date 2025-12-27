@@ -15,20 +15,36 @@ class RedPandaNodeLauncher {
 
   Future<void> start() async {
     // Locate the jar file relative to the project root
-    // Assuming we are running tests from <project>/packages/redpanda_light_client
-    // The jar is at <project>/references/redPandaj/target/redpanda.jar
     final projectRoot = _findProjectRoot();
+    
+    // Try to find the redpandaj directory (case-insensitive)
+    final referencesDir = Directory(p.join(projectRoot, 'references'));
+    String redpandajDirName = 'redPandaj'; // Default
+    
+    if (referencesDir.existsSync()) {
+      final dirs = referencesDir.listSync().whereType<Directory>();
+      for (final dir in dirs) {
+        final name = p.basename(dir.path);
+        if (name.toLowerCase() == 'redpandaj') {
+          redpandajDirName = name;
+          break;
+        }
+      }
+    }
+
     final jarPath = p.join(
       projectRoot,
       'references',
-      'redPandaj',
+      redpandajDirName,
       'target',
       'redpanda.jar',
     );
 
+    print('Looking for JAR at: $jarPath');
+
     if (!File(jarPath).existsSync()) {
       throw Exception(
-        'redpanda.jar not found at $jarPath. Did you run "mvn package"?',
+        'redpanda.jar not found at $jarPath. Have you built the project with Maven?',
       );
     }
 
@@ -110,18 +126,35 @@ class RedPandaNodeLauncher {
   }
 
   String _findProjectRoot() {
-    // Hacky traversal up to find 'pubspec.yaml' of the root or similar marker
     var dir = Directory.current;
+    print('Searching for project root starting from: ${dir.path}');
+
     while (true) {
-      if (File(
-        p.join(dir.path, 'references', 'redPandaj', 'pom.xml'),
-      ).existsSync()) {
+      // Check for references/redpandaj (case-insensitive)
+      final refDir = Directory(p.join(dir.path, 'references'));
+      if (refDir.existsSync()) {
+        final children = refDir.listSync().whereType<Directory>();
+        for (final child in children) {
+          if (p.basename(child.path).toLowerCase() == 'redpandaj') {
+            print('Found project root at: ${dir.path}');
+            return dir.path;
+          }
+        }
+      }
+
+      // Also support direct redpandaj in root (sometimes CI flat structures)
+      final redDir = Directory(p.join(dir.path, 'redpandaj'));
+      if (redDir.existsSync()) {
+        print('Found project root (direct redpandaj) at: ${dir.path}');
         return dir.path;
       }
+
+      // Root of filesystem reached
       final parent = dir.parent;
       if (parent.path == dir.path) {
         throw Exception(
-          'Could not find project root containing references/redPandaj',
+          'Could not find project root containing "references/redpandaj" or "redpandaj" directory. '
+          'Started search from: ${Directory.current.path}',
         );
       }
       dir = parent;
