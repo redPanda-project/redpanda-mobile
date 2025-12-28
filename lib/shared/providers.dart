@@ -36,3 +36,11 @@ final activePeersProvider = StreamProvider<List<String>>((ref) {
   }
   return Stream.value([]);
 });
+
+final connectingPeersProvider = StreamProvider<List<String>>((ref) {
+  final client = ref.watch(redPandaClientProvider);
+  if (client is RedPandaLightClient) {
+    return client.connectingPeersStream;
+  }
+  return Stream.value([]);
+});

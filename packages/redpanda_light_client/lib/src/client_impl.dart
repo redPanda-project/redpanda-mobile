@@ -122,6 +122,13 @@ class RedPandaLightClient implements RedPandaClient {
     }
   }
 
+  Stream<List<String>> get connectingPeersStream async* {
+    yield _peers.values.where((p) => !p.isHandshakeVerified).map((p) => p.address).toList();
+    await for (final _ in _peerCountController.stream) {
+      yield _peers.values.where((p) => !p.isHandshakeVerified).map((p) => p.address).toList();
+    }
+  }
+
   void _updateStatus(ConnectionStatus status) {
     // Recalculate connected peers
     int connectedCount = _peers.values

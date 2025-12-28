@@ -19,6 +19,8 @@ class DebugPeerStatsScreen extends ConsumerWidget {
     // Watch currently connected peers from RAM
     final activePeersAsync = ref.watch(activePeersProvider);
     final activePeers = activePeersAsync.value ?? [];
+    final connectingPeersAsync = ref.watch(connectingPeersProvider);
+    final connectingPeers = connectingPeersAsync.value ?? [];
 
     return Scaffold(
       appBar: AppBar(title: const Text('Peer Network Status')),
@@ -29,11 +31,6 @@ class DebugPeerStatsScreen extends ConsumerWidget {
           if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
 
           final peers = snapshot.data!;
-          // Sort by Score (calculate manually since logic is in Dart model, not SQL?)
-          // We can replicate logic: (1.0 / (avgLatency + 1)) * reliability
-          // Or just use the model logic if we map it.
-          // Let's map to PeerStats for easier handling.
-          
           final peerStatsList = peers.map((p) => PeerStats(
              address: p.address,
              nodeId: p.nodeId,
@@ -43,15 +40,14 @@ class DebugPeerStatsScreen extends ConsumerWidget {
              lastSeen: p.lastSeen,
           )).toList();
 
-          
           // 1. Identify Top 3 Primary Candidates based on clean Score sort
           peerStatsList.sort((a, b) => b.score.compareTo(a.score)); 
           final top3Addresses = peerStatsList.take(3).map((p) => p.address).toSet();
           
-          // 2. Re-sort for display: Connected -> Primary -> Score
+          // 2. Re-sort for display: Connected -> Connecting -> Primary -> Score
           peerStatsList.sort((a, b) {
-            final aConnected = activePeers.contains(a.address) ? 1 : 0;
-            final bConnected = activePeers.contains(b.address) ? 1 : 0;
+            final aConnected = activePeers.contains(a.address) ? 2 : (connectingPeers.contains(a.address) ? 1 : 0);
+            final bConnected = activePeers.contains(b.address) ? 2 : (connectingPeers.contains(b.address) ? 1 : 0);
             if (aConnected != bConnected) return bConnected.compareTo(aConnected);
 
             final aPrimary = top3Addresses.contains(a.address) ? 1 : 0;
@@ -70,6 +66,7 @@ class DebugPeerStatsScreen extends ConsumerWidget {
             itemBuilder: (context, index) {
               final p = peerStatsList[index];
               final isConnected = activePeers.contains(p.address);
+              final isConnecting = connectingPeers.contains(p.address);
               final isPrimary = top3Addresses.contains(p.address);
               
               return Card(
@@ -78,12 +75,12 @@ class DebugPeerStatsScreen extends ConsumerWidget {
                   leading: CircleAvatar(
                     backgroundColor: isConnected 
                         ? (isPrimary ? Colors.amber[100] : Colors.blue[100])
-                        : Colors.grey[200],
+                        : (isConnecting ? Colors.orange[100] : Colors.grey[200]),
                     child: Icon(
-                        isPrimary ? Icons.star : Icons.public,
+                        isConnecting ? Icons.hourglass_empty : (isPrimary ? Icons.star : Icons.public),
                         color: isConnected 
                             ? (isPrimary ? Colors.orange : Colors.blue) 
-                            : Colors.grey,
+                            : (isConnecting ? Colors.orange : Colors.grey),
                         size: 20,
                     ),
                   ),
@@ -124,6 +121,7 @@ class DebugPeerStatsScreen extends ConsumerWidget {
                   trailing: Column(
                      mainAxisAlignment: MainAxisAlignment.center,
                      crossAxisAlignment: CrossAxisAlignment.end,
+                     mainAxisSize: MainAxisSize.min, // Fix Check: overflow
                      children: [
                         Text('Score', style: TextStyle(fontSize: 10, color: Colors.grey[600])),
                         Text(
