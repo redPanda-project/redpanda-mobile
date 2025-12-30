@@ -5,7 +5,9 @@ import 'package:redpanda_light_client/src/models/node_id.dart';
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'redpanda_node_launcher.dart';
 
-void main() {
+void main() async {
+  final jarAvailable = await RedPandaNodeLauncher.isJarAvailable();
+
   group('E2E Real Client', () {
     late RedPandaNodeLauncher launcher;
     late RedPandaLightClient client;
@@ -55,6 +57,7 @@ void main() {
           reason: "Encryption should be active after handshake",
         );
       },
+      skip: jarAvailable ? null : 'RedPanda JAR not found',
     );
   });
 }

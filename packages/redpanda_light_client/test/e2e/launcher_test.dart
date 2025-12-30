@@ -2,7 +2,9 @@ import 'package:test/test.dart';
 import 'redpanda_node_launcher.dart';
 import 'dart:io';
 
-void main() {
+void main() async {
+  final jarAvailable = await RedPandaNodeLauncher.isJarAvailable();
+
   group('E2E Node Launcher', () {
     late RedPandaNodeLauncher launcher;
     final port = 50001;
@@ -15,13 +17,19 @@ void main() {
       await launcher.stop();
     });
 
-    test('starts and stops the java process', () async {
-      await launcher.start();
+    test(
+      'starts and stops the java process',
+      () async {
+        await launcher.start();
 
-      // Verify port is open (simple socket connect)
-      final socket = await Socket.connect('127.0.0.1', port);
-      expect(socket, isNotNull);
-      await socket.close();
-    });
+        // Verify port is open (simple socket connect)
+        final socket = await Socket.connect('127.0.0.1', port);
+        expect(socket, isNotNull);
+        await socket.close();
+      },
+      skip: jarAvailable
+          ? null
+          : 'RedPanda JAR not found - verify references/redPandaj/target/redpanda.jar exists',
+    );
   });
 }

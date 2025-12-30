@@ -13,6 +13,38 @@ class RedPandaNodeLauncher {
           .createTempSync('redpanda_node_$port')
           .path;
 
+  static Future<bool> isJarAvailable() async {
+    try {
+      final launcher = RedPandaNodeLauncher(port: 0);
+      final projectRoot = launcher._findProjectRoot();
+      // Try to find the redpandaj directory (case-insensitive)
+      final referencesDir = Directory(p.join(projectRoot, 'references'));
+      String redpandajDirName = 'redPandaj'; // Default
+
+      if (referencesDir.existsSync()) {
+        final dirs = referencesDir.listSync().whereType<Directory>();
+        for (final dir in dirs) {
+          final name = p.basename(dir.path);
+          if (name.toLowerCase() == 'redpandaj') {
+            redpandajDirName = name;
+            break;
+          }
+        }
+      }
+
+      final jarPath = p.join(
+        projectRoot,
+        'references',
+        redpandajDirName,
+        'target',
+        'redpanda.jar',
+      );
+      return File(jarPath).existsSync();
+    } catch (e) {
+      return false;
+    }
+  }
+
   Future<void> start() async {
     // Locate the jar file relative to the project root
     final projectRoot = _findProjectRoot();

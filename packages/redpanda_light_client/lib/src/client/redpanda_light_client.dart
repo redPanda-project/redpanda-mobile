@@ -1,9 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 
-
-
-
 import 'package:redpanda_light_client/src/client_facade.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
@@ -438,9 +435,7 @@ class RedPandaLightClient implements RedPandaClient {
     int seconds = 2 * (1 << (count - 1));
     if (seconds > 300) seconds = 300; // Cap at 5 mins
 
-    _nextRetryTime[address] = DateTime.now().add(
-      Duration(seconds: seconds),
-    );
+    _nextRetryTime[address] = DateTime.now().add(Duration(seconds: seconds));
   }
 
   Future<Set<String>> _resolveConnectedIps() async {
@@ -512,4 +507,3 @@ class RedPandaLightClient implements RedPandaClient {
     return _peerRepository.getBestPeers(100);
   }
 }
-

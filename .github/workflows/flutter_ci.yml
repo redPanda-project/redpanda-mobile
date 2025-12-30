@@ -32,6 +32,7 @@ jobs:
           flutter pub get
 
       - name: Download RedPanda JAR (Backend)
+        continue-on-error: true
         run: |
           mkdir -p references/redPandaj/target
           gh release download latest --repo redPanda-project/redpandaj --pattern 'redpanda.jar' --dir references/redPandaj/target
