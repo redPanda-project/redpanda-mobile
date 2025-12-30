@@ -25,10 +25,6 @@ class HomeScreen extends ConsumerWidget {
               // TODO: Settings
             },
           ),
-          IconButton(
-            icon: const Icon(Icons.bug_report),
-            onPressed: () => context.push('/debug-stats'),
-          ),
         ],
       ),
       body: channelsAsync.when(

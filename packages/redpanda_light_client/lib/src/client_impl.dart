@@ -33,8 +33,9 @@ class RedPandaLightClient implements RedPandaClient {
   final _peerCountController = StreamController<int>.broadcast();
 
   static const List<String> defaultSeeds = [
+    '65.109.130.115:59558',
     'localhost:59558',
-    'localhost:59559',
+    // 'localhost:59559',
   ];
 
   final SocketFactory _socketFactory;
