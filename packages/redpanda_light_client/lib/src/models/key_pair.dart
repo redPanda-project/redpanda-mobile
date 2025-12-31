@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+import 'dart:math' as math;
 import 'package:pointycastle/export.dart';
 
 /// Represents an Ed25519 or X25519 key pair.
@@ -15,9 +16,11 @@ class KeyPair {
     final keyParams = ECKeyGeneratorParameters(ecParams);
 
     final random = FortunaRandom();
-    // Seed the random generator (INSECURE: using fixed seed for dev/test consistency for now)
-    // In prod, use platform secure random source
-    final seed = Uint8List.fromList(List.generate(32, (i) => i));
+    // Use platform secure random to seed Fortuna
+    final secureRandom = math.Random.secure();
+    final seed = Uint8List.fromList(
+      List.generate(32, (_) => secureRandom.nextInt(256)),
+    );
     random.seed(KeyParameter(seed));
 
     final generator = ECKeyGenerator();

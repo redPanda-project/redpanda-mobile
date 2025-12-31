@@ -11,8 +11,8 @@ import 'package:redpanda_light_client/src/models/node_id.dart';
 /// A facade that implements [RedPandaClient] but proxies all operations
 /// to a background [Isolate] to prevent UI jank.
 class RedPandaIsolateClient implements RedPandaClient {
-  final NodeId selfNodeId;
-  final KeyPair selfKeys;
+  final NodeId? _explicitNodeId;
+  final KeyPair? _explicitKeys;
   final List<String> seeds;
 
   // Isolate? _isolate; // Kept only if we need to kill it explicitly
@@ -29,10 +29,11 @@ class RedPandaIsolateClient implements RedPandaClient {
   int _currentPeerCount = 0;
 
   RedPandaIsolateClient({
-    required this.selfNodeId,
-    required this.selfKeys,
+    NodeId? selfNodeId,
+    KeyPair? selfKeys,
     this.seeds = const [],
-  }) {
+  }) : _explicitNodeId = selfNodeId,
+       _explicitKeys = selfKeys {
     _startIsolate();
   }
 
@@ -60,7 +61,7 @@ class RedPandaIsolateClient implements RedPandaClient {
 
   void _sendInitCommand() {
     _sendPort?.send(
-      CmdInit(nodeId: selfNodeId, keyPair: selfKeys, seeds: seeds),
+      CmdInit(nodeId: _explicitNodeId, keyPair: _explicitKeys, seeds: seeds),
     );
   }
 
@@ -143,9 +144,26 @@ void _isolateEntryPoint(SendPort mainSendPort) {
   receivePort.listen((message) async {
     if (message is CmdInit) {
       print('RedPandaWorker: Initializing client...');
+
+      NodeId nodeId =
+          message.nodeId ?? NodeId.fromPublicKey(KeyPair.generate());
+      KeyPair keyPair = message.keyPair ?? KeyPair.generate();
+
+      // Ensure specific keys match if one provided (edge case, not expected)
+      if (message.nodeId == null || message.keyPair == null) {
+        // Optimization: If we generated locally, we re-generate both to be safe/consistent
+        // or we just trust the logic.
+        // Actually KeyPair.generate() creates both.
+        keyPair = message.keyPair ?? KeyPair.generate();
+        nodeId = message.nodeId ?? NodeId.fromPublicKey(keyPair);
+      } else {
+        keyPair = message.keyPair!;
+        nodeId = message.nodeId!;
+      }
+
       client = RedPandaLightClient(
-        selfNodeId: message.nodeId,
-        selfKeys: message.keyPair,
+        selfNodeId: nodeId,
+        selfKeys: keyPair,
         seeds: message.seeds,
       );
 

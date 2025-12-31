@@ -3,6 +3,7 @@ description: Formats, analyzes, tests, and pushes changes to the repository.
 ---
 
 // turbo-all
+// note: you must run this for the app and the package, so you need to run analyze an twice
 
 1. Format the code to ensure style consistency
 ```bash

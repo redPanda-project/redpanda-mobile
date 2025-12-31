@@ -15,3 +15,5 @@ export 'src/mock/mock_redpanda_client.dart';
 export 'src/peer_repository.dart';
 export 'src/models/peer_stats.dart';
 export 'src/domain/channel.dart';
+export 'src/domain/garlic_message_wrapper.dart';
+export 'src/generated/commands.pb.dart';

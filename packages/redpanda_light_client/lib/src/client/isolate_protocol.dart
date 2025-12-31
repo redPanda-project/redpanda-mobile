@@ -6,12 +6,12 @@ import 'package:redpanda_light_client/src/models/node_id.dart';
 abstract class IsolateCommand {}
 
 class CmdInit extends IsolateCommand {
-  final NodeId nodeId;
-  final KeyPair keyPair;
+  final NodeId? nodeId;
+  final KeyPair? keyPair;
   // We might want to pass seeds here too if they are dynamic
   final List<String> seeds;
 
-  CmdInit({required this.nodeId, required this.keyPair, this.seeds = const []});
+  CmdInit({this.nodeId, this.keyPair, this.seeds = const []});
 }
 
 class CmdConnect extends IsolateCommand {}

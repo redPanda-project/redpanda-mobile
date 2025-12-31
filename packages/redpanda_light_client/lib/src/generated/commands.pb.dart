@@ -994,6 +994,128 @@ class PandaMessage extends $pb.GeneratedMessage {
   FlaschenpostPut ensureFlaschenpostPut() => $_ensure(8);
 }
 
+class GarlicMessage extends $pb.GeneratedMessage {
+  factory GarlicMessage({
+    $core.int? type,
+    KademliaIdProto? destination,
+    $core.List<$core.int>? iv,
+    $core.List<$core.int>? senderPublicKey,
+    $core.List<$core.int>? encryptedPayload,
+    $core.List<$core.int>? signature,
+  }) {
+    final result = create();
+    if (type != null) result.type = type;
+    if (destination != null) result.destination = destination;
+    if (iv != null) result.iv = iv;
+    if (senderPublicKey != null) result.senderPublicKey = senderPublicKey;
+    if (encryptedPayload != null) result.encryptedPayload = encryptedPayload;
+    if (signature != null) result.signature = signature;
+    return result;
+  }
+
+  GarlicMessage._();
+
+  factory GarlicMessage.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory GarlicMessage.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'GarlicMessage',
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
+      createEmptyInstance: create)
+    ..aI(1, _omitFieldNames ? '' : 'type')
+    ..aOM<KademliaIdProto>(2, _omitFieldNames ? '' : 'destination',
+        subBuilder: KademliaIdProto.create)
+    ..a<$core.List<$core.int>>(
+        3, _omitFieldNames ? '' : 'iv', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(
+        4, _omitFieldNames ? '' : 'senderPublicKey', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(
+        5, _omitFieldNames ? '' : 'encryptedPayload', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(
+        6, _omitFieldNames ? '' : 'signature', $pb.PbFieldType.OY)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  GarlicMessage clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  GarlicMessage copyWith(void Function(GarlicMessage) updates) =>
+      super.copyWith((message) => updates(message as GarlicMessage))
+          as GarlicMessage;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static GarlicMessage create() => GarlicMessage._();
+  @$core.override
+  GarlicMessage createEmptyInstance() => create();
+  @$core.pragma('dart2js:noInline')
+  static GarlicMessage getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<GarlicMessage>(create);
+  static GarlicMessage? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.int get type => $_getIZ(0);
+  @$pb.TagNumber(1)
+  set type($core.int value) => $_setSignedInt32(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasType() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearType() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  KademliaIdProto get destination => $_getN(1);
+  @$pb.TagNumber(2)
+  set destination(KademliaIdProto value) => $_setField(2, value);
+  @$pb.TagNumber(2)
+  $core.bool hasDestination() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearDestination() => $_clearField(2);
+  @$pb.TagNumber(2)
+  KademliaIdProto ensureDestination() => $_ensure(1);
+
+  @$pb.TagNumber(3)
+  $core.List<$core.int> get iv => $_getN(2);
+  @$pb.TagNumber(3)
+  set iv($core.List<$core.int> value) => $_setBytes(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasIv() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearIv() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.List<$core.int> get senderPublicKey => $_getN(3);
+  @$pb.TagNumber(4)
+  set senderPublicKey($core.List<$core.int> value) => $_setBytes(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasSenderPublicKey() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearSenderPublicKey() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.List<$core.int> get encryptedPayload => $_getN(4);
+  @$pb.TagNumber(5)
+  set encryptedPayload($core.List<$core.int> value) => $_setBytes(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasEncryptedPayload() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearEncryptedPayload() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  $core.List<$core.int> get signature => $_getN(5);
+  @$pb.TagNumber(6)
+  set signature($core.List<$core.int> value) => $_setBytes(5, value);
+  @$pb.TagNumber(6)
+  $core.bool hasSignature() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearSignature() => $_clearField(6);
+}
+
 const $core.bool _omitFieldNames =
     $core.bool.fromEnvironment('protobuf.omit_field_names');
 const $core.bool _omitMessageNames =

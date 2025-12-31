@@ -77,7 +77,7 @@ class DriftPeerRepository implements PeerRepository {
             ),
           );
     } catch (e) {
-// print removed
+      // print removed
     }
   }
 
@@ -123,6 +123,6 @@ class DriftPeerRepository implements PeerRepository {
         lastSeen: row.lastSeen,
       );
     }
-// print removed
+    // print removed
   }
 }

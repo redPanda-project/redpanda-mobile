@@ -7,16 +7,8 @@ final dbProvider = Provider<AppDatabase>((ref) {
 });
 
 final redPandaClientProvider = Provider<RedPandaClient>((ref) {
-  // Direct initialization is now fast (HashCash loop removed)
-  final keys = KeyPair.generate();
-  // final db = ref.read(dbProvider); // DB not yet supported in Isolate
-
-  return RedPandaIsolateClient(
-    selfNodeId: NodeId.fromPublicKey(keys),
-    selfKeys: keys,
-    seeds: RedPandaLightClient.defaultSeeds,
-    // peerRepository: DriftPeerRepository(db),
-  );
+  // Key generation now happens in the background isolate to prevent UI lag
+  return RedPandaIsolateClient(seeds: RedPandaLightClient.defaultSeeds);
 });
 
 final connectionStatusProvider = StreamProvider<ConnectionStatus>((ref) {

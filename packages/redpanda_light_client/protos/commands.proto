@@ -76,3 +76,12 @@ message PandaMessage {
         FlaschenpostPut flaschenpost_put = 9;
     }
 }
+
+message GarlicMessage {
+    int32 type = 1;             // GMType
+    KademliaIdProto destination = 2;
+    bytes iv = 3;
+    bytes sender_public_key = 4; // Ephemeral public key
+    bytes encrypted_payload = 5; // Encrypted nested messages
+    bytes signature = 6;
+}

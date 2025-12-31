@@ -293,3 +293,43 @@ final $typed_data.Uint8List pandaMessageDescriptor = $convert.base64Decode(
     'pvYl9hY2sYCCABKAsyGS5pbS5yZWRwYW5kYS5wcm90by5Kb2JBY2tIAFIGam9iQWNrEk8KEGZs'
     'YXNjaGVucG9zdF9wdXQYCSABKAsyIi5pbS5yZWRwYW5kYS5wcm90by5GbGFzY2hlbnBvc3RQdX'
     'RIAFIPZmxhc2NoZW5wb3N0UHV0QgkKB2NvbnRlbnQ=');
+
+@$core.Deprecated('Use garlicMessageDescriptor instead')
+const GarlicMessage$json = {
+  '1': 'GarlicMessage',
+  '2': [
+    {'1': 'type', '3': 1, '4': 1, '5': 5, '10': 'type'},
+    {
+      '1': 'destination',
+      '3': 2,
+      '4': 1,
+      '5': 11,
+      '6': '.im.redpanda.proto.KademliaIdProto',
+      '10': 'destination'
+    },
+    {'1': 'iv', '3': 3, '4': 1, '5': 12, '10': 'iv'},
+    {
+      '1': 'sender_public_key',
+      '3': 4,
+      '4': 1,
+      '5': 12,
+      '10': 'senderPublicKey'
+    },
+    {
+      '1': 'encrypted_payload',
+      '3': 5,
+      '4': 1,
+      '5': 12,
+      '10': 'encryptedPayload'
+    },
+    {'1': 'signature', '3': 6, '4': 1, '5': 12, '10': 'signature'},
+  ],
+};
+
+/// Descriptor for `GarlicMessage`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List garlicMessageDescriptor = $convert.base64Decode(
+    'Cg1HYXJsaWNNZXNzYWdlEhIKBHR5cGUYASABKAVSBHR5cGUSRAoLZGVzdGluYXRpb24YAiABKA'
+    'syIi5pbS5yZWRwYW5kYS5wcm90by5LYWRlbWxpYUlkUHJvdG9SC2Rlc3RpbmF0aW9uEg4KAml2'
+    'GAMgASgMUgJpdhIqChFzZW5kZXJfcHVibGljX2tleRgEIAEoDFIPc2VuZGVyUHVibGljS2V5Ei'
+    'sKEWVuY3J5cHRlZF9wYXlsb2FkGAUgASgMUhBlbmNyeXB0ZWRQYXlsb2FkEhwKCXNpZ25hdHVy'
+    'ZRgGIAEoDFIJc2lnbmF0dXJl');
