@@ -15,6 +15,7 @@ dependencies:
   protobuf: ^6.0.0
   fixnum: ^1.1.0
   bs58: ^1.0.2
+  crypto: ^3.0.7
   # path: ^1.9.0
 
 dev_dependencies:
