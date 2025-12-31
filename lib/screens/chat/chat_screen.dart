@@ -76,10 +76,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               Text(channel?.label ?? "Unknown"),
               const Text(
                 "Private Channel",
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.normal,
-                ),
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.normal),
               ),
             ],
           ),
@@ -99,7 +96,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     'k_auth': channel.authenticationKey,
                     'v': 1,
                   });
-                  
+
                   showDialog(
                     context: context,
                     builder: (context) => ShareChannelDialog(

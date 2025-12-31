@@ -1,0 +1,15 @@
+Analyzing redpanda...                                           
+
+   info • Don't invoke 'print' in production code • lib/main.dart:37:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/main.dart:40:9 • avoid_print
+   info • The imported package 'hex' isn't a dependency of the importing package • lib/repositories/channel_repository.dart:5:8 • depend_on_referenced_packages
+warning • Unused import: 'dart:convert' • lib/screens/channels/join_channel_screen.dart:1:8 • unused_import
+   info • Import of a library in the 'lib/src' directory of another package • lib/screens/debug_peer_stats_screen.dart:6:8 • implementation_imports
+   info • The import of 'package:redpanda_light_client/src/models/peer_stats.dart' is unnecessary because all of the used elements are also provided by the import of 'package:redpanda_light_client/redpanda_light_client.dart' • lib/screens/debug_peer_stats_screen.dart:6:8 • unnecessary_import
+warning • Unused import: 'package:drift/drift.dart' • lib/screens/debug_peer_stats_screen.dart:7:8 • unused_import
+   info • Statements in an if should be enclosed in a block • lib/screens/debug_peer_stats_screen.dart:30:13 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/screens/debug_peer_stats_screen.dart:32:13 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/screens/debug_peer_stats_screen.dart:64:15 • curly_braces_in_flow_control_structures
+   info • Don't invoke 'print' in production code • lib/services/drift_peer_repository.dart:80:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/services/drift_peer_repository.dart:126:5 • avoid_print
+

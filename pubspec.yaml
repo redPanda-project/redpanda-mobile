@@ -48,6 +48,7 @@ dependencies:
   redpanda_light_client:
     path: packages/redpanda_light_client
   mobile_scanner: ^7.1.4
+  hex: ^0.2.0
 
 dev_dependencies:
   flutter_test:

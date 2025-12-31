@@ -9,7 +9,8 @@ class CreateChannelScreen extends ConsumerStatefulWidget {
   const CreateChannelScreen({super.key});
 
   @override
-  ConsumerState<CreateChannelScreen> createState() => _CreateChannelScreenState();
+  ConsumerState<CreateChannelScreen> createState() =>
+      _CreateChannelScreenState();
 }
 
 class _CreateChannelScreenState extends ConsumerState<CreateChannelScreen> {

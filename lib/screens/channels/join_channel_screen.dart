@@ -1,4 +1,4 @@
-import 'dart:convert';
+
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -43,7 +43,7 @@ class _JoinChannelScreenState extends ConsumerState<JoinChannelScreen> {
     try {
       // Decode channel
       final channel = Channel.fromJson(code);
-      
+
       // Add to repository
       await ref.read(channelRepositoryProvider).addChannel(channel);
 
@@ -55,15 +55,15 @@ class _JoinChannelScreenState extends ConsumerState<JoinChannelScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Invalid Channel Code: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Invalid Channel Code: $e')));
         // Resume scanning after a delay
         await Future.delayed(const Duration(seconds: 2));
         if (mounted) {
-            setState(() {
-                _isProcessing = false;
-            });
+          setState(() {
+            _isProcessing = false;
+          });
         }
       }
     }
@@ -73,10 +73,7 @@ class _JoinChannelScreenState extends ConsumerState<JoinChannelScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Scan to Join')),
-      body: MobileScanner(
-        controller: controller,
-        onDetect: _onDetect,
-      ),
+      body: MobileScanner(controller: controller, onDetect: _onDetect),
     );
   }
 }

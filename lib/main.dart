@@ -34,10 +34,8 @@ class _MyAppState extends ConsumerState<MyApp> {
     if (client is RedPandaLightClient) {
       if (state == AppLifecycleState.paused ||
           state == AppLifecycleState.detached) {
-        print('App Paused. Saving state.');
         client.onPause();
       } else if (state == AppLifecycleState.resumed) {
-        print('App Resumed. Creating connection check.');
         client.onResume();
       }
     }

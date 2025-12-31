@@ -1,4 +1,3 @@
-
 import 'dart:async';
 import 'dart:isolate';
 
@@ -82,7 +81,9 @@ class RedPandaIsolateClient implements RedPandaClient {
       _sendPort!.send(cmd);
     } else {
       // If isolate isn't ready, maybe queue? For now just log.
-      print('RedPandaIsolateClient: Warning - Isolate not ready. Dropping command $cmd');
+      print(
+        'RedPandaIsolateClient: Warning - Isolate not ready. Dropping command $cmd',
+      );
     }
   }
 
@@ -156,32 +157,31 @@ void _isolateEntryPoint(SendPort mainSendPort) {
       client!.peerCountStream.listen((count) {
         mainSendPort.send(EventPeerCount(count));
       });
-      
-      print('RedPandaWorker: Client initialized.');
 
+      print('RedPandaWorker: Client initialized.');
     } else if (client == null) {
-        print('RedPandaWorker: Error - Client not initialized yet.');
-        return;
-    } 
-    
+      print('RedPandaWorker: Error - Client not initialized yet.');
+      return;
+    }
+
     // Handle other commands
     try {
-        if (message is CmdConnect) {
-           await client!.connect();
-        } else if (message is CmdDisconnect) {
-           await client!.disconnect();
-        } else if (message is CmdAddPeer) {
-           await client!.addPeer(message.address);
-        } else if (message is CmdLifecyclePause) {
-           client!.onPause();
-        } else if (message is CmdLifecycleResume) {
-           client!.onResume();
-        } else if (message is CmdSendMessage) {
-           await client!.sendMessage(message.recipientPublicKey, message.content);
-        }
+      if (message is CmdConnect) {
+        await client!.connect();
+      } else if (message is CmdDisconnect) {
+        await client!.disconnect();
+      } else if (message is CmdAddPeer) {
+        await client!.addPeer(message.address);
+      } else if (message is CmdLifecyclePause) {
+        client!.onPause();
+      } else if (message is CmdLifecycleResume) {
+        client!.onResume();
+      } else if (message is CmdSendMessage) {
+        await client!.sendMessage(message.recipientPublicKey, message.content);
+      }
     } catch (e, stack) {
-        print('RedPandaWorker: Error handling command $message: $e');
-        print(stack);
+      print('RedPandaWorker: Error handling command $message: $e');
+      print(stack);
     }
   });
 }

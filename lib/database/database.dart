@@ -22,15 +22,13 @@ class Channels extends Table {
   TextColumn get label => text()();
   TextColumn get encryptionKey => text()(); // HEX encoded
   TextColumn get authenticationKey => text()(); // HEX encoded
-  
+
   // Metadata
-  DateTimeColumn get lastSeen => dateTime().nullable()(); // Last message time? 
-  
+  DateTimeColumn get lastSeen => dateTime().nullable()(); // Last message time?
+
   @override
   Set<Column> get primaryKey => {uuid};
 }
-
-
 
 class Messages extends Table {
   IntColumn get id => integer().autoIncrement()();
@@ -71,7 +69,7 @@ class AppDatabase extends _$AppDatabase {
       },
       onUpgrade: (Migrator m, int from, int to) async {
         if (from < 2) {
-           await m.createTable(channels);
+          await m.createTable(channels);
         }
         if (from < 3) {
           await m.createTable(peers);
@@ -82,9 +80,9 @@ class AppDatabase extends _$AppDatabase {
         if (from < 5) {
           // Destructive migration for dev: Recreate Channels table to match new schema
           try {
-             await m.deleteTable(channels.actualTableName);
-          } catch(e) {
-             // optimize: table might not exist
+            await m.deleteTable(channels.actualTableName);
+          } catch (e) {
+            // optimize: table might not exist
           }
           await m.createTable(channels);
         }

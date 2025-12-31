@@ -15,7 +15,8 @@ import 'package:hex/hex.dart';
 class Channel extends Equatable {
   final String label;
   final List<int> encryptionKey;
-  final List<int> authenticationKey; // TODO: Decide if this is a shared private key or if we need a keypair.
+  final List<int>
+  authenticationKey; // TODO: Decide if this is a shared private key or if we need a keypair.
 
   const Channel({
     required this.label,
@@ -26,14 +27,15 @@ class Channel extends Equatable {
   /// Generates a new random channel.
   factory Channel.generate(String label) {
     final platformRandom = Random.secure();
-    final seed = Uint8List.fromList(List<int>.generate(32, (_) => platformRandom.nextInt(256)));
-    
-    final secureRandom = SecureRandom('Fortuna')
-      ..seed(KeyParameter(seed));
+    final seed = Uint8List.fromList(
+      List<int>.generate(32, (_) => platformRandom.nextInt(256)),
+    );
+
+    final secureRandom = SecureRandom('Fortuna')..seed(KeyParameter(seed));
 
     // Generate 32 bytes (256 bits) for encryption key
     final encKey = secureRandom.nextBytes(32);
-    
+
     // Generate 32 bytes for auth key (simplified for now)
     final authKey = secureRandom.nextBytes(32);
 
@@ -57,7 +59,7 @@ class Channel extends Equatable {
   /// Deserializes a channel from a JSON string.
   factory Channel.fromJson(String jsonStr) {
     final Map<String, dynamic> map = jsonDecode(jsonStr);
-    
+
     if (map['v'] != 1) {
       throw FormatException('Unsupported channel version: ${map['v']}');
     }
@@ -68,7 +70,7 @@ class Channel extends Equatable {
       authenticationKey: HEX.decode(map['k_auth'] as String),
     );
   }
-  
+
   // TODO: Add methods for deriving Channel ID
   String get id {
     final digest = sha256.convert([...encryptionKey, ...authenticationKey]);

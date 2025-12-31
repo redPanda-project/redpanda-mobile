@@ -5,7 +5,7 @@ void main() {
   group('Channel', () {
     test('should generate a valid channel with random keys', () {
       final channel = Channel.generate('Test Channel');
-      
+
       expect(channel.label, 'Test Channel');
       expect(channel.encryptionKey.length, 32);
       expect(channel.authenticationKey.length, 32);
@@ -14,11 +14,11 @@ void main() {
     test('should serialize and deserialize correctly (JSON)', () {
       final original = Channel.generate('Secret Group');
       final json = original.toJson();
-      
+
       print('Serialized Channel: $json');
-      
+
       final reconstructed = Channel.fromJson(json);
-      
+
       expect(reconstructed, equals(original));
       expect(reconstructed.label, original.label);
       expect(reconstructed.encryptionKey, original.encryptionKey);

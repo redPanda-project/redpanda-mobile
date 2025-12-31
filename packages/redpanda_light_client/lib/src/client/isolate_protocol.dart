@@ -11,11 +11,7 @@ class CmdInit extends IsolateCommand {
   // We might want to pass seeds here too if they are dynamic
   final List<String> seeds;
 
-  CmdInit({
-    required this.nodeId,
-    required this.keyPair,
-    this.seeds = const [],
-  });
+  CmdInit({required this.nodeId, required this.keyPair, this.seeds = const []});
 }
 
 class CmdConnect extends IsolateCommand {}

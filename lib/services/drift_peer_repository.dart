@@ -77,7 +77,7 @@ class DriftPeerRepository implements PeerRepository {
             ),
           );
     } catch (e) {
-      print('DriftPeerRepository: Error updating peer $address: $e');
+// print removed
     }
   }
 
@@ -123,6 +123,6 @@ class DriftPeerRepository implements PeerRepository {
         lastSeen: row.lastSeen,
       );
     }
-    print('DriftPeerRepository: Loaded ${_cache.length} peers into cache.');
+// print removed
   }
 }

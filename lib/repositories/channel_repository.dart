@@ -18,16 +18,18 @@ class DriftChannelRepository implements ChannelRepository {
 
   @override
   Future<void> addChannel(Channel channel) async {
-    await _db.into(_db.channels).insert(
-      db.ChannelsCompanion.insert(
-        uuid: channel.id,
-        label: channel.label,
-        encryptionKey: HEX.encode(channel.encryptionKey),
-        authenticationKey: HEX.encode(channel.authenticationKey),
-        lastSeen: drift.Value(DateTime.now()),
-      ),
-      mode: drift.InsertMode.insertOrReplace,
-    );
+    await _db
+        .into(_db.channels)
+        .insert(
+          db.ChannelsCompanion.insert(
+            uuid: channel.id,
+            label: channel.label,
+            encryptionKey: HEX.encode(channel.encryptionKey),
+            authenticationKey: HEX.encode(channel.authenticationKey),
+            lastSeen: drift.Value(DateTime.now()),
+          ),
+          mode: drift.InsertMode.insertOrReplace,
+        );
   }
 
   @override
@@ -51,8 +53,6 @@ class DriftChannelRepository implements ChannelRepository {
     );
   }
 }
-
-
 
 final channelRepositoryProvider = Provider<ChannelRepository>((ref) {
   final db = ref.watch(dbProvider);

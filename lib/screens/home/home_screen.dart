@@ -75,7 +75,7 @@ class HomeScreen extends ConsumerWidget {
       floatingActionButton: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-             FloatingActionButton.small(
+          FloatingActionButton.small(
             heroTag: "join_channel",
             onPressed: () => context.push('/channels/join'),
             child: const Icon(Icons.qr_code_scanner),

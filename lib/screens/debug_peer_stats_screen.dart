@@ -3,8 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:redpanda/database/database.dart';
 import 'package:redpanda/shared/providers.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
-import 'package:redpanda_light_client/src/models/peer_stats.dart';
-import 'package:drift/drift.dart' hide Column; // collision
 
 class DebugPeerStatsScreen extends ConsumerWidget {
   const DebugPeerStatsScreen({super.key});
@@ -26,10 +24,12 @@ class DebugPeerStatsScreen extends ConsumerWidget {
       body: StreamBuilder<List<Peer>>(
         stream: allPeersStream,
         builder: (context, snapshot) {
-          if (snapshot.hasError)
+          if (snapshot.hasError) {
             return Center(child: Text('Error: ${snapshot.error}'));
-          if (!snapshot.hasData)
+          }
+          if (!snapshot.hasData) {
             return const Center(child: CircularProgressIndicator());
+          }
 
           final peers = snapshot.data!;
           final peerStatsList = peers
@@ -60,8 +60,9 @@ class DebugPeerStatsScreen extends ConsumerWidget {
             final bConnected = activePeers.contains(b.address)
                 ? 2
                 : (connectingPeers.contains(b.address) ? 1 : 0);
-            if (aConnected != bConnected)
+            if (aConnected != bConnected) {
               return bConnected.compareTo(aConnected);
+            }
 
             final aPrimary = top3Addresses.contains(a.address) ? 1 : 0;
             final bPrimary = top3Addresses.contains(b.address) ? 1 : 0;
