@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:drift/drift.dart' as drift;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -72,10 +73,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           data: (channel) => Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(channel?.username ?? "Unknown"),
-              Text(
-                channel?.isOnline == true ? "Online" : "Offline",
-                style: const TextStyle(
+              Text(channel?.label ?? "Unknown"),
+              const Text(
+                "Private Channel",
+                style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.normal,
                 ),
@@ -88,15 +89,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         actions: [
           channelAsync.when(
             data: (channel) {
-              if (channel?.privateKey == null) return const SizedBox.shrink();
+              if (channel == null) return const SizedBox.shrink();
               return IconButton(
                 icon: const Icon(Icons.qr_code),
                 onPressed: () {
+                  final jsonString = jsonEncode({
+                    'l': channel.label,
+                    'k_enc': channel.encryptionKey,
+                    'k_auth': channel.authenticationKey,
+                    'v': 1,
+                  });
+                  
                   showDialog(
                     context: context,
                     builder: (context) => ShareChannelDialog(
-                      channelName: channel!.username,
-                      privateKey: channel.privateKey!,
+                      channelName: channel.label,
+                      qrData: jsonString,
                     ),
                   );
                 },

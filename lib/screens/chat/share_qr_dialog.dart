@@ -3,12 +3,12 @@ import 'package:qr_flutter/qr_flutter.dart';
 
 class ShareChannelDialog extends StatelessWidget {
   final String channelName;
-  final String privateKey;
+  final String qrData;
 
   const ShareChannelDialog({
     super.key,
     required this.channelName,
-    required this.privateKey,
+    required this.qrData,
   });
 
   @override
@@ -24,16 +24,16 @@ class ShareChannelDialog extends StatelessWidget {
             width: 200,
             height: 200,
             child: QrImageView(
-              data: privateKey,
+              data: qrData,
               version: QrVersions.auto,
               size: 200.0,
             ),
           ),
           const SizedBox(height: 16),
-          Text("Private Key", style: Theme.of(context).textTheme.labelSmall),
+          Text("Channel Code", style: Theme.of(context).textTheme.labelSmall),
           SelectableText(
-            privateKey,
-            style: const TextStyle(fontFamily: 'Courier', fontSize: 12),
+            qrData,
+            style: const TextStyle(fontFamily: 'Courier', fontSize: 10),
             textAlign: TextAlign.center,
           ),
         ],
