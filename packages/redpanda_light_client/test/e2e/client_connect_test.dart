@@ -48,11 +48,18 @@ void main() async {
         // Wait for status to be connected
         await statusExpectation;
 
-        // Wait for handshake and encryption to complete
-        await Future.delayed(const Duration(seconds: 5));
+        // Poll for encryption to become active (up to 10 seconds)
+        bool encryptionActive = false;
+        for (int i = 0; i < 20; i++) {
+          await Future.delayed(const Duration(milliseconds: 500));
+          if (client.isEncryptionActive) {
+            encryptionActive = true;
+            break;
+          }
+        }
 
         expect(
-          client.isEncryptionActive,
+          encryptionActive,
           isTrue,
           reason: "Encryption should be active after handshake",
         );
