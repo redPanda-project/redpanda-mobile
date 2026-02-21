@@ -34,3 +34,8 @@ final connectingPeersProvider = Provider<List<String>>((ref) {
   final snapshot = ref.watch(peerStatsSnapshotProvider);
   return snapshot.value?.connectingPeerAddresses.toList() ?? [];
 });
+
+final incomingMessagesProvider = StreamProvider<DecryptedMessage>((ref) {
+  final client = ref.watch(redPandaClientProvider);
+  return client.incomingMessages;
+});

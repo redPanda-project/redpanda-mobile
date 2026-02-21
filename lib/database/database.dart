@@ -19,6 +19,11 @@ class Channels extends Table {
   TextColumn get encryptionKey => text()(); // HEX encoded
   TextColumn get authenticationKey => text()(); // HEX encoded
 
+  // OH Descriptor of the peer (for sending messages to them)
+  TextColumn get peerOhEndpoint => text().nullable()();
+  TextColumn get peerOhId => text().nullable()(); // HEX encoded
+  TextColumn get peerOhPublicKey => text().nullable()(); // HEX encoded
+
   // Metadata
   DateTimeColumn get lastSeen => dateTime().nullable()(); // Last message time?
 
@@ -50,12 +55,24 @@ class Peers extends Table {
   Set<Column> get primaryKey => {address};
 }
 
-@DriftDatabase(tables: [Users, Channels, Messages, Peers])
+class OutboundHandles extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get ohId => text()(); // HEX encoded, 32 bytes
+  BlobColumn get keypairBytes => blob()(); // Serialized ECDSA keypair
+  TextColumn get serverEndpoint => text()();
+  DateTimeColumn get expiresAt => dateTime()();
+  TextColumn get channelId => text().nullable()();
+
+  @override
+  Set<Column>? get primaryKey => null; // uses autoIncrement id
+}
+
+@DriftDatabase(tables: [Users, Channels, Messages, Peers, OutboundHandles])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
   @override
-  int get schemaVersion => 5; // Incremented schema version to 5 for Channel updates
+  int get schemaVersion => 6;
 
   @override
   MigrationStrategy get migration {
@@ -81,6 +98,17 @@ class AppDatabase extends _$AppDatabase {
             // optimize: table might not exist
           }
           await m.createTable(channels);
+        }
+        if (from < 6) {
+          // Add OH columns to Channels and create OutboundHandles table
+          try {
+            await m.addColumn(channels, channels.peerOhEndpoint);
+            await m.addColumn(channels, channels.peerOhId);
+            await m.addColumn(channels, channels.peerOhPublicKey);
+          } catch (e) {
+            // Columns might already exist if channels was recreated in step 5
+          }
+          await m.createTable(outboundHandles);
         }
       },
     );

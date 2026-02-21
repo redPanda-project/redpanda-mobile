@@ -1,3 +1,5 @@
+import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
+import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/peer_stats_snapshot.dart';
 
@@ -15,13 +17,24 @@ abstract class RedPandaClient {
   /// Disconnects from the network.
   Future<void> disconnect();
 
-  /// Sends a message to a public key (hex string).
+  /// Sends a message to a channel identified by [channelId].
+  /// The content is encrypted with the channel's encryption key.
   /// Returns a message ID.
-  Future<String> sendMessage(String recipientPublicKey, String content);
+  Future<String> sendMessage(String channelId, String content);
 
   /// Adds a peer address (host:port) to the connection pool.
   Future<void> addPeer(String address);
 
   /// Stream of periodic peer stats snapshots from the network layer.
   Stream<PeerStatsSnapshot> get peerStatsStream;
+
+  /// Registers an Outbound Handle on a connected Full Node.
+  /// Returns an [OHRegistration] on success.
+  Future<OHRegistration> registerOutboundHandle();
+
+  /// Fetches messages from the given OH mailbox.
+  Future<List<DecryptedMessage>> fetchMessages(OHRegistration oh);
+
+  /// Stream of incoming messages from background polling.
+  Stream<DecryptedMessage> get incomingMessages;
 }

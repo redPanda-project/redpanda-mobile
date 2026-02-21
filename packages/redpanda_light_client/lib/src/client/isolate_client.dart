@@ -4,6 +4,8 @@ import 'dart:isolate';
 import 'package:redpanda_light_client/src/client/isolate_protocol.dart';
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/client_facade.dart';
+import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
+import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
@@ -27,6 +29,8 @@ class RedPandaIsolateClient implements RedPandaClient {
 
   final _peerStatsController = StreamController<PeerStatsSnapshot>.broadcast();
   PeerStatsSnapshot? _lastSnapshot;
+
+  final _incomingMessageController = StreamController<DecryptedMessage>.broadcast();
 
   // Cache last known status
   ConnectionStatus _currentStatus = ConnectionStatus.disconnected;
@@ -84,6 +88,8 @@ class RedPandaIsolateClient implements RedPandaClient {
       );
       _lastSnapshot = snapshot;
       _peerStatsController.add(snapshot);
+    } else if (event is EventIncomingMessage) {
+      _incomingMessageController.add(event.message);
     } else if (event is EventLog) {
       print('[Isolate] ${event.message}');
     }
@@ -121,6 +127,9 @@ class RedPandaIsolateClient implements RedPandaClient {
   }
 
   @override
+  Stream<DecryptedMessage> get incomingMessages => _incomingMessageController.stream;
+
+  @override
   Future<void> connect() async {
     await _isolateReady.future;
     _send(CmdConnect());
@@ -137,11 +146,30 @@ class RedPandaIsolateClient implements RedPandaClient {
   }
 
   @override
-  Future<String> sendMessage(String recipientPublicKey, String content) async {
-    _send(CmdSendMessage(recipientPublicKey, content));
-    // TODO: Wait for response/ack? Facade currently returns Future<String>
-    // For now return dummy
-    return "Queued";
+  Future<String> sendMessage(String channelId, String content) async {
+    _send(CmdSendMessage(channelId, content));
+    // TODO: Wait for EventMessageSent response from isolate
+    return '${DateTime.now().millisecondsSinceEpoch}';
+  }
+
+  @override
+  Future<OHRegistration> registerOutboundHandle() async {
+    _send(CmdRegisterOutboundHandle());
+    // TODO: Wait for response from isolate with actual registration
+    throw UnimplementedError(
+      'registerOutboundHandle via isolate not yet wired - use direct client for now',
+    );
+  }
+
+  @override
+  Future<List<DecryptedMessage>> fetchMessages(OHRegistration oh) async {
+    // Polling is handled internally by the client in the isolate
+    return [];
+  }
+
+  /// Register channel encryption keys in the isolate client.
+  void addChannelKeys(String channelId, List<int> encryptionKey, {List<int>? peerOhId}) {
+    _send(CmdAddChannelKeys(channelId, encryptionKey, peerOhId: peerOhId));
   }
 
   // Lifecycle hooks proxied
@@ -171,9 +199,6 @@ void _isolateEntryPoint(SendPort mainSendPort) {
 
       // Ensure specific keys match if one provided (edge case, not expected)
       if (message.nodeId == null || message.keyPair == null) {
-        // Optimization: If we generated locally, we re-generate both to be safe/consistent
-        // or we just trust the logic.
-        // Actually KeyPair.generate() creates both.
         keyPair = message.keyPair ?? KeyPair.generate();
         nodeId = message.nodeId ?? NodeId.fromPublicKey(keyPair);
       } else {
@@ -194,6 +219,11 @@ void _isolateEntryPoint(SendPort mainSendPort) {
 
       client!.peerCountStream.listen((count) {
         mainSendPort.send(EventPeerCount(count));
+      });
+
+      // Forward incoming messages to main isolate
+      client!.incomingMessages.listen((msg) {
+        mainSendPort.send(EventIncomingMessage(msg));
       });
 
       // Send periodic peer stats snapshots to main thread
@@ -228,7 +258,16 @@ void _isolateEntryPoint(SendPort mainSendPort) {
       } else if (message is CmdLifecycleResume) {
         client!.onResume();
       } else if (message is CmdSendMessage) {
-        await client!.sendMessage(message.recipientPublicKey, message.content);
+        final messageId = await client!.sendMessage(message.channelId, message.content);
+        mainSendPort.send(EventMessageSent(messageId));
+      } else if (message is CmdRegisterOutboundHandle) {
+        await client!.registerOutboundHandle();
+      } else if (message is CmdAddChannelKeys) {
+        client!.addChannelKeys(
+          message.channelId,
+          message.encryptionKey,
+          peerOhId: message.peerOhId,
+        );
       }
     } catch (e, stack) {
       print('RedPandaWorker: Error handling command $message: $e');

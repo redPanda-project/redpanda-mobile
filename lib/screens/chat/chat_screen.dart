@@ -29,6 +29,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final currentUser = await db.select(db.users).getSingleOrNull();
     if (currentUser == null) return;
 
+    // Insert message locally with pending status
     await db
         .into(db.messages)
         .insert(
@@ -42,23 +43,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ),
         );
 
-    // START: Simulate receiving a reply (Mock logic)
-    Future.delayed(const Duration(seconds: 1), () async {
-      if (!mounted) return;
-      await db
-          .into(db.messages)
-          .insert(
-            MessagesCompanion.insert(
-              conversationId: widget.peerUuid,
-              senderId: widget.peerUuid, // From them
-              content: "Replying to: $content",
-              timestamp: DateTime.now(),
-              status: 1, // Delivered
-              type: 0,
-            ),
-          );
-    });
-    // END: Mock logic
+    // Send via network
+    try {
+      await ref.read(redPandaClientProvider).sendMessage(widget.peerUuid, content);
+      // TODO: Update message status to sent (1) after confirmation
+    } catch (e) {
+      // TODO: Update message status to failed (5), show Snackbar
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to send: $e')),
+        );
+      }
+    }
   }
 
   @override

@@ -7,21 +7,25 @@ import 'package:equatable/equatable.dart';
 import 'package:pointycastle/export.dart';
 import 'package:hex/hex.dart';
 
+import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
+
 /// Represents a secure communication channel.
 ///
 /// A channel is defined by a shared set of keys:
 /// - [encryptionKey]: AES-256 key for content encryption.
-/// - [authenticationKey]: Key for signing/verification (Implementation details TBD, currently treated as a shared secret or private key).
+/// - [authenticationKey]: Key for signing/verification.
+/// - [peerOhDescriptor]: Optional OH descriptor of the peer (for sending messages to them).
 class Channel extends Equatable {
   final String label;
   final List<int> encryptionKey;
-  final List<int>
-  authenticationKey; // TODO: Decide if this is a shared private key or if we need a keypair.
+  final List<int> authenticationKey;
+  final OHDescriptor? peerOhDescriptor;
 
   const Channel({
     required this.label,
     required this.encryptionKey,
     required this.authenticationKey,
+    this.peerOhDescriptor,
   });
 
   /// Generates a new random channel.
@@ -46,37 +50,70 @@ class Channel extends Equatable {
     );
   }
 
+  /// Creates a copy of this channel with the given fields replaced.
+  Channel copyWith({OHDescriptor? peerOhDescriptor}) {
+    return Channel(
+      label: label,
+      encryptionKey: encryptionKey,
+      authenticationKey: authenticationKey,
+      peerOhDescriptor: peerOhDescriptor ?? this.peerOhDescriptor,
+    );
+  }
+
   /// Serializes the channel to a JSON string, suitable for QR codes.
+  /// Produces v2 format if [peerOhDescriptor] is present, v1 otherwise.
   String toJson() {
-    return jsonEncode({
+    final map = <String, dynamic>{
       'l': label,
       'k_enc': HEX.encode(encryptionKey),
       'k_auth': HEX.encode(authenticationKey),
-      'v': 1, // Version
-    });
+    };
+
+    if (peerOhDescriptor != null) {
+      map['oh'] = peerOhDescriptor!.toJsonMap();
+      map['v'] = 2;
+    } else {
+      map['v'] = 1;
+    }
+
+    return jsonEncode(map);
   }
 
   /// Deserializes a channel from a JSON string.
+  /// Supports both v1 and v2 formats.
   factory Channel.fromJson(String jsonStr) {
     final Map<String, dynamic> map = jsonDecode(jsonStr);
+    final version = map['v'] as int?;
 
-    if (map['v'] != 1) {
-      throw FormatException('Unsupported channel version: ${map['v']}');
+    if (version != 1 && version != 2) {
+      throw FormatException('Unsupported channel version: $version');
+    }
+
+    OHDescriptor? ohDescriptor;
+    if (version == 2 && map['oh'] != null) {
+      ohDescriptor = OHDescriptor.fromJsonMap(
+        map['oh'] as Map<String, dynamic>,
+      );
     }
 
     return Channel(
       label: map['l'] as String,
       encryptionKey: HEX.decode(map['k_enc'] as String),
       authenticationKey: HEX.decode(map['k_auth'] as String),
+      peerOhDescriptor: ohDescriptor,
     );
   }
 
-  // TODO: Add methods for deriving Channel ID
   String get id {
     final digest = sha256.convert([...encryptionKey, ...authenticationKey]);
     return HEX.encode(digest.bytes);
   }
 
   @override
-  List<Object?> get props => [label, encryptionKey, authenticationKey];
+  List<Object?> get props => [
+    label,
+    encryptionKey,
+    authenticationKey,
+    peerOhDescriptor,
+  ];
 }

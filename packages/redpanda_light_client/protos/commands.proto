@@ -59,6 +59,54 @@ message JobAck {
 
 message FlaschenpostPut {
     bytes content = 1;
+    bytes oh_id = 2;          // target OH mailbox ID (32 bytes)
+}
+
+// --- Outbound Handle (OH) Registration ---
+
+enum Status {
+    UNKNOWN = 0;
+    OK = 1;
+    ERROR = 2;
+    NOT_FOUND = 3;
+    UNAUTHORIZED = 4;
+}
+
+message RegisterOhRequest {
+    bytes oh_id = 1;                  // 32 bytes
+    bytes oh_auth_public_key = 2;     // 65 bytes (brainpoolp256r1 uncompressed)
+    int64 requested_expires_at = 3;   // millis since epoch
+    int64 timestamp_ms = 4;
+    bytes nonce = 5;                  // 16 bytes
+    bytes signature = 6;              // DER-encoded ECDSA signature
+}
+
+message RegisterOhResponse {
+    Status status = 1;
+    int64 expires_at_ms = 2;
+}
+
+// --- Fetch messages from OH mailbox ---
+
+message FetchRequest {
+    bytes oh_id = 1;
+    int32 limit = 2;
+    bytes cursor = 3;
+    int64 timestamp_ms = 4;
+    bytes nonce = 5;
+    bytes signature = 6;
+}
+
+message MailItem {
+    string message_id = 1;
+    bytes payload = 2;
+    int64 received_at_ms = 3;
+}
+
+message FetchResponse {
+    Status status = 1;
+    repeated MailItem items = 2;
+    bytes next_cursor = 3;
 }
 
 // Unified envelope for future-proofing or batching, 

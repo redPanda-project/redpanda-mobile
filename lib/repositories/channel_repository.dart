@@ -18,18 +18,28 @@ class DriftChannelRepository implements ChannelRepository {
 
   @override
   Future<void> addChannel(Channel channel) async {
+    final companion = db.ChannelsCompanion.insert(
+      uuid: channel.id,
+      label: channel.label,
+      encryptionKey: HEX.encode(channel.encryptionKey),
+      authenticationKey: HEX.encode(channel.authenticationKey),
+      peerOhEndpoint: drift.Value(channel.peerOhDescriptor?.serverEndpoint),
+      peerOhId: drift.Value(
+        channel.peerOhDescriptor != null
+            ? HEX.encode(channel.peerOhDescriptor!.handleId)
+            : null,
+      ),
+      peerOhPublicKey: drift.Value(
+        channel.peerOhDescriptor != null
+            ? HEX.encode(channel.peerOhDescriptor!.authPublicKey)
+            : null,
+      ),
+      lastSeen: drift.Value(DateTime.now()),
+    );
+
     await _db
         .into(_db.channels)
-        .insert(
-          db.ChannelsCompanion.insert(
-            uuid: channel.id,
-            label: channel.label,
-            encryptionKey: HEX.encode(channel.encryptionKey),
-            authenticationKey: HEX.encode(channel.authenticationKey),
-            lastSeen: drift.Value(DateTime.now()),
-          ),
-          mode: drift.InsertMode.insertOrReplace,
-        );
+        .insert(companion, mode: drift.InsertMode.insertOrReplace);
   }
 
   @override
@@ -46,10 +56,22 @@ class DriftChannelRepository implements ChannelRepository {
   }
 
   Channel _mapToDomain(db.Channel data) {
+    OHDescriptor? ohDescriptor;
+    if (data.peerOhEndpoint != null &&
+        data.peerOhId != null &&
+        data.peerOhPublicKey != null) {
+      ohDescriptor = OHDescriptor(
+        serverEndpoint: data.peerOhEndpoint!,
+        handleId: HEX.decode(data.peerOhId!),
+        authPublicKey: HEX.decode(data.peerOhPublicKey!),
+      );
+    }
+
     return Channel(
       label: data.label,
       encryptionKey: HEX.decode(data.encryptionKey),
       authenticationKey: HEX.decode(data.authenticationKey),
+      peerOhDescriptor: ohDescriptor,
     );
   }
 }
