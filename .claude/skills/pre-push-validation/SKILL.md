@@ -1,80 +1,80 @@
 ---
 name: Pre-Push Validation
 description: >
-  Führt alle CI-Pipeline-Checks lokal aus, bevor Code gepusht wird.
-  Diese Skill MUSS vor jedem Push ausgeführt werden – ohne erfolgreichen
-  Durchlauf darf kein Push erfolgen.
+  Runs all CI pipeline checks locally before code is pushed.
+  This skill MUST be executed before every push – no push is allowed
+  without a successful run.
 ---
 
 # Pre-Push Validation
 
-## Zweck
+## Purpose
 
-Dieser Skill spiegelt exakt die Schritte der GitHub-Actions-Pipeline
-(`flutter_ci.yml`) wider. Er stellt sicher, dass **kein Code gepusht wird,
-der die Pipeline brechen würde**.
+This skill mirrors exactly the steps of the GitHub Actions pipeline
+(`flutter_ci.yml`). It ensures that **no code is pushed that would
+break the pipeline**.
 
-> **Regel:** Führe diese Validierung **immer** aus, bevor du Änderungen
-> pushst oder committest. Überspringe keinen Schritt.
+> **Rule:** Always run this validation **before** pushing or committing
+> changes. Do not skip any step.
 
 ---
 
-## Validierungsschritte
+## Validation Steps
 
-Führe die Schritte **der Reihe nach** aus. Brich bei einem Fehler sofort ab,
-behebe das Problem und starte die Validierung erneut.
+Execute the steps **in order**. On any failure, stop immediately,
+fix the problem, and restart the validation from the beginning.
 
-### 1 · Light-Client-Paket (`packages/redpanda_light_client`)
+### 1 · Light Client Package (`packages/redpanda_light_client`)
 
 ```bash
-# 1a) Abhängigkeiten installieren
+# 1a) Install dependencies
 cd packages/redpanda_light_client
 flutter pub get
 
-# 1b) Formatierung prüfen
+# 1b) Check formatting
 dart format --output=none --set-exit-if-changed .
 
-# 1c) Statische Analyse
+# 1c) Static analysis
 flutter analyze
 
-# 1d) Tests ausführen
+# 1d) Run tests
 flutter test
 ```
 
-### 2 · Haupt-App (Projekt-Root)
+### 2 · Main App (Project Root)
 
 ```bash
-# 2a) Abhängigkeiten installieren
-cd ../../  # Zurück zum Projekt-Root
+# 2a) Install dependencies
+cd ../../  # Back to project root
 flutter pub get
 
-# 2b) Formatierung prüfen
+# 2b) Check formatting
 dart format --output=none --set-exit-if-changed .
 
-# 2c) Code-Generierung (Drift, Freezed, etc.)
+# 2c) Code generation (Drift, Freezed, etc.)
 dart run build_runner build --delete-conflicting-outputs
 
-# 2d) Statische Analyse
+# 2d) Static analysis
 flutter analyze
 
-# 2e) Tests ausführen (falls test/ Ordner existiert)
+# 2e) Run tests (if test/ directory exists)
 if [ -d "test" ]; then flutter test; fi
 ```
 
 ---
 
-## Fehlerbehandlung
+## Error Handling
 
-| Fehler | Aktion |
-|--------|--------|
-| Formatierung schlägt fehl | `dart format .` ausführen, dann erneut prüfen |
-| Analyse-Fehler / Warnungen | Quellcode korrigieren, erneut `flutter analyze` |
-| Tests schlagen fehl | Tests reparieren oder Code anpassen, erneut `flutter test` |
-| build_runner schlägt fehl | Konflikte in generierten Dateien lösen, erneut generieren |
+| Error | Action |
+|-------|--------|
+| Formatting fails | Run `dart format .`, then re-check |
+| Analysis errors / warnings | Fix source code, re-run `flutter analyze` |
+| Tests fail | Fix tests or adjust code, re-run `flutter test` |
+| build_runner fails | Resolve conflicts in generated files, re-run generation |
 
-## Ablauf als Checkliste
+## Checklist
 
-Nutze diese Checkliste, um den Fortschritt zu verfolgen:
+Use this checklist to track progress:
 
 - [ ] Light Client: `flutter pub get`
 - [ ] Light Client: `dart format --output=none --set-exit-if-changed .`
@@ -84,6 +84,6 @@ Nutze diese Checkliste, um den Fortschritt zu verfolgen:
 - [ ] App: `dart format --output=none --set-exit-if-changed .`
 - [ ] App: `dart run build_runner build --delete-conflicting-outputs`
 - [ ] App: `flutter analyze`
-- [ ] App: `flutter test` (falls test/ vorhanden)
+- [ ] App: `flutter test` (if test/ exists)
 
-**Erst wenn alle Punkte ✅ sind, darf gepusht werden.**
+**Only when all items are ✅ may you push.**
