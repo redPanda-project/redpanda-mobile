@@ -199,11 +199,13 @@ void _isolateEntryPoint(SendPort mainSendPort) {
       // Send periodic peer stats snapshots to main thread
       Timer.periodic(const Duration(seconds: 3), (_) {
         if (client != null) {
-          mainSendPort.send(EventPeerStatsSnapshot(
-            client!.getDebugPeerStats(),
-            client!.activePeerAddresses.toList(),
-            client!.connectingPeerAddresses.toList(),
-          ));
+          mainSendPort.send(
+            EventPeerStatsSnapshot(
+              client!.getDebugPeerStats(),
+              client!.activePeerAddresses.toList(),
+              client!.connectingPeerAddresses.toList(),
+            ),
+          );
         }
       });
 

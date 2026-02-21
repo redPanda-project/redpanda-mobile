@@ -147,12 +147,16 @@ class RedPandaLightClient implements RedPandaClient {
   }
 
   /// Currently active (handshake-verified) peer addresses.
-  Set<String> get activePeerAddresses =>
-      _peers.values.where((p) => p.isHandshakeVerified).map((p) => p.address).toSet();
+  Set<String> get activePeerAddresses => _peers.values
+      .where((p) => p.isHandshakeVerified)
+      .map((p) => p.address)
+      .toSet();
 
   /// Currently connecting (not yet verified) peer addresses.
-  Set<String> get connectingPeerAddresses =>
-      _peers.values.where((p) => !p.isHandshakeVerified && !p.isDisconnected).map((p) => p.address).toSet();
+  Set<String> get connectingPeerAddresses => _peers.values
+      .where((p) => !p.isHandshakeVerified && !p.isDisconnected)
+      .map((p) => p.address)
+      .toSet();
 
   @override
   Stream<PeerStatsSnapshot> get peerStatsStream async* {
