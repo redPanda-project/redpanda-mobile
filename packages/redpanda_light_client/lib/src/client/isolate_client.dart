@@ -7,6 +7,7 @@ import 'package:redpanda_light_client/src/client_facade.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
+import 'package:redpanda_light_client/src/models/peer_stats_snapshot.dart';
 
 /// A facade that implements [RedPandaClient] but proxies all operations
 /// to a background [Isolate] to prevent UI jank.
@@ -23,6 +24,9 @@ class RedPandaIsolateClient implements RedPandaClient {
   final _connectionStatusController =
       StreamController<ConnectionStatus>.broadcast();
   final _peerCountController = StreamController<int>.broadcast();
+
+  final _peerStatsController = StreamController<PeerStatsSnapshot>.broadcast();
+  PeerStatsSnapshot? _lastSnapshot;
 
   // Cache last known status
   ConnectionStatus _currentStatus = ConnectionStatus.disconnected;
@@ -72,6 +76,14 @@ class RedPandaIsolateClient implements RedPandaClient {
     } else if (event is EventPeerCount) {
       _currentPeerCount = event.count;
       _peerCountController.add(event.count);
+    } else if (event is EventPeerStatsSnapshot) {
+      final snapshot = PeerStatsSnapshot(
+        allPeers: event.allPeers,
+        activePeerAddresses: event.activePeerAddresses.toSet(),
+        connectingPeerAddresses: event.connectingPeerAddresses.toSet(),
+      );
+      _lastSnapshot = snapshot;
+      _peerStatsController.add(snapshot);
     } else if (event is EventLog) {
       print('[Isolate] ${event.message}');
     }
@@ -98,6 +110,14 @@ class RedPandaIsolateClient implements RedPandaClient {
   Stream<int> get peerCountStream async* {
     yield _currentPeerCount;
     yield* _peerCountController.stream;
+  }
+
+  @override
+  Stream<PeerStatsSnapshot> get peerStatsStream async* {
+    if (_lastSnapshot != null) {
+      yield _lastSnapshot!;
+    }
+    yield* _peerStatsController.stream;
   }
 
   @override
@@ -174,6 +194,17 @@ void _isolateEntryPoint(SendPort mainSendPort) {
 
       client!.peerCountStream.listen((count) {
         mainSendPort.send(EventPeerCount(count));
+      });
+
+      // Send periodic peer stats snapshots to main thread
+      Timer.periodic(const Duration(seconds: 3), (_) {
+        if (client != null) {
+          mainSendPort.send(EventPeerStatsSnapshot(
+            client!.getDebugPeerStats(),
+            client!.activePeerAddresses.toList(),
+            client!.connectingPeerAddresses.toList(),
+          ));
+        }
       });
 
       print('RedPandaWorker: Client initialized.');

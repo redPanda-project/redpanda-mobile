@@ -1,6 +1,7 @@
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
+import 'package:redpanda_light_client/src/models/peer_stats.dart';
 
 // --- Commands (Main -> Isolate) ---
 abstract class IsolateCommand {}
@@ -49,6 +50,17 @@ class EventPeerCount extends IsolateEvent {
 class EventLog extends IsolateEvent {
   final String message;
   EventLog(this.message);
+}
+
+class EventPeerStatsSnapshot extends IsolateEvent {
+  final List<PeerStats> allPeers;
+  final List<String> activePeerAddresses;
+  final List<String> connectingPeerAddresses;
+  EventPeerStatsSnapshot(
+    this.allPeers,
+    this.activePeerAddresses,
+    this.connectingPeerAddresses,
+  );
 }
 
 // TODO: Add EventMessageReceived when we have message handling

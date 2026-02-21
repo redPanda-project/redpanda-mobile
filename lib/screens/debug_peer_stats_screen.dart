@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:redpanda/database/database.dart';
 import 'package:redpanda/shared/providers.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
 
@@ -9,41 +8,17 @@ class DebugPeerStatsScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final db = ref.watch(dbProvider);
-    // Watch all peers from DB
-    final allPeersStream = db.select(db.peers).watch();
-
-    // Watch currently connected peers from RAM
-    final activePeersAsync = ref.watch(activePeersProvider);
-    final activePeers = activePeersAsync.value ?? [];
-    final connectingPeersAsync = ref.watch(connectingPeersProvider);
-    final connectingPeers = connectingPeersAsync.value ?? [];
+    final snapshotAsync = ref.watch(peerStatsSnapshotProvider);
+    final activePeers = ref.watch(activePeersProvider);
+    final connectingPeers = ref.watch(connectingPeersProvider);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Peer Network Status')),
-      body: StreamBuilder<List<Peer>>(
-        stream: allPeersStream,
-        builder: (context, snapshot) {
-          if (snapshot.hasError) {
-            return Center(child: Text('Error: ${snapshot.error}'));
-          }
-          if (!snapshot.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-
-          final peers = snapshot.data!;
-          final peerStatsList = peers
-              .map(
-                (p) => PeerStats(
-                  address: p.address,
-                  nodeId: p.nodeId,
-                  averageLatencyMs: p.averageLatencyMs,
-                  successCount: p.successCount,
-                  failureCount: p.failureCount,
-                  lastSeen: p.lastSeen,
-                ),
-              )
-              .toList();
+      body: snapshotAsync.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (err, _) => Center(child: Text('Error: $err')),
+        data: (snapshot) {
+          final peerStatsList = List<PeerStats>.from(snapshot.allPeers);
 
           // 1. Identify Top 3 Primary Candidates based on clean Score sort
           peerStatsList.sort((a, b) => b.score.compareTo(a.score));
@@ -147,7 +122,7 @@ class DebugPeerStatsScreen extends ConsumerWidget {
                   trailing: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.end,
-                    mainAxisSize: MainAxisSize.min, // Fix Check: overflow
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
                         'Score',

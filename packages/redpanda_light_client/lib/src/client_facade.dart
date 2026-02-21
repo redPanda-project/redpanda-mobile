@@ -1,4 +1,5 @@
 import 'package:redpanda_light_client/src/models/connection_status.dart';
+import 'package:redpanda_light_client/src/models/peer_stats_snapshot.dart';
 
 /// The primary interface for the App to interact with the RedPanda Network.
 abstract class RedPandaClient {
@@ -20,4 +21,7 @@ abstract class RedPandaClient {
 
   /// Adds a peer address (host:port) to the connection pool.
   Future<void> addPeer(String address);
+
+  /// Stream of periodic peer stats snapshots from the network layer.
+  Stream<PeerStatsSnapshot> get peerStatsStream;
 }

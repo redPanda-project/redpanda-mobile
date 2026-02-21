@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:redpanda_light_client/src/client_facade.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
+import 'package:redpanda_light_client/src/models/peer_stats_snapshot.dart';
 
 /// A mock implementation of [RedPandaClient] for testing and UI development.
 class MockRedPandaClient implements RedPandaClient {
@@ -38,4 +39,13 @@ class MockRedPandaClient implements RedPandaClient {
     // Mock implementation - do nothing or log
     print('MockRedPandaClient: Added peer $address');
   }
+
+  @override
+  Stream<PeerStatsSnapshot> get peerStatsStream => Stream.value(
+    PeerStatsSnapshot(
+      allPeers: [],
+      activePeerAddresses: {},
+      connectingPeerAddresses: {},
+    ),
+  );
 }

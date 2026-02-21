@@ -7,8 +7,9 @@ final dbProvider = Provider<AppDatabase>((ref) {
 });
 
 final redPandaClientProvider = Provider<RedPandaClient>((ref) {
-  // Key generation now happens in the background isolate to prevent UI lag
-  return RedPandaIsolateClient(seeds: RedPandaLightClient.defaultSeeds);
+  return RedPandaIsolateClient(
+    seeds: RedPandaLightClient.defaultSeeds,
+  );
 });
 
 final connectionStatusProvider = StreamProvider<ConnectionStatus>((ref) {
@@ -21,18 +22,17 @@ final peerCountProvider = StreamProvider<int>((ref) {
   return client.peerCountStream;
 });
 
-final activePeersProvider = StreamProvider<List<String>>((ref) {
+final peerStatsSnapshotProvider = StreamProvider<PeerStatsSnapshot>((ref) {
   final client = ref.watch(redPandaClientProvider);
-  if (client is RedPandaLightClient) {
-    return client.activePeersStream;
-  }
-  return Stream.value([]);
+  return client.peerStatsStream;
 });
 
-final connectingPeersProvider = StreamProvider<List<String>>((ref) {
-  final client = ref.watch(redPandaClientProvider);
-  if (client is RedPandaLightClient) {
-    return client.connectingPeersStream;
-  }
-  return Stream.value([]);
+final activePeersProvider = Provider<List<String>>((ref) {
+  final snapshot = ref.watch(peerStatsSnapshotProvider);
+  return snapshot.value?.activePeerAddresses.toList() ?? [];
+});
+
+final connectingPeersProvider = Provider<List<String>>((ref) {
+  final snapshot = ref.watch(peerStatsSnapshotProvider);
+  return snapshot.value?.connectingPeerAddresses.toList() ?? [];
 });

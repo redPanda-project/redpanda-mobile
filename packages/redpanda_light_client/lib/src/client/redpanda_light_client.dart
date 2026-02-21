@@ -8,6 +8,7 @@ import 'package:redpanda_light_client/src/models/node_id.dart';
 
 import 'package:redpanda_light_client/src/peer_repository.dart';
 import 'package:redpanda_light_client/src/models/peer_stats.dart';
+import 'package:redpanda_light_client/src/models/peer_stats_snapshot.dart';
 
 import 'package:redpanda_light_client/src/network/active_peer.dart';
 
@@ -142,6 +143,30 @@ class RedPandaLightClient implements RedPandaClient {
           .where((p) => !p.isHandshakeVerified)
           .map((p) => p.address)
           .toList();
+    }
+  }
+
+  /// Currently active (handshake-verified) peer addresses.
+  Set<String> get activePeerAddresses =>
+      _peers.values.where((p) => p.isHandshakeVerified).map((p) => p.address).toSet();
+
+  /// Currently connecting (not yet verified) peer addresses.
+  Set<String> get connectingPeerAddresses =>
+      _peers.values.where((p) => !p.isHandshakeVerified && !p.isDisconnected).map((p) => p.address).toSet();
+
+  @override
+  Stream<PeerStatsSnapshot> get peerStatsStream async* {
+    yield PeerStatsSnapshot(
+      allPeers: getDebugPeerStats(),
+      activePeerAddresses: activePeerAddresses,
+      connectingPeerAddresses: connectingPeerAddresses,
+    );
+    await for (final _ in _peerCountController.stream) {
+      yield PeerStatsSnapshot(
+        allPeers: getDebugPeerStats(),
+        activePeerAddresses: activePeerAddresses,
+        connectingPeerAddresses: connectingPeerAddresses,
+      );
     }
   }
 
