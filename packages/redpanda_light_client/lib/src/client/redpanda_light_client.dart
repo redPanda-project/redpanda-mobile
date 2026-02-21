@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:fixnum/fixnum.dart' as fixnum;
 import 'package:pointycastle/export.dart' as pc;
 
 import 'package:redpanda_light_client/src/client_facade.dart';
@@ -732,9 +733,8 @@ class RedPandaLightClient implements RedPandaClient {
   }
 
   /// Converts an int to fixnum Int64 for protobuf.
-  static dynamic _toInt64(int value) {
-    // Using fixnum.Int64 via the generated code
-    return value;
+  static fixnum.Int64 _toInt64(int value) {
+    return fixnum.Int64(value);
   }
 
   /// DEBUG ONLY: Get current peer stats

@@ -17,7 +17,7 @@ Frontend-Milestones werden **nach dem jeweiligen Backend-Milestone** umgesetzt. 
 
 | MS | Title | Status | Backend-Abhängigkeit |
 |----|-------|--------|----------------------|
-| [MS01](ms01_first_real_message.md) | OH Client & Chat Integration | Stub | Blocked bis Backend MS01 Done |
+| [MS01](ms01_first_real_message.md) | OH Client & Chat Integration | Partial | Blocked bis Backend MS01 Done |
 | [MS02](ms02_reliable_delivery.md) | Retry, Dedup & Polling | Missing | Blocked bis Backend MS02 Done |
 | [MS03](ms03_authenticated_encryption.md) | Dart Crypto Migration | Missing | Blocked bis Backend MS03 Done |
 | [MS04](ms04_multi_hop_garlic.md) | Garlic Wrapping & Hop Selection | Missing | Blocked bis Backend MS04 Done |
@@ -32,13 +32,13 @@ Frontend-Milestones werden **nach dem jeweiligen Backend-Milestone** umgesetzt. 
 | Component | File | Status |
 |-----------|------|--------|
 | TCP connection + peer management | `redpanda_light_client.dart` | Done |
-| `sendMessage()` | `redpanda_light_client.dart` | Stub — `UnimplementedError` |
-| Channel model | `channel.dart` | Done (model only) |
-| Chat UI | `chat_screen.dart` | Done — mock auto-reply |
-| Database (Drift v5) | `database.dart` | Done |
-| Providers (Riverpod) | `providers.dart` | Done |
+| `sendMessage()` | `redpanda_light_client.dart` | Partial — AES-256-CTR encryption, FlaschenpostPut serialization (wire protocol pending Backend MS01) |
+| Channel model | `channel.dart` | Done — v2 with OHDescriptor |
+| Chat UI | `chat_screen.dart` | Done — real sendMessage(), mock reply removed |
+| Database (Drift v6) | `database.dart` | Done — OutboundHandles table, OH columns |
+| Providers (Riverpod) | `providers.dart` | Done — includes incomingMessagesProvider |
 | Garlic wrapping | `garlic_message_wrapper.dart` | Exists — not called from network layer |
-| OH client-side | — | Missing |
+| OH client-side | `oh_descriptor.dart`, `oh_keypair.dart` | Partial — models + crypto done, wire protocol pending |
 | Peer repo injection | `DriftPeerRepository` | Exists — not wired into providers |
 
 ## Dependency Graph (Frontend only)

@@ -86,12 +86,26 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               return IconButton(
                 icon: const Icon(Icons.qr_code),
                 onPressed: () {
-                  final jsonString = jsonEncode({
+                  final map = <String, dynamic>{
                     'l': channel.label,
                     'k_enc': channel.encryptionKey,
                     'k_auth': channel.authenticationKey,
-                    'v': 1,
-                  });
+                  };
+
+                  if (channel.peerOhEndpoint != null &&
+                      channel.peerOhId != null &&
+                      channel.peerOhPublicKey != null) {
+                    map['oh'] = {
+                      'ep': channel.peerOhEndpoint,
+                      'id': channel.peerOhId,
+                      'pk': channel.peerOhPublicKey,
+                    };
+                    map['v'] = 2;
+                  } else {
+                    map['v'] = 1;
+                  }
+
+                  final jsonString = jsonEncode(map);
 
                   showDialog(
                     context: context,
