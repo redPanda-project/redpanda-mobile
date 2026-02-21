@@ -19,7 +19,7 @@ dependencies:
   # path: ^1.9.0
 
 dev_dependencies:
-  arch_test: ^0.1.0
+  arch_test: ^1.0.0
   lints: ^6.0.0
   test: ^1.25.6
   mocktail: ^1.0.0
