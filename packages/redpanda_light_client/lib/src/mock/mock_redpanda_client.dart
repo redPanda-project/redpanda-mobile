@@ -9,7 +9,8 @@ import 'package:redpanda_light_client/src/models/peer_stats_snapshot.dart';
 class MockRedPandaClient implements RedPandaClient {
   final _connectionStatusController =
       StreamController<ConnectionStatus>.broadcast();
-  final _incomingMessageController = StreamController<DecryptedMessage>.broadcast();
+  final _incomingMessageController =
+      StreamController<DecryptedMessage>.broadcast();
 
   @override
   Stream<ConnectionStatus> get connectionStatus =>
@@ -63,5 +64,6 @@ class MockRedPandaClient implements RedPandaClient {
   }
 
   @override
-  Stream<DecryptedMessage> get incomingMessages => _incomingMessageController.stream;
+  Stream<DecryptedMessage> get incomingMessages =>
+      _incomingMessageController.stream;
 }

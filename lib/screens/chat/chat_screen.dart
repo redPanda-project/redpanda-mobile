@@ -45,14 +45,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     // Send via network
     try {
-      await ref.read(redPandaClientProvider).sendMessage(widget.peerUuid, content);
+      await ref
+          .read(redPandaClientProvider)
+          .sendMessage(widget.peerUuid, content);
       // TODO: Update message status to sent (1) after confirmation
     } catch (e) {
       // TODO: Update message status to failed (5), show Snackbar
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to send: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to send: $e')));
       }
     }
   }

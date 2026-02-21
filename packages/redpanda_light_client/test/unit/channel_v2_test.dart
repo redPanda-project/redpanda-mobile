@@ -52,10 +52,7 @@ void main() {
         reconstructed.peerOhDescriptor!.serverEndpoint,
         ohDescriptor.serverEndpoint,
       );
-      expect(
-        reconstructed.peerOhDescriptor!.handleId,
-        ohDescriptor.handleId,
-      );
+      expect(reconstructed.peerOhDescriptor!.handleId, ohDescriptor.handleId);
       expect(
         reconstructed.peerOhDescriptor!.authPublicKey,
         ohDescriptor.authPublicKey,

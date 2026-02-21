@@ -30,10 +30,7 @@ class OHKeypair {
     generator.init(ParametersWithRandom(keyParams, random));
 
     final pair = generator.generateKeyPair();
-    return OHKeypair(
-      publicKey: pair.publicKey as ECPublicKey,
-      privateKey: pair.privateKey as ECPrivateKey,
-    );
+    return OHKeypair(publicKey: pair.publicKey, privateKey: pair.privateKey);
   }
 
   /// Uncompressed public key bytes (65 bytes: 0x04 + X + Y).

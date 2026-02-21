@@ -655,8 +655,9 @@ class Channel extends DataClass implements Insertable<Channel> {
     label: label ?? this.label,
     encryptionKey: encryptionKey ?? this.encryptionKey,
     authenticationKey: authenticationKey ?? this.authenticationKey,
-    peerOhEndpoint:
-        peerOhEndpoint.present ? peerOhEndpoint.value : this.peerOhEndpoint,
+    peerOhEndpoint: peerOhEndpoint.present
+        ? peerOhEndpoint.value
+        : this.peerOhEndpoint,
     peerOhId: peerOhId.present ? peerOhId.value : this.peerOhId,
     peerOhPublicKey: peerOhPublicKey.present
         ? peerOhPublicKey.value
@@ -1750,8 +1751,9 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $ChannelsTable channels = $ChannelsTable(this);
   late final $MessagesTable messages = $MessagesTable(this);
   late final $PeersTable peers = $PeersTable(this);
-  late final $OutboundHandlesTable outboundHandles =
-      $OutboundHandlesTable(this);
+  late final $OutboundHandlesTable outboundHandles = $OutboundHandlesTable(
+    this,
+  );
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -2145,10 +2147,8 @@ class $$ChannelsTableAnnotationComposer
     builder: (column) => column,
   );
 
-  GeneratedColumn<String> get peerOhId => $composableBuilder(
-    column: $table.peerOhId,
-    builder: (column) => column,
-  );
+  GeneratedColumn<String> get peerOhId =>
+      $composableBuilder(column: $table.peerOhId, builder: (column) => column);
 
   GeneratedColumn<String> get peerOhPublicKey => $composableBuilder(
     column: $table.peerOhPublicKey,
@@ -3434,7 +3434,11 @@ class $$OutboundHandlesTableTableManager
           $$OutboundHandlesTableUpdateCompanionBuilder,
           (
             OutboundHandle,
-            BaseReferences<_$AppDatabase, $OutboundHandlesTable, OutboundHandle>,
+            BaseReferences<
+              _$AppDatabase,
+              $OutboundHandlesTable,
+              OutboundHandle
+            >,
           ),
           OutboundHandle,
           PrefetchHooks Function()

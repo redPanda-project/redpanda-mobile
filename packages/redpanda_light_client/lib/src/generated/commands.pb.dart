@@ -786,14 +786,21 @@ class Status extends $pb.ProtobufEnum {
   static const Status UNKNOWN = Status._(0, _omitEnumNames ? '' : 'UNKNOWN');
   static const Status OK = Status._(1, _omitEnumNames ? '' : 'OK');
   static const Status ERROR = Status._(2, _omitEnumNames ? '' : 'ERROR');
-  static const Status NOT_FOUND = Status._(3, _omitEnumNames ? '' : 'NOT_FOUND');
-  static const Status UNAUTHORIZED = Status._(4, _omitEnumNames ? '' : 'UNAUTHORIZED');
+  static const Status NOT_FOUND =
+      Status._(3, _omitEnumNames ? '' : 'NOT_FOUND');
+  static const Status UNAUTHORIZED =
+      Status._(4, _omitEnumNames ? '' : 'UNAUTHORIZED');
 
   static const $core.List<Status> values = <Status>[
-    UNKNOWN, OK, ERROR, NOT_FOUND, UNAUTHORIZED,
+    UNKNOWN,
+    OK,
+    ERROR,
+    NOT_FOUND,
+    UNAUTHORIZED,
   ];
 
-  static final $core.Map<$core.int, Status> _byValue = $pb.ProtobufEnum.initByValue(values);
+  static final $core.Map<$core.int, Status> _byValue =
+      $pb.ProtobufEnum.initByValue(values);
   static Status? valueOf($core.int value) => _byValue[value];
 
   const Status._($core.int v, $core.String n) : super(v, n);
@@ -812,7 +819,8 @@ class RegisterOhRequest extends $pb.GeneratedMessage {
     final result = create();
     if (ohId != null) result.ohId = ohId;
     if (ohAuthPublicKey != null) result.ohAuthPublicKey = ohAuthPublicKey;
-    if (requestedExpiresAt != null) result.requestedExpiresAt = requestedExpiresAt;
+    if (requestedExpiresAt != null)
+      result.requestedExpiresAt = requestedExpiresAt;
     if (timestampMs != null) result.timestampMs = timestampMs;
     if (nonce != null) result.nonce = nonce;
     if (signature != null) result.signature = signature;
@@ -827,15 +835,27 @@ class RegisterOhRequest extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RegisterOhRequest',
-      package: const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
       createEmptyInstance: create)
-    ..a<$core.List<$core.int>>(1, _omitFieldNames ? '' : 'ohId', $pb.PbFieldType.OY)
-    ..a<$core.List<$core.int>>(2, _omitFieldNames ? '' : 'ohAuthPublicKey', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(
+        1, _omitFieldNames ? '' : 'ohId', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(
+        2, _omitFieldNames ? '' : 'ohAuthPublicKey', $pb.PbFieldType.OY)
     ..aInt64(3, _omitFieldNames ? '' : 'requestedExpiresAt')
     ..aInt64(4, _omitFieldNames ? '' : 'timestampMs')
-    ..a<$core.List<$core.int>>(5, _omitFieldNames ? '' : 'nonce', $pb.PbFieldType.OY)
-    ..a<$core.List<$core.int>>(6, _omitFieldNames ? '' : 'signature', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(
+        5, _omitFieldNames ? '' : 'nonce', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(
+        6, _omitFieldNames ? '' : 'signature', $pb.PbFieldType.OY)
     ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RegisterOhRequest clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RegisterOhRequest copyWith(void Function(RegisterOhRequest) updates) =>
+      super.copyWith((message) => updates(message as RegisterOhRequest))
+          as RegisterOhRequest;
 
   @$core.override
   $pb.BuilderInfo get info_ => _i;
@@ -900,12 +920,22 @@ class RegisterOhResponse extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RegisterOhResponse',
-      package: const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
       createEmptyInstance: create)
     ..e<Status>(1, _omitFieldNames ? '' : 'status', $pb.PbFieldType.OE,
-        defaultOrMaker: Status.UNKNOWN, valueOf: Status.valueOf, enumValues: Status.values)
+        defaultOrMaker: Status.UNKNOWN,
+        valueOf: Status.valueOf,
+        enumValues: Status.values)
     ..aInt64(2, _omitFieldNames ? '' : 'expiresAtMs')
     ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RegisterOhResponse clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RegisterOhResponse copyWith(void Function(RegisterOhResponse) updates) =>
+      super.copyWith((message) => updates(message as RegisterOhResponse))
+          as RegisterOhResponse;
 
   @$core.override
   $pb.BuilderInfo get info_ => _i;
@@ -958,15 +988,27 @@ class FetchRequest extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'FetchRequest',
-      package: const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
       createEmptyInstance: create)
-    ..a<$core.List<$core.int>>(1, _omitFieldNames ? '' : 'ohId', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(
+        1, _omitFieldNames ? '' : 'ohId', $pb.PbFieldType.OY)
     ..aI(2, _omitFieldNames ? '' : 'limit')
-    ..a<$core.List<$core.int>>(3, _omitFieldNames ? '' : 'cursor', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(
+        3, _omitFieldNames ? '' : 'cursor', $pb.PbFieldType.OY)
     ..aInt64(4, _omitFieldNames ? '' : 'timestampMs')
-    ..a<$core.List<$core.int>>(5, _omitFieldNames ? '' : 'nonce', $pb.PbFieldType.OY)
-    ..a<$core.List<$core.int>>(6, _omitFieldNames ? '' : 'signature', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(
+        5, _omitFieldNames ? '' : 'nonce', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(
+        6, _omitFieldNames ? '' : 'signature', $pb.PbFieldType.OY)
     ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  FetchRequest clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  FetchRequest copyWith(void Function(FetchRequest) updates) =>
+      super.copyWith((message) => updates(message as FetchRequest))
+          as FetchRequest;
 
   @$core.override
   $pb.BuilderInfo get info_ => _i;
@@ -1033,12 +1075,20 @@ class MailItem extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'MailItem',
-      package: const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'messageId')
-    ..a<$core.List<$core.int>>(2, _omitFieldNames ? '' : 'payload', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(
+        2, _omitFieldNames ? '' : 'payload', $pb.PbFieldType.OY)
     ..aInt64(3, _omitFieldNames ? '' : 'receivedAtMs')
     ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  MailItem clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  MailItem copyWith(void Function(MailItem) updates) =>
+      super.copyWith((message) => updates(message as MailItem)) as MailItem;
 
   @$core.override
   $pb.BuilderInfo get info_ => _i;
@@ -1049,8 +1099,8 @@ class MailItem extends $pb.GeneratedMessage {
   MailItem createEmptyInstance() => create();
   static MailItem? _defaultInstance;
   @$core.pragma('dart2js:noInline')
-  static MailItem getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<MailItem>(create);
+  static MailItem getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<MailItem>(create);
 
   @$pb.TagNumber(1)
   $core.String get messageId => $_getSZ(0);
@@ -1090,14 +1140,25 @@ class FetchResponse extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'FetchResponse',
-      package: const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
       createEmptyInstance: create)
     ..e<Status>(1, _omitFieldNames ? '' : 'status', $pb.PbFieldType.OE,
-        defaultOrMaker: Status.UNKNOWN, valueOf: Status.valueOf, enumValues: Status.values)
+        defaultOrMaker: Status.UNKNOWN,
+        valueOf: Status.valueOf,
+        enumValues: Status.values)
     ..pc<MailItem>(2, _omitFieldNames ? '' : 'items', $pb.PbFieldType.PM,
         subBuilder: MailItem.create)
-    ..a<$core.List<$core.int>>(3, _omitFieldNames ? '' : 'nextCursor', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(
+        3, _omitFieldNames ? '' : 'nextCursor', $pb.PbFieldType.OY)
     ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  FetchResponse clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  FetchResponse copyWith(void Function(FetchResponse) updates) =>
+      super.copyWith((message) => updates(message as FetchResponse))
+          as FetchResponse;
 
   @$core.override
   $pb.BuilderInfo get info_ => _i;

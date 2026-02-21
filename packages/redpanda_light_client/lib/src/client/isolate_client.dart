@@ -30,7 +30,8 @@ class RedPandaIsolateClient implements RedPandaClient {
   final _peerStatsController = StreamController<PeerStatsSnapshot>.broadcast();
   PeerStatsSnapshot? _lastSnapshot;
 
-  final _incomingMessageController = StreamController<DecryptedMessage>.broadcast();
+  final _incomingMessageController =
+      StreamController<DecryptedMessage>.broadcast();
 
   // Cache last known status
   ConnectionStatus _currentStatus = ConnectionStatus.disconnected;
@@ -127,7 +128,8 @@ class RedPandaIsolateClient implements RedPandaClient {
   }
 
   @override
-  Stream<DecryptedMessage> get incomingMessages => _incomingMessageController.stream;
+  Stream<DecryptedMessage> get incomingMessages =>
+      _incomingMessageController.stream;
 
   @override
   Future<void> connect() async {
@@ -168,7 +170,11 @@ class RedPandaIsolateClient implements RedPandaClient {
   }
 
   /// Register channel encryption keys in the isolate client.
-  void addChannelKeys(String channelId, List<int> encryptionKey, {List<int>? peerOhId}) {
+  void addChannelKeys(
+    String channelId,
+    List<int> encryptionKey, {
+    List<int>? peerOhId,
+  }) {
     _send(CmdAddChannelKeys(channelId, encryptionKey, peerOhId: peerOhId));
   }
 
@@ -258,7 +264,10 @@ void _isolateEntryPoint(SendPort mainSendPort) {
       } else if (message is CmdLifecycleResume) {
         client!.onResume();
       } else if (message is CmdSendMessage) {
-        final messageId = await client!.sendMessage(message.channelId, message.content);
+        final messageId = await client!.sendMessage(
+          message.channelId,
+          message.content,
+        );
         mainSendPort.send(EventMessageSent(messageId));
       } else if (message is CmdRegisterOutboundHandle) {
         await client!.registerOutboundHandle();
