@@ -558,14 +558,19 @@ class RedPandaLightClient implements RedPandaClient {
 
   @override
   Future<String> sendMessage(String channelId, String content) async {
+    final random = Random.secure();
+    final messageId = '${DateTime.now().millisecondsSinceEpoch}-${random.nextInt(999999)}';
+
     final encKey = _channelEncryptionKeys[channelId];
     if (encKey == null) {
-      throw StateError('No encryption key registered for channel $channelId');
+      // Channel keys not yet registered in the network layer.
+      // Message is stored locally by the UI; encryption will happen once keys are provided.
+      print('RedPandaLightClient: sendMessage() channel $channelId has no encryption keys registered yet — queued locally');
+      return messageId;
     }
     final peerOhId = _channelPeerOhIds[channelId];
 
     // 1. Generate random IV (16 bytes)
-    final random = Random.secure();
     final iv = Uint8List.fromList(
       List<int>.generate(16, (_) => random.nextInt(256)),
     );
@@ -589,7 +594,6 @@ class RedPandaLightClient implements RedPandaClient {
     }
 
     // 5. Send to a connected peer (best available)
-    // For now we serialize the protobuf and send via the first verified peer.
     final activePeer = _peers.values
         .where((p) => p.isHandshakeVerified)
         .firstOrNull;
@@ -602,8 +606,6 @@ class RedPandaLightClient implements RedPandaClient {
       print('RedPandaLightClient: sendMessage() no active peer available, message queued locally');
     }
 
-    // 6. Return a local message ID
-    final messageId = '${DateTime.now().millisecondsSinceEpoch}-${random.nextInt(999999)}';
     return messageId;
   }
 

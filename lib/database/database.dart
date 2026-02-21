@@ -62,9 +62,6 @@ class OutboundHandles extends Table {
   TextColumn get serverEndpoint => text()();
   DateTimeColumn get expiresAt => dateTime()();
   TextColumn get channelId => text().nullable()();
-
-  @override
-  Set<Column>? get primaryKey => null; // uses autoIncrement id
 }
 
 @DriftDatabase(tables: [Users, Channels, Messages, Peers, OutboundHandles])
