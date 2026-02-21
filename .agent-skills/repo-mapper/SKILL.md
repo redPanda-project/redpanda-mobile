@@ -24,7 +24,8 @@ Die Map liegt unter `.agent-skills/repo-mapper/map/` und spiegelt die
 Projektstruktur wider. Jeder Ordner enthält eine `_index.md` mit:
 
 * **Unterordner** – mit relativem Link zur jeweiligen `_index.md`
-* **Dateien** – Auflistung aller Dateien in diesem Ordner
+* **Dateien** – Auflistung aller Dateien **mit destillierten Zusammenfassungen**
+  (Klassen, Funktionen, Doc-Kommentare, Zweck der Datei)
 
 Beispiel:
 
@@ -72,3 +73,17 @@ Committe die aktualisierten Map-Dateien zusammen mit deinen Code-Änderungen.
 Boilerplate-Ordner werden automatisch ausgeblendet:
 `.git`, `node_modules`, `venv`, `.venv`, `__pycache__`, `dist`, `build`,
 `.idea`, `.dart_tool`, `.pub-cache`, `.pub`.
+
+## Destillierte Datei-Informationen
+
+Jede Datei in der Map enthält automatisch extrahierte Informationen:
+
+* **Dart:** Klassen, Mixins, Enums, Providers, Top-Level-Funktionen, Doc-Kommentare
+* **Python:** Docstrings, Klassen, Funktionen
+* **YAML:** Paketname (pubspec), Top-Level-Keys
+* **Markdown:** Erste Überschrift
+* **Proto:** Messages und Services
+* **Config-Dateien:** Typ und Zweck (Gradle, XML, JSON, CMake, …)
+
+So kannst du auf einen Blick sehen, was jede Datei enthält, **ohne sie öffnen
+zu müssen**.
