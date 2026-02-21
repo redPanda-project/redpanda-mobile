@@ -51,7 +51,6 @@ def _walk(root: str, current: str, current_depth: int, max_depth: int) -> None:
 
     for entry in entries:
         full_path = os.path.join(current, entry)
-        rel_path = os.path.relpath(full_path, start=os.path.dirname(root) if current_depth == 0 and root == current else root)
 
         if os.path.isdir(full_path):
             if entry in IGNORED_DIRS:
