@@ -7,9 +7,7 @@ final dbProvider = Provider<AppDatabase>((ref) {
 });
 
 final redPandaClientProvider = Provider<RedPandaClient>((ref) {
-  return RedPandaIsolateClient(
-    seeds: RedPandaLightClient.defaultSeeds,
-  );
+  return RedPandaIsolateClient(seeds: RedPandaLightClient.defaultSeeds);
 });
 
 final connectionStatusProvider = StreamProvider<ConnectionStatus>((ref) {
