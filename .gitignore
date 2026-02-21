@@ -46,4 +46,5 @@ app.*.map.json
 
 # Custom ignores
 references/
-
+analysis_report.txt
+test_output*.txt

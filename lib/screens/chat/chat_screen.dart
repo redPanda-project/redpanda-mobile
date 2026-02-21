@@ -192,9 +192,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 }
 
-// ... (imports)
-
-// Providers
 final messagesStreamProvider = StreamProvider.family<List<Message>, String>((
   ref,
   conversationId,
