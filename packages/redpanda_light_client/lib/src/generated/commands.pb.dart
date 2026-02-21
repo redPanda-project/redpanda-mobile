@@ -803,7 +803,7 @@ class Status extends $pb.ProtobufEnum {
       $pb.ProtobufEnum.initByValue(values);
   static Status? valueOf($core.int value) => _byValue[value];
 
-  const Status._($core.int v, $core.String n) : super(v, n);
+  const Status._(super.v, super.n);
 }
 
 // --- RegisterOhRequest ---
