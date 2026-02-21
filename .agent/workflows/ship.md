@@ -3,7 +3,16 @@ description: Formats, analyzes, tests, and pushes changes to the repository.
 ---
 
 // turbo-all
-// note: you must run this for the app and the package, so you need to run analyze an twice
+// note: you must run this for the app and the package, so you need to run analyze twice
+
+## ⚠️ Pflicht: Pre-Push Validation
+
+**Bevor du pushst**, führe die vollständige Pre-Push-Validation durch.
+Siehe: `.claude/skills/pre-push-validation/SKILL.md`
+
+Alle Schritte dort müssen erfolgreich sein, bevor du weitermachst.
+
+---
 
 1. Format the code to ensure style consistency
 ```bash
