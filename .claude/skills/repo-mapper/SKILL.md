@@ -10,7 +10,7 @@ description: Persistent project map with agent-generated summaries. The map live
 This map gives you **instant** context about every file and folder
 in the project without needing to open the source files.
 
-The map is located under `.agent-skills/repo-mapper/map/` and reflects the
+The map is located under `.claude/skills/repo-mapper/map/` and reflects the
 relevant project structure.
 
 ## Structure
@@ -41,7 +41,7 @@ map/
 
 ## Workflow – Reading (Drill-Down)
 
-1. Read `.agent-skills/repo-mapper/map/_index.md`.
+1. Read `.claude/skills/repo-mapper/map/_index.md`.
 2. Decide which folder is relevant.
 3. Open its `_index.md` for more detail.
 4. Repeat until you've found the file.
