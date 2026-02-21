@@ -3,10 +3,6 @@ import 'package:drift_flutter/drift_flutter.dart';
 
 part 'database.g.dart';
 
-// Tables
-// ... (imports remain)
-
-// Tables
 class Users extends Table {
   TextColumn get uuid => text()();
   TextColumn get username => text()();

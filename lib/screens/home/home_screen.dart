@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:redpanda/repositories/channel_repository.dart';
 import 'package:redpanda/shared/widgets/connection_status_badge.dart';
-// import 'package:redpanda/database/database.dart'; // Temporarily unused
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});

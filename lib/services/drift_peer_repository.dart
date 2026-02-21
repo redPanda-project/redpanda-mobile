@@ -76,8 +76,8 @@ class DriftPeerRepository implements PeerRepository {
               lastSeen: Value(now),
             ),
           );
-    } catch (e) {
-      // print removed
+    } catch (_) {
+      // Silently ignore update failures to avoid crashing peer tracking
     }
   }
 
@@ -123,6 +123,5 @@ class DriftPeerRepository implements PeerRepository {
         lastSeen: row.lastSeen,
       );
     }
-    // print removed
   }
 }
