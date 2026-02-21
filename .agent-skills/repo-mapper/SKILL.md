@@ -1,89 +1,149 @@
 ---
 name: Iterative Context Mapper
 description: >
-  Persistente Projekt-Map, die als Markdown-Dateien im Skill-Verzeichnis
-  gespeichert wird. Agenten navigieren iterativ durch die Map-Dateien und
-  aktualisieren sie, wenn sich die Projektstruktur ändert.
+  Persistente Projekt-Map mit Agenten-generierten Zusammenfassungen.
+  Die Map lebt als Markdown-Dateien unter map/ und wird vom Agenten
+  selbst gepflegt – nicht durch ein Skript.
 ---
 
 # Iterative Context Mapper
 
-## Wann diesen Skill nutzen?
+## Zweck
 
-Nutze diesen Skill **immer**, wenn du die Ordnerstruktur des Projekts
-verstehen musst – zum Beispiel, bevor du eine Datei suchst, bearbeitest oder
-eine neue Komponente anlegst.
-
-> **Wichtig:** Lies niemals den gesamten Dateibaum auf einmal ein.
-> Arbeite dich stattdessen **iterativ** (Drill-Down-Prinzip) Ebene für Ebene
-> durch die Map-Dateien in `map/`.
-
-## Aufbau der Map
+Diese Map gibt dir **sofort** Kontext über jede Datei und jeden Ordner
+im Projekt, ohne dass du die Quelldateien öffnen musst.
 
 Die Map liegt unter `.agent-skills/repo-mapper/map/` und spiegelt die
-Projektstruktur wider. Jeder Ordner enthält eine `_index.md` mit:
+relevante Projektstruktur wider.
 
-* **Unterordner** – mit relativem Link zur jeweiligen `_index.md`
-* **Dateien** – Auflistung aller Dateien **mit destillierten Zusammenfassungen**
-  (Klassen, Funktionen, Doc-Kommentare, Zweck der Datei)
-
-Beispiel:
+## Aufbau
 
 ```
 map/
-├── _index.md          ← Root-Verzeichnis
+├── _index.md              ← Root-Zusammenfassung
 ├── lib/
-│   ├── _index.md      ← lib/
+│   ├── _index.md          ← Zusammenfassung von lib/
 │   ├── screens/
-│   │   └── _index.md  ← lib/screens/
-│   └── …
-└── …
+│   │   ├── _index.md      ← Zusammenfassung von lib/screens/
+│   │   └── chat.md        ← Detail-Summary für lib/screens/chat/
+│   …
+└── packages/
+    └── redpanda_light_client/
+        └── _index.md
 ```
+
+### Regeln
+
+* Jeder Ordner bekommt eine `_index.md`.
+* Tiefe Blatt-Ordner (z. B. `lib/screens/chat/`) bekommen eine **Detail-Summary**
+  mit Datei-für-Datei-Zusammenfassungen.
+* Eltern-Ordner (z. B. `lib/screens/`) fassen die Kinder **kürzer** zusammen.
+* Je höher in der Hierarchie, desto **stärker komprimiert** die Zusammenfassung.
+* Die Root `_index.md` ist eine **High-Level-Übersicht** des gesamten Projekts
+  (max. 15–20 Zeilen).
 
 ## Workflow – Lesen (Drill-Down)
 
-1. **Starte immer bei der Root-Map:**
+1. Lies `.agent-skills/repo-mapper/map/_index.md`.
+2. Entscheide, welcher Ordner relevant ist.
+3. Öffne dessen `_index.md` für mehr Detail.
+4. Wiederhole, bis du die Datei gefunden hast.
 
-   Lies `.agent-skills/repo-mapper/map/_index.md`.
+## Workflow – Map erzeugen / aktualisieren
 
-2. **Analysiere die Ausgabe.** Entscheide logisch, welcher Unterordner für
-   deine aktuelle Aufgabe relevant ist.
+> **Wichtig:** Du (der Agent) erzeugst die Map selbst. Es gibt kein Skript.
+> Du liest die Quelldateien, fasst sie zusammen und schreibst die Map-Dateien.
 
-3. **Öffne die `_index.md` des relevanten Unterordners**, z. B.:
+### Schritt 1 – Ordnerstruktur ermitteln
 
-   Lies `.agent-skills/repo-mapper/map/lib/screens/_index.md`.
+Nutze `view` oder `glob` um die Verzeichnisse zu sehen.
+Ignoriere dabei: `.git`, `node_modules`, `.dart_tool`, `build`, `dist`,
+`.pub-cache`, `.pub`, `.venv`, `__pycache__`, `.idea`.
 
-4. **Wiederhole das**, bis du die exakten Dateien gefunden hast, die du lesen
-   oder bearbeiten musst.
+Scanne nur relevante Ordner: `lib/`, `packages/`, `integration_test/`,
+sowie Root-Konfigurationsdateien.
 
-## Workflow – Aktualisieren
+Plattform-Ordner (`android/`, `ios/`, `web/`, `linux/`, `macos/`, `windows/`)
+nur als Einzeiler in der Root `_index.md` erwähnen – **nicht** tief scannen.
 
-Wenn du Dateien hinzufügst, löschst oder verschiebst, **musst** du die Map
-aktualisieren:
+### Schritt 2 – Dateien lesen und zusammenfassen (Bottom-Up)
 
-```bash
-python .agent-skills/repo-mapper/scripts/update_map.py
+Arbeite **von den Blättern nach oben**:
+
+1. **Datei lesen:** Öffne jede Quelldatei (z. B. `lib/screens/chat/chat_screen.dart`).
+2. **Zusammenfassung schreiben:** Erstelle pro Datei einen kurzen Absatz:
+   - Was macht die Datei?
+   - Welche Klassen / Widgets / Funktionen / Providers sind enthalten?
+   - Welche Abhängigkeiten / Imports sind relevant?
+3. **Blatt-`_index.md` schreiben:** Sammle alle Datei-Zusammenfassungen eines
+   Ordners in dessen `_index.md` unter `map/`.
+
+### Schritt 3 – Eltern-Ordner zusammenfassen (Bubble-Up)
+
+4. **Eltern-`_index.md`:** Fasse die Kind-`_index.md`-Dateien zu einer
+   **kürzeren** Zusammenfassung zusammen.  
+   Beispiel: `map/lib/screens/_index.md` enthält einen Einzeiler pro
+   Screen-Unterordner statt alle Datei-Details.
+5. **Wiederhole nach oben**, bis du bei `map/_index.md` (Root) ankommst.
+   Die Root-Zusammenfassung ist **maximal 15–20 Zeilen**.
+
+### Schritt 4 – Committe die Map
+
+Committe alle `map/`-Dateien zusammen mit deinen Code-Änderungen.
+
+### Wann aktualisieren?
+
+* Wenn du eine Datei **erstellst, löschst, verschiebst oder inhaltlich
+  wesentlich änderst**, aktualisiere die betroffene `_index.md` und alle
+  Eltern bis zur Root.
+* Für eine Komplett-Neugeneration: Lösche `map/` und führe Schritte 1–4 aus.
+
+## Format der `_index.md`
+
+```markdown
+# 📂 ordner/
+
+> Kurze Zusammenfassung (1-2 Sätze) was dieser Ordner beinhaltet.
+
+## Unterordner
+
+* 📁 **unter-ordner/** — Einzeiler was dort zu finden ist.
+
+## Dateien
+
+* 📄 **datei.dart** — Was die Datei macht, welche Klassen/Widgets/Providers.
 ```
 
-Das Skript löscht die alte Map und generiert sie komplett neu.
-Committe die aktualisierten Map-Dateien zusammen mit deinen Code-Änderungen.
+## Beispiel
 
-## Filterung
+`map/lib/screens/chat/_index.md`:
+```markdown
+# 📂 lib/screens/chat/
 
-Boilerplate-Ordner werden automatisch ausgeblendet:
-`.git`, `node_modules`, `venv`, `.venv`, `__pycache__`, `dist`, `build`,
-`.idea`, `.dart_tool`, `.pub-cache`, `.pub`.
+> Chat-Funktionalität: Nachrichten senden/empfangen und QR-Code-Sharing.
 
-## Destillierte Datei-Informationen
+## Dateien
 
-Jede Datei in der Map enthält automatisch extrahierte Informationen:
+* 📄 **chat_screen.dart** — Haupt-Chat-UI. ConsumerWidget mit Nachrichten-
+  Liste, Eingabefeld und AppBar. Nutzt channelProvider und redPandaClientProvider.
+* 📄 **share_qr_dialog.dart** — Dialog zum Teilen des eigenen Public Keys als
+  QR-Code. Nutzt qr_flutter.
+```
 
-* **Dart:** Klassen, Mixins, Enums, Providers, Top-Level-Funktionen, Doc-Kommentare
-* **Python:** Docstrings, Klassen, Funktionen
-* **YAML:** Paketname (pubspec), Top-Level-Keys
-* **Markdown:** Erste Überschrift
-* **Proto:** Messages und Services
-* **Config-Dateien:** Typ und Zweck (Gradle, XML, JSON, CMake, …)
+`map/lib/screens/_index.md`:
+```markdown
+# 📂 lib/screens/
 
-So kannst du auf einen Blick sehen, was jede Datei enthält, **ohne sie öffnen
-zu müssen**.
+> Alle App-Screens: Onboarding, Home, Chat, Channel-Verwaltung, Debug.
+
+## Unterordner
+
+* 📁 **chat/** — Chat-UI und QR-Code-Sharing.
+* 📁 **channels/** — Screens zum Erstellen und Beitreten von Channels.
+* 📁 **home/** — Hauptbildschirm mit Channel-Liste.
+* 📁 **onboarding/** — Ersteinrichtung / Benutzername setzen.
+
+## Dateien
+
+* 📄 **debug_peer_stats_screen.dart** — Debug-Screen für Peer-Statistiken.
+```
