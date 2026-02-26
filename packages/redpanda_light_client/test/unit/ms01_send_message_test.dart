@@ -64,9 +64,11 @@ void main() {
       final plaintextBytes = Uint8List.fromList(utf8.encode(plaintext));
 
       // Encrypt: same logic as sendMessage()
+      // NOTE: Deterministic IV used here for test reproducibility only.
+      // Production code in sendMessage() uses Random.secure() for IVs.
       final iv = Uint8List(16);
       for (var i = 0; i < 16; i++) {
-        iv[i] = i; // Deterministic IV for testing
+        iv[i] = i;
       }
 
       final cipher = pc.CTRStreamCipher(pc.AESEngine());

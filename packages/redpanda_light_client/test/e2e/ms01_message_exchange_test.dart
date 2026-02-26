@@ -10,6 +10,7 @@ import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
 import 'redpanda_node_launcher.dart';
+import 'test_helpers.dart';
 
 void main() async {
   final jarAvailable = await RedPandaNodeLauncher.isJarAvailable();
@@ -50,23 +51,13 @@ void main() async {
     test(
       'Both clients connect and register outbound handles',
       () async {
-        // Connect both clients
         await alice.connect();
         await bob.connect();
 
-        // Wait for handshake
-        await Future.delayed(const Duration(seconds: 6));
-
-        expect(
-          alice.isEncryptionActive,
-          isTrue,
-          reason: 'Alice should have encryption active',
-        );
-        expect(
-          bob.isEncryptionActive,
-          isTrue,
-          reason: 'Bob should have encryption active',
-        );
+        expect(await waitForEncryption(alice), isTrue,
+            reason: 'Alice should have encryption active');
+        expect(await waitForEncryption(bob), isTrue,
+            reason: 'Bob should have encryption active');
 
         // Register OH for both
         final aliceOH = await alice.registerOutboundHandle();
@@ -96,7 +87,8 @@ void main() async {
         await alice.connect();
         await bob.connect();
 
-        await Future.delayed(const Duration(seconds: 6));
+        expect(await waitForEncryption(alice), isTrue);
+        expect(await waitForEncryption(bob), isTrue);
 
         // Bob registers his OH
         final bobOH = await bob.registerOutboundHandle();
@@ -148,7 +140,8 @@ void main() async {
         await alice.connect();
         await bob.connect();
 
-        await Future.delayed(const Duration(seconds: 6));
+        expect(await waitForEncryption(alice), isTrue);
+        expect(await waitForEncryption(bob), isTrue);
 
         // 1. Bob registers OH
         final bobOH = await bob.registerOutboundHandle();
@@ -189,6 +182,8 @@ void main() async {
         final plaintext = 'Secret message from Alice!';
         final plaintextBytes = Uint8List.fromList(utf8.encode(plaintext));
 
+        // NOTE: Deterministic IV for test reproducibility only.
+        // Production code uses Random.secure() for IVs.
         final iv = Uint8List(16);
         for (var i = 0; i < 16; i++) {
           iv[i] = i;
