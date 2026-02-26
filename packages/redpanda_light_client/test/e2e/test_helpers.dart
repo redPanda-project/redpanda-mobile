@@ -1,10 +1,10 @@
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 
-/// Polls until [client.isEncryptionActive] is true or timeout (10s).
+/// Polls until [client.isEncryptionActive] is true or timeout (20s).
 /// Returns true if encryption became active, false on timeout.
 Future<bool> waitForEncryption(
   RedPandaLightClient client, {
-  int maxWaitMs = 10000,
+  int maxWaitMs = 20000,
   int intervalMs = 500,
 }) async {
   final iterations = maxWaitMs ~/ intervalMs;

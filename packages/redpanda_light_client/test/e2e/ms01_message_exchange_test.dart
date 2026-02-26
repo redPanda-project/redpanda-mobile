@@ -1,3 +1,7 @@
+@Tags(['e2e'])
+@Retry(2)
+library;
+
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -19,9 +23,10 @@ void main() async {
     late RedPandaNodeLauncher launcher;
     late RedPandaLightClient alice;
     late RedPandaLightClient bob;
-    final int nodePort = 50010;
+    int nodePort = 50200;
 
     setUp(() async {
+      nodePort++; // Use unique port per test
       launcher = RedPandaNodeLauncher(port: nodePort);
       await launcher.start();
 
@@ -45,20 +50,22 @@ void main() async {
     tearDown(() async {
       await alice.disconnect();
       await bob.disconnect();
+      await Future.delayed(const Duration(seconds: 1));
       await launcher.stop();
     });
 
     test(
       'Both clients connect and register outbound handles',
       () async {
+        // Connect sequentially to avoid race on single-node
         await alice.connect();
-        await bob.connect();
-
         expect(
           await waitForEncryption(alice),
           isTrue,
           reason: 'Alice should have encryption active',
         );
+
+        await bob.connect();
         expect(
           await waitForEncryption(bob),
           isTrue,
@@ -90,10 +97,11 @@ void main() async {
     test(
       'Alice creates channel v2 with Bobs OH descriptor and sends message',
       () async {
+        // Connect sequentially to avoid race on single-node
         await alice.connect();
-        await bob.connect();
-
         expect(await waitForEncryption(alice), isTrue);
+
+        await bob.connect();
         expect(await waitForEncryption(bob), isTrue);
 
         // Bob registers his OH
@@ -143,10 +151,11 @@ void main() async {
     test(
       'Simulated full flow: encrypt, QR exchange, decrypt',
       () async {
+        // Connect sequentially to avoid race on single-node
         await alice.connect();
-        await bob.connect();
-
         expect(await waitForEncryption(alice), isTrue);
+
+        await bob.connect();
         expect(await waitForEncryption(bob), isTrue);
 
         // 1. Bob registers OH

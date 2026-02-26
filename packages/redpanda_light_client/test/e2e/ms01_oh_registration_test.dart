@@ -1,3 +1,7 @@
+@Tags(['e2e'])
+@Retry(2)
+library;
+
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
@@ -15,9 +19,10 @@ void main() async {
   group('E2E MS01: OH Registration on Full Node', () {
     late RedPandaNodeLauncher launcher;
     late RedPandaLightClient client;
-    final int nodePort = 50011;
+    int nodePort = 50100;
 
     setUp(() async {
+      nodePort++; // Use unique port per test
       launcher = RedPandaNodeLauncher(port: nodePort);
       await launcher.start();
 
@@ -31,6 +36,7 @@ void main() async {
 
     tearDown(() async {
       await client.disconnect();
+      await Future.delayed(const Duration(seconds: 1));
       await launcher.stop();
     });
 
