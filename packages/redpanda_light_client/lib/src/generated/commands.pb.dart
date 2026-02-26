@@ -715,11 +715,9 @@ class JobAck extends $pb.GeneratedMessage {
 class FlaschenpostPut extends $pb.GeneratedMessage {
   factory FlaschenpostPut({
     $core.List<$core.int>? content,
-    $core.List<$core.int>? ohId,
   }) {
     final result = create();
     if (content != null) result.content = content;
-    if (ohId != null) result.ohId = ohId;
     return result;
   }
 
@@ -739,8 +737,6 @@ class FlaschenpostPut extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..a<$core.List<$core.int>>(
         1, _omitFieldNames ? '' : 'content', $pb.PbFieldType.OY)
-    ..a<$core.List<$core.int>>(
-        2, _omitFieldNames ? '' : 'ohId', $pb.PbFieldType.OY)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -770,33 +766,37 @@ class FlaschenpostPut extends $pb.GeneratedMessage {
   $core.bool hasContent() => $_has(0);
   @$pb.TagNumber(1)
   void clearContent() => $_clearField(1);
-
-  @$pb.TagNumber(2)
-  $core.List<$core.int> get ohId => $_getN(1);
-  @$pb.TagNumber(2)
-  set ohId($core.List<$core.int> value) => $_setBytes(1, value);
-  @$pb.TagNumber(2)
-  $core.bool hasOhId() => $_has(1);
-  @$pb.TagNumber(2)
-  void clearOhId() => $_clearField(2);
 }
 
 // --- Status enum for OH operations ---
 class Status extends $pb.ProtobufEnum {
-  static const Status UNKNOWN = Status._(0, _omitEnumNames ? '' : 'UNKNOWN');
+  static const Status STATUS_UNSPECIFIED =
+      Status._(0, _omitEnumNames ? '' : 'STATUS_UNSPECIFIED');
   static const Status OK = Status._(1, _omitEnumNames ? '' : 'OK');
-  static const Status ERROR = Status._(2, _omitEnumNames ? '' : 'ERROR');
+  static const Status INVALID_SIGNATURE =
+      Status._(2, _omitEnumNames ? '' : 'INVALID_SIGNATURE');
+  static const Status INVALID_TIMESTAMP =
+      Status._(3, _omitEnumNames ? '' : 'INVALID_TIMESTAMP');
+  static const Status REPLAY = Status._(4, _omitEnumNames ? '' : 'REPLAY');
   static const Status NOT_FOUND =
-      Status._(3, _omitEnumNames ? '' : 'NOT_FOUND');
-  static const Status UNAUTHORIZED =
-      Status._(4, _omitEnumNames ? '' : 'UNAUTHORIZED');
+      Status._(5, _omitEnumNames ? '' : 'NOT_FOUND');
+  static const Status RATE_LIMIT =
+      Status._(6, _omitEnumNames ? '' : 'RATE_LIMIT');
+  static const Status QUOTA_EXCEEDED =
+      Status._(7, _omitEnumNames ? '' : 'QUOTA_EXCEEDED');
+  static const Status BAD_REQUEST =
+      Status._(8, _omitEnumNames ? '' : 'BAD_REQUEST');
 
   static const $core.List<Status> values = <Status>[
-    UNKNOWN,
+    STATUS_UNSPECIFIED,
     OK,
-    ERROR,
+    INVALID_SIGNATURE,
+    INVALID_TIMESTAMP,
+    REPLAY,
     NOT_FOUND,
-    UNAUTHORIZED,
+    RATE_LIMIT,
+    QUOTA_EXCEEDED,
+    BAD_REQUEST,
   ];
 
   static final $core.Map<$core.int, Status> _byValue =
@@ -904,10 +904,12 @@ class RegisterOhRequest extends $pb.GeneratedMessage {
 class RegisterOhResponse extends $pb.GeneratedMessage {
   factory RegisterOhResponse({
     Status? status,
+    $fixnum.Int64? serverTimeMs,
     $fixnum.Int64? expiresAtMs,
   }) {
     final result = create();
     if (status != null) result.status = status;
+    if (serverTimeMs != null) result.serverTimeMs = serverTimeMs;
     if (expiresAtMs != null) result.expiresAtMs = expiresAtMs;
     return result;
   }
@@ -924,10 +926,11 @@ class RegisterOhResponse extends $pb.GeneratedMessage {
           const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
       createEmptyInstance: create)
     ..e<Status>(1, _omitFieldNames ? '' : 'status', $pb.PbFieldType.OE,
-        defaultOrMaker: Status.UNKNOWN,
+        defaultOrMaker: Status.STATUS_UNSPECIFIED,
         valueOf: Status.valueOf,
         enumValues: Status.values)
-    ..aInt64(2, _omitFieldNames ? '' : 'expiresAtMs')
+    ..aInt64(2, _omitFieldNames ? '' : 'serverTimeMs')
+    ..aInt64(3, _omitFieldNames ? '' : 'expiresAtMs')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -955,9 +958,14 @@ class RegisterOhResponse extends $pb.GeneratedMessage {
   set status(Status value) => $_setField(1, value);
 
   @$pb.TagNumber(2)
-  $fixnum.Int64 get expiresAtMs => $_getI64(1);
+  $fixnum.Int64 get serverTimeMs => $_getI64(1);
   @$pb.TagNumber(2)
-  set expiresAtMs($fixnum.Int64 value) => $_setInt64(1, value);
+  set serverTimeMs($fixnum.Int64 value) => $_setInt64(1, value);
+
+  @$pb.TagNumber(3)
+  $fixnum.Int64 get expiresAtMs => $_getI64(2);
+  @$pb.TagNumber(3)
+  set expiresAtMs($fixnum.Int64 value) => $_setInt64(2, value);
 }
 
 // --- FetchRequest ---
@@ -965,7 +973,7 @@ class FetchRequest extends $pb.GeneratedMessage {
   factory FetchRequest({
     $core.List<$core.int>? ohId,
     $core.int? limit,
-    $core.List<$core.int>? cursor,
+    $fixnum.Int64? cursor,
     $fixnum.Int64? timestampMs,
     $core.List<$core.int>? nonce,
     $core.List<$core.int>? signature,
@@ -993,9 +1001,9 @@ class FetchRequest extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..a<$core.List<$core.int>>(
         1, _omitFieldNames ? '' : 'ohId', $pb.PbFieldType.OY)
-    ..aI(2, _omitFieldNames ? '' : 'limit')
-    ..a<$core.List<$core.int>>(
-        3, _omitFieldNames ? '' : 'cursor', $pb.PbFieldType.OY)
+    ..a<$core.int>(2, _omitFieldNames ? '' : 'limit', $pb.PbFieldType.OU3)
+    ..a<$fixnum.Int64>(3, _omitFieldNames ? '' : 'cursor', $pb.PbFieldType.OU6,
+        defaultOrMaker: $fixnum.Int64.ZERO)
     ..aInt64(4, _omitFieldNames ? '' : 'timestampMs')
     ..a<$core.List<$core.int>>(
         5, _omitFieldNames ? '' : 'nonce', $pb.PbFieldType.OY)
@@ -1030,12 +1038,12 @@ class FetchRequest extends $pb.GeneratedMessage {
   @$pb.TagNumber(2)
   $core.int get limit => $_getIZ(1);
   @$pb.TagNumber(2)
-  set limit($core.int value) => $_setSignedInt32(1, value);
+  set limit($core.int value) => $_setUnsignedInt32(1, value);
 
   @$pb.TagNumber(3)
-  $core.List<$core.int> get cursor => $_getN(2);
+  $fixnum.Int64 get cursor => $_getI64(2);
   @$pb.TagNumber(3)
-  set cursor($core.List<$core.int> value) => $_setBytes(2, value);
+  set cursor($fixnum.Int64 value) => $_setInt64(2, value);
 
   @$pb.TagNumber(4)
   $fixnum.Int64 get timestampMs => $_getI64(3);
@@ -1056,14 +1064,14 @@ class FetchRequest extends $pb.GeneratedMessage {
 // --- MailItem ---
 class MailItem extends $pb.GeneratedMessage {
   factory MailItem({
-    $core.String? messageId,
-    $core.List<$core.int>? payload,
+    $core.List<$core.int>? messageId,
     $fixnum.Int64? receivedAtMs,
+    $core.List<$core.int>? payload,
   }) {
     final result = create();
     if (messageId != null) result.messageId = messageId;
-    if (payload != null) result.payload = payload;
     if (receivedAtMs != null) result.receivedAtMs = receivedAtMs;
+    if (payload != null) result.payload = payload;
     return result;
   }
 
@@ -1078,10 +1086,11 @@ class MailItem extends $pb.GeneratedMessage {
       package:
           const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
       createEmptyInstance: create)
-    ..aOS(1, _omitFieldNames ? '' : 'messageId')
     ..a<$core.List<$core.int>>(
-        2, _omitFieldNames ? '' : 'payload', $pb.PbFieldType.OY)
-    ..aInt64(3, _omitFieldNames ? '' : 'receivedAtMs')
+        1, _omitFieldNames ? '' : 'messageId', $pb.PbFieldType.OY)
+    ..aInt64(2, _omitFieldNames ? '' : 'receivedAtMs')
+    ..a<$core.List<$core.int>>(
+        3, _omitFieldNames ? '' : 'payload', $pb.PbFieldType.OY)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1103,32 +1112,34 @@ class MailItem extends $pb.GeneratedMessage {
       _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<MailItem>(create);
 
   @$pb.TagNumber(1)
-  $core.String get messageId => $_getSZ(0);
+  $core.List<$core.int> get messageId => $_getN(0);
   @$pb.TagNumber(1)
-  set messageId($core.String value) => $_setString(0, value);
+  set messageId($core.List<$core.int> value) => $_setBytes(0, value);
 
   @$pb.TagNumber(2)
-  $core.List<$core.int> get payload => $_getN(1);
+  $fixnum.Int64 get receivedAtMs => $_getI64(1);
   @$pb.TagNumber(2)
-  set payload($core.List<$core.int> value) => $_setBytes(1, value);
+  set receivedAtMs($fixnum.Int64 value) => $_setInt64(1, value);
 
   @$pb.TagNumber(3)
-  $fixnum.Int64 get receivedAtMs => $_getI64(2);
+  $core.List<$core.int> get payload => $_getN(2);
   @$pb.TagNumber(3)
-  set receivedAtMs($fixnum.Int64 value) => $_setInt64(2, value);
+  set payload($core.List<$core.int> value) => $_setBytes(2, value);
 }
 
 // --- FetchResponse ---
 class FetchResponse extends $pb.GeneratedMessage {
   factory FetchResponse({
     Status? status,
+    $fixnum.Int64? nextCursor,
     $core.Iterable<MailItem>? items,
-    $core.List<$core.int>? nextCursor,
+    $fixnum.Int64? serverTimeMs,
   }) {
     final result = create();
     if (status != null) result.status = status;
-    if (items != null) result.items.addAll(items);
     if (nextCursor != null) result.nextCursor = nextCursor;
+    if (items != null) result.items.addAll(items);
+    if (serverTimeMs != null) result.serverTimeMs = serverTimeMs;
     return result;
   }
 
@@ -1144,13 +1155,15 @@ class FetchResponse extends $pb.GeneratedMessage {
           const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
       createEmptyInstance: create)
     ..e<Status>(1, _omitFieldNames ? '' : 'status', $pb.PbFieldType.OE,
-        defaultOrMaker: Status.UNKNOWN,
+        defaultOrMaker: Status.STATUS_UNSPECIFIED,
         valueOf: Status.valueOf,
         enumValues: Status.values)
-    ..pc<MailItem>(2, _omitFieldNames ? '' : 'items', $pb.PbFieldType.PM,
+    ..a<$fixnum.Int64>(
+        2, _omitFieldNames ? '' : 'nextCursor', $pb.PbFieldType.OU6,
+        defaultOrMaker: $fixnum.Int64.ZERO)
+    ..pc<MailItem>(3, _omitFieldNames ? '' : 'items', $pb.PbFieldType.PM,
         subBuilder: MailItem.create)
-    ..a<$core.List<$core.int>>(
-        3, _omitFieldNames ? '' : 'nextCursor', $pb.PbFieldType.OY)
+    ..aInt64(4, _omitFieldNames ? '' : 'serverTimeMs')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1178,12 +1191,17 @@ class FetchResponse extends $pb.GeneratedMessage {
   set status(Status value) => $_setField(1, value);
 
   @$pb.TagNumber(2)
-  $core.List<MailItem> get items => $_getList(1);
+  $fixnum.Int64 get nextCursor => $_getI64(1);
+  @$pb.TagNumber(2)
+  set nextCursor($fixnum.Int64 value) => $_setInt64(1, value);
 
   @$pb.TagNumber(3)
-  $core.List<$core.int> get nextCursor => $_getN(2);
-  @$pb.TagNumber(3)
-  set nextCursor($core.List<$core.int> value) => $_setBytes(2, value);
+  $core.List<MailItem> get items => $_getList(2);
+
+  @$pb.TagNumber(4)
+  $fixnum.Int64 get serverTimeMs => $_getI64(3);
+  @$pb.TagNumber(4)
+  set serverTimeMs($fixnum.Int64 value) => $_setInt64(3, value);
 }
 
 enum PandaMessage_Content {

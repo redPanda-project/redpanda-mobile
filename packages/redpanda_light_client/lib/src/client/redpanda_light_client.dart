@@ -445,6 +445,7 @@ class RedPandaLightClient implements RedPandaClient {
             );
           },
         );
+        peer.onCommandResponse = _handleCommandResponse;
         _peers[address] = peer;
         peer.connect(); // Fire and forget (it is async inside)
       } catch (e) {
@@ -541,6 +542,16 @@ class RedPandaLightClient implements RedPandaClient {
       StreamController<DecryptedMessage>.broadcast();
   Timer? _pollingTimer;
 
+  /// Pending response completers keyed by command byte.
+  final Map<int, Completer<List<int>>> _pendingResponses = {};
+
+  void _handleCommandResponse(int command, List<int> payload) {
+    final completer = _pendingResponses.remove(command);
+    if (completer != null && !completer.isCompleted) {
+      completer.complete(payload);
+    }
+  }
+
   /// Channel encryption keys indexed by channel ID.
   /// Populated externally or via addChannelKeys().
   final Map<String, List<int>> _channelEncryptionKeys = {};
@@ -577,7 +588,6 @@ class RedPandaLightClient implements RedPandaClient {
       );
       return messageId;
     }
-    final peerOhId = _channelPeerOhIds[channelId];
 
     // 1. Generate random IV (16 bytes)
     final iv = Uint8List.fromList(
@@ -598,11 +608,8 @@ class RedPandaLightClient implements RedPandaClient {
     payload.setRange(0, iv.length, iv);
     payload.setRange(iv.length, payload.length, ciphertext);
 
-    // 4. Build FlaschenpostPut
+    // 4. Build FlaschenpostPut (no oh_id; backend routes by GarlicMessage destination)
     final flaschenpost = FlaschenpostPut()..content = payload;
-    if (peerOhId != null) {
-      flaschenpost.ohId = peerOhId;
-    }
 
     // 5. Send to a connected peer (best available)
     final activePeer = _peers.values
@@ -614,7 +621,7 @@ class RedPandaLightClient implements RedPandaClient {
       print(
         'RedPandaLightClient: sendMessage() serialized ${buffer.length} bytes for channel $channelId',
       );
-      // TODO: Wire to ActivePeer.sendCommand() when wire protocol is ready (Backend MS01)
+      activePeer.sendCommand(141, Uint8List.fromList(buffer));
     } else {
       print(
         'RedPandaLightClient: sendMessage() no active peer available, message queued locally',
@@ -629,7 +636,7 @@ class RedPandaLightClient implements RedPandaClient {
     final keypair = OHKeypair.generate();
     final random = Random.secure();
     final ohId = Uint8List.fromList(
-      List<int>.generate(32, (_) => random.nextInt(256)),
+      List<int>.generate(20, (_) => random.nextInt(256)),
     );
     final nonce = Uint8List.fromList(
       List<int>.generate(16, (_) => random.nextInt(256)),
@@ -638,10 +645,10 @@ class RedPandaLightClient implements RedPandaClient {
     final now = DateTime.now();
     final expiresAt = now.add(const Duration(days: 7));
 
-    // Build signing bytes: [ohId][publicKeyBytes][expiresAt][timestampMs][nonce]
+    // Build signing bytes: [CMD_BYTE(150) | oh_id | requested_expires_at(8 BE) | timestamp_ms(8 BE) | nonce]
     final signingBuffer = BytesBuilder();
+    signingBuffer.addByte(150); // OUTBOUND_REGISTER_OH_REQ
     signingBuffer.add(ohId);
-    signingBuffer.add(keypair.publicKeyBytes);
     signingBuffer.add(_int64Bytes(expiresAt.millisecondsSinceEpoch));
     signingBuffer.add(_int64Bytes(now.millisecondsSinceEpoch));
     signingBuffer.add(nonce);
@@ -666,7 +673,7 @@ class RedPandaLightClient implements RedPandaClient {
       print(
         'RedPandaLightClient: registerOutboundHandle() serialized ${buffer.length} bytes',
       );
-      // TODO: Wire to ActivePeer.sendCommand() when wire protocol is ready (Backend MS01)
+      activePeer.sendCommand(150, Uint8List.fromList(buffer));
     } else {
       print(
         'RedPandaLightClient: registerOutboundHandle() no active peer available',
@@ -693,11 +700,16 @@ class RedPandaLightClient implements RedPandaClient {
     );
     final now = DateTime.now();
 
-    // Build signing bytes
+    // Build signing bytes: [CMD_BYTE(152) | oh_id | timestamp_ms(8 BE) | nonce | limit(4 BE) | cursor(8 BE)]
     final signingBuffer = BytesBuilder();
+    signingBuffer.addByte(152); // OUTBOUND_FETCH_REQ
     signingBuffer.add(oh.ohId);
     signingBuffer.add(_int64Bytes(now.millisecondsSinceEpoch));
     signingBuffer.add(nonce);
+    final limitData = ByteData(4);
+    limitData.setInt32(0, 50, Endian.big);
+    signingBuffer.add(limitData.buffer.asUint8List());
+    signingBuffer.add(_int64Bytes(oh.lastCursor));
 
     final signature = oh.keypair.sign(
       Uint8List.fromList(signingBuffer.toBytes()),
@@ -710,8 +722,8 @@ class RedPandaLightClient implements RedPandaClient {
       ..nonce = nonce
       ..signature = signature;
 
-    if (oh.lastCursor.isNotEmpty) {
-      request.cursor = oh.lastCursor;
+    if (oh.lastCursor != 0) {
+      request.cursor = fixnum.Int64(oh.lastCursor);
     }
 
     // Send to best active peer
@@ -724,7 +736,7 @@ class RedPandaLightClient implements RedPandaClient {
       print(
         'RedPandaLightClient: fetchMessages() serialized ${buffer.length} bytes',
       );
-      // TODO: Wire to ActivePeer.sendCommand() and parse FetchResponse (Backend MS01)
+      activePeer.sendCommand(152, Uint8List.fromList(buffer));
     } else {
       print('RedPandaLightClient: fetchMessages() no active peer available');
     }

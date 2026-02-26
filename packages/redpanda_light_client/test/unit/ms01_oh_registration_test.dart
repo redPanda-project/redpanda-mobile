@@ -31,7 +31,7 @@ void main() {
       final registration = await client.registerOutboundHandle();
 
       expect(registration, isA<OHRegistration>());
-      expect(registration.ohId.length, 32);
+      expect(registration.ohId.length, 20);
       expect(registration.keypair, isA<OHKeypair>());
       expect(registration.keypair.publicKeyBytes.length, 65);
       expect(registration.expiresAtMs, greaterThan(0));
@@ -69,7 +69,7 @@ void main() {
   group('MS01 AK2: RegisterOhRequest protobuf', () {
     test('RegisterOhRequest serializes and deserializes correctly', () {
       final keypair = OHKeypair.generate();
-      final ohId = Uint8List.fromList(List.generate(32, (i) => i));
+      final ohId = Uint8List.fromList(List.generate(20, (i) => i));
 
       final request = RegisterOhRequest()
         ..ohId = ohId
@@ -96,9 +96,9 @@ void main() {
 
     test('RegisterOhResponse with error statuses', () {
       for (final status in [
-        Status.ERROR,
+        Status.INVALID_SIGNATURE,
         Status.NOT_FOUND,
-        Status.UNAUTHORIZED,
+        Status.BAD_REQUEST,
       ]) {
         final response = RegisterOhResponse()..status = status;
         final decoded = RegisterOhResponse.fromBuffer(response.writeToBuffer());
@@ -126,7 +126,7 @@ void main() {
     test('fetchMessages returns empty list when no backend', () async {
       final keypair = OHKeypair.generate();
       final oh = OHRegistration(
-        ohId: List.generate(32, (i) => i),
+        ohId: List.generate(20, (i) => i),
         keypair: keypair,
         expiresAtMs: DateTime.now()
             .add(Duration(days: 7))
@@ -138,7 +138,7 @@ void main() {
     });
 
     test('fetchMessages builds valid FetchRequest protobuf', () {
-      final ohId = Uint8List.fromList(List.generate(32, (i) => i));
+      final ohId = Uint8List.fromList(List.generate(20, (i) => i));
       final nonce = Uint8List.fromList(List.generate(16, (i) => i));
 
       final request = FetchRequest()

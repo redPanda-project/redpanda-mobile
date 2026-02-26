@@ -34,6 +34,10 @@ class ActivePeer {
   static const int _cmdKademliaGetAnswer = 122;
   static const int _cmdJobAck = 130;
   static const int _cmdFlaschenpostPut = 141;
+  static const int _cmdOutboundRegisterOhReq = 150;
+  static const int _cmdOutboundRegisterOhRes = 151;
+  static const int _cmdOutboundFetchReq = 152;
+  static const int _cmdOutboundFetchRes = 153;
 
   final String address;
   final NodeId selfNodeId;
@@ -46,6 +50,9 @@ class ActivePeer {
   final void Function()? onHandshakeComplete;
   final List<String> Function()? onPeerListRequested;
   final void Function(String nodeId)? onNodeIdDiscovered;
+
+  /// Callback for OH response commands (151, 153).
+  void Function(int command, List<int> payload)? onCommandResponse;
 
   Socket? _socket;
   final List<int> _buffer = [];
@@ -259,7 +266,9 @@ class ActivePeer {
               command == _cmdKademliaStore ||
               command == _cmdKademliaGetAnswer ||
               command == _cmdJobAck ||
-              command == _cmdFlaschenpostPut) {
+              command == _cmdFlaschenpostPut ||
+              command == _cmdOutboundRegisterOhReq ||
+              command == _cmdOutboundFetchReq) {
             // These commands all follow the pattern: [CMD] [Length: 4 bytes] [Protobuf Data]
             if (_buffer.length < 1 + 4) {
               break; // wait for length
@@ -278,6 +287,19 @@ class ActivePeer {
             _buffer.removeAt(0); // Remove Command
             _buffer.removeRange(0, 4); // Remove Length
             _buffer.removeRange(0, length); // Remove Payload
+          } else if (command == _cmdOutboundRegisterOhRes ||
+              command == _cmdOutboundFetchRes) {
+            if (_buffer.length < 1 + 4) break;
+            final lengthData = Uint8List.fromList(_buffer.sublist(1, 5));
+            final length = ByteData.view(
+              lengthData.buffer,
+            ).getInt32(0, Endian.big);
+            if (_buffer.length < 1 + 4 + length) break;
+            _buffer.removeAt(0);
+            _buffer.removeRange(0, 4);
+            final payload = _buffer.sublist(0, length);
+            _buffer.removeRange(0, length);
+            onCommandResponse?.call(command, payload);
           } else {
             print(
               'ActivePeer($address): Unknown command byte: $command. Discarding.',
@@ -456,6 +478,17 @@ class ActivePeer {
 
   void requestPeerList() {
     _sendData([_cmdRequestPeerList]);
+  }
+
+  /// Sends a command with [CMD][4 length big-endian][protobuf bytes].
+  void sendCommand(int command, Uint8List protobufBytes) {
+    final buffer = BytesBuilder();
+    buffer.addByte(command);
+    final lengthData = ByteData(4);
+    lengthData.setInt32(0, protobufBytes.length, Endian.big);
+    buffer.add(lengthData.buffer.asUint8List());
+    buffer.add(protobufBytes);
+    _sendData(buffer.toBytes());
   }
 
   void sendPeerList(List<String> peers) {

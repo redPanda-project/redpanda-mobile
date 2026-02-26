@@ -27,7 +27,7 @@ void main() {
     test('should serialize v2 channel (with OH) and deserialize', () {
       final ohDescriptor = OHDescriptor(
         serverEndpoint: '192.168.1.100:59558',
-        handleId: List.generate(32, (i) => i),
+        handleId: List.generate(20, (i) => i),
         authPublicKey: List.generate(65, (i) => i),
       );
 
@@ -70,7 +70,7 @@ void main() {
 
       final ohDescriptor = OHDescriptor(
         serverEndpoint: 'host:1234',
-        handleId: List.filled(32, 0xFF),
+        handleId: List.filled(20, 0xFF),
         authPublicKey: List.filled(65, 0xAA),
       );
 

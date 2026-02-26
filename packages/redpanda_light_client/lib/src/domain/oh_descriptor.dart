@@ -7,7 +7,7 @@ import 'package:hex/hex.dart';
 ///
 /// Contains the information needed for a peer to send messages to this OH:
 /// - [serverEndpoint]: host:port of the OH-hosting Full Node
-/// - [handleId]: 32-byte unique identifier for the mailbox
+/// - [handleId]: 20-byte unique identifier for the mailbox
 /// - [authPublicKey]: 65-byte uncompressed EC public key (brainpoolp256r1)
 class OHDescriptor extends Equatable {
   final String serverEndpoint;

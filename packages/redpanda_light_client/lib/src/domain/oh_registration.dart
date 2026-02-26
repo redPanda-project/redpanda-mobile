@@ -11,13 +11,13 @@ class OHRegistration {
   final String? channelId;
 
   /// Cursor for paginated fetching; updated after each fetch.
-  List<int> lastCursor;
+  int lastCursor;
 
   OHRegistration({
     required this.ohId,
     required this.keypair,
     required this.expiresAtMs,
     this.channelId,
-    List<int>? lastCursor,
-  }) : lastCursor = lastCursor ?? [];
+    int? lastCursor,
+  }) : lastCursor = lastCursor ?? 0;
 }

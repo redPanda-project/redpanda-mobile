@@ -54,17 +54,23 @@ void main() async {
         await alice.connect();
         await bob.connect();
 
-        expect(await waitForEncryption(alice), isTrue,
-            reason: 'Alice should have encryption active');
-        expect(await waitForEncryption(bob), isTrue,
-            reason: 'Bob should have encryption active');
+        expect(
+          await waitForEncryption(alice),
+          isTrue,
+          reason: 'Alice should have encryption active',
+        );
+        expect(
+          await waitForEncryption(bob),
+          isTrue,
+          reason: 'Bob should have encryption active',
+        );
 
         // Register OH for both
         final aliceOH = await alice.registerOutboundHandle();
         final bobOH = await bob.registerOutboundHandle();
 
-        expect(aliceOH.ohId.length, 32);
-        expect(bobOH.ohId.length, 32);
+        expect(aliceOH.ohId.length, 20);
+        expect(bobOH.ohId.length, 20);
         expect(aliceOH.ohId, isNot(equals(bobOH.ohId)));
 
         // Both should have valid keypairs

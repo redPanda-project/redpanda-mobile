@@ -52,7 +52,7 @@ void main() async {
 
         // Register outbound handle
         final oh = await client.registerOutboundHandle();
-        expect(oh.ohId.length, 32);
+        expect(oh.ohId.length, 20);
         expect(oh.keypair.publicKeyBytes.length, 65);
         expect(oh.keypair.publicKeyBytes[0], 0x04); // Uncompressed EC point
 
