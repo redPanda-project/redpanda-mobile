@@ -181,12 +181,13 @@ const FlaschenpostPut$json = {
   '1': 'FlaschenpostPut',
   '2': [
     {'1': 'content', '3': 1, '4': 1, '5': 12, '10': 'content'},
+    {'1': 'oh_id', '3': 2, '4': 1, '5': 12, '10': 'ohId'},
   ],
 };
 
 /// Descriptor for `FlaschenpostPut`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List flaschenpostPutDescriptor = $convert.base64Decode(
-    'Cg9GbGFzY2hlbnBvc3RQdXQSGAoHY29udGVudBgBIAEoDFIHY29udGVudA==');
+    'Cg9GbGFzY2hlbnBvc3RQdXQSGAoHY29udGVudBgBIAEoDFIHY29udGVudBITCgVvaF9pZBgCIAEoDFIEb2hJZA==');
 
 @$core.Deprecated('Use pandaMessageDescriptor instead')
 const PandaMessage$json = {

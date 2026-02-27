@@ -715,9 +715,11 @@ class JobAck extends $pb.GeneratedMessage {
 class FlaschenpostPut extends $pb.GeneratedMessage {
   factory FlaschenpostPut({
     $core.List<$core.int>? content,
+    $core.List<$core.int>? ohId,
   }) {
     final result = create();
     if (content != null) result.content = content;
+    if (ohId != null) result.ohId = ohId;
     return result;
   }
 
@@ -737,6 +739,8 @@ class FlaschenpostPut extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..a<$core.List<$core.int>>(
         1, _omitFieldNames ? '' : 'content', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(
+        2, _omitFieldNames ? '' : 'ohId', $pb.PbFieldType.OY)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -766,6 +770,15 @@ class FlaschenpostPut extends $pb.GeneratedMessage {
   $core.bool hasContent() => $_has(0);
   @$pb.TagNumber(1)
   void clearContent() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.List<$core.int> get ohId => $_getN(1);
+  @$pb.TagNumber(2)
+  set ohId($core.List<$core.int> value) => $_setBytes(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasOhId() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearOhId() => $_clearField(2);
 }
 
 // --- Status enum for OH operations ---

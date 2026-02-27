@@ -622,8 +622,11 @@ class RedPandaLightClient implements RedPandaClient {
     payload.setRange(iv.length, iv.length + ciphertext.length, ciphertext);
     payload.setRange(iv.length + ciphertext.length, payload.length, mac);
 
-    // 5. Build FlaschenpostPut (no oh_id; backend routes by GarlicMessage destination)
-    final flaschenpost = FlaschenpostPut()..content = payload;
+    // 5. Build FlaschenpostPut with target OH mailbox id for direct routing
+    final peerOhId = _channelPeerOhIds[channelId];
+    final flaschenpost = FlaschenpostPut()
+      ..content = payload
+      ..ohId = peerOhId ?? Uint8List(0);
 
     // 6. Send to a connected peer (best available)
     final activePeer = _peers.values
