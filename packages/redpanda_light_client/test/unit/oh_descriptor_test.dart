@@ -59,8 +59,7 @@ void main() {
       final map = {
         'ep': 'host:1234',
         'id': '0102030405', // 5 bytes, not 20
-        'pk':
-            '04${'ab' * 64}', // 65 bytes
+        'pk': '04${'ab' * 64}', // 65 bytes
       };
       expect(
         () => OHDescriptor.fromJsonMap(map),

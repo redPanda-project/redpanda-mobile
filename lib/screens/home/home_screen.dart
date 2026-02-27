@@ -52,9 +52,8 @@ class HomeScreen extends ConsumerWidget {
               final channel = channels[index];
               return ListTile(
                 leading: CircleAvatar(
-                  backgroundColor: Theme.of(
-                    context,
-                  ).colorScheme.primaryContainer,
+                  backgroundColor:
+                      Theme.of(context).colorScheme.primaryContainer,
                   child: Text(channel.label[0].toUpperCase()),
                 ),
                 title: Text(channel.label),

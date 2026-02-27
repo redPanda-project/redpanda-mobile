@@ -77,11 +77,12 @@ class ConnectionStatusBadge extends ConsumerWidget {
           ],
         );
       },
-      loading: () => const SizedBox(
-        width: 24,
-        height: 24,
-        child: CircularProgressIndicator(strokeWidth: 2),
-      ),
+      loading:
+          () => const SizedBox(
+            width: 24,
+            height: 24,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
       error: (_, _) => const Icon(Icons.error, color: Colors.red),
     );
   }

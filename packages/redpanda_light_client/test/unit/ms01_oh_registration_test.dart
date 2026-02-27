@@ -71,10 +71,11 @@ void main() {
       final keypair = OHKeypair.generate();
       final ohId = Uint8List.fromList(List.generate(20, (i) => i));
 
-      final request = RegisterOhRequest()
-        ..ohId = ohId
-        ..ohAuthPublicKey = keypair.publicKeyBytes
-        ..nonce = Uint8List.fromList(List.generate(16, (i) => i));
+      final request =
+          RegisterOhRequest()
+            ..ohId = ohId
+            ..ohAuthPublicKey = keypair.publicKeyBytes
+            ..nonce = Uint8List.fromList(List.generate(16, (i) => i));
 
       final buffer = request.writeToBuffer();
       expect(buffer.isNotEmpty, true);
@@ -128,9 +129,8 @@ void main() {
       final oh = OHRegistration(
         ohId: List.generate(20, (i) => i),
         keypair: keypair,
-        expiresAtMs: DateTime.now()
-            .add(Duration(days: 7))
-            .millisecondsSinceEpoch,
+        expiresAtMs:
+            DateTime.now().add(Duration(days: 7)).millisecondsSinceEpoch,
       );
 
       final messages = await client.fetchMessages(oh);
@@ -141,10 +141,11 @@ void main() {
       final ohId = Uint8List.fromList(List.generate(20, (i) => i));
       final nonce = Uint8List.fromList(List.generate(16, (i) => i));
 
-      final request = FetchRequest()
-        ..ohId = ohId
-        ..limit = 50
-        ..nonce = nonce;
+      final request =
+          FetchRequest()
+            ..ohId = ohId
+            ..limit = 50
+            ..nonce = nonce;
 
       final buffer = request.writeToBuffer();
       final decoded = FetchRequest.fromBuffer(buffer);

@@ -9,9 +9,8 @@ class RedPandaNodeLauncher {
   final String _workingDir;
 
   RedPandaNodeLauncher({required this.port, this.seeds = const []})
-    : _workingDir = Directory.systemTemp
-          .createTempSync('redpanda_node_$port')
-          .path;
+    : _workingDir =
+          Directory.systemTemp.createTempSync('redpanda_node_$port').path;
 
   static Future<bool> isJarAvailable() async {
     try {

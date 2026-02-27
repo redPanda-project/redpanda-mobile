@@ -101,14 +101,16 @@ class $UsersTable extends Users with TableInfo<$UsersTable, User> {
   User map(Map<String, dynamic> data, {String? tablePrefix}) {
     final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
     return User(
-      uuid: attachedDatabase.typeMapping.read(
-        DriftSqlType.string,
-        data['${effectivePrefix}uuid'],
-      )!,
-      username: attachedDatabase.typeMapping.read(
-        DriftSqlType.string,
-        data['${effectivePrefix}username'],
-      )!,
+      uuid:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.string,
+            data['${effectivePrefix}uuid'],
+          )!,
+      username:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.string,
+            data['${effectivePrefix}username'],
+          )!,
       avatarUrl: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}avatar_url'],
@@ -155,12 +157,14 @@ class User extends DataClass implements Insertable<User> {
     return UsersCompanion(
       uuid: Value(uuid),
       username: Value(username),
-      avatarUrl: avatarUrl == null && nullToAbsent
-          ? const Value.absent()
-          : Value(avatarUrl),
-      publicKey: publicKey == null && nullToAbsent
-          ? const Value.absent()
-          : Value(publicKey),
+      avatarUrl:
+          avatarUrl == null && nullToAbsent
+              ? const Value.absent()
+              : Value(avatarUrl),
+      publicKey:
+          publicKey == null && nullToAbsent
+              ? const Value.absent()
+              : Value(publicKey),
     );
   }
 
@@ -507,22 +511,26 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
   Channel map(Map<String, dynamic> data, {String? tablePrefix}) {
     final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
     return Channel(
-      uuid: attachedDatabase.typeMapping.read(
-        DriftSqlType.string,
-        data['${effectivePrefix}uuid'],
-      )!,
-      label: attachedDatabase.typeMapping.read(
-        DriftSqlType.string,
-        data['${effectivePrefix}label'],
-      )!,
-      encryptionKey: attachedDatabase.typeMapping.read(
-        DriftSqlType.string,
-        data['${effectivePrefix}encryption_key'],
-      )!,
-      authenticationKey: attachedDatabase.typeMapping.read(
-        DriftSqlType.string,
-        data['${effectivePrefix}authentication_key'],
-      )!,
+      uuid:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.string,
+            data['${effectivePrefix}uuid'],
+          )!,
+      label:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.string,
+            data['${effectivePrefix}label'],
+          )!,
+      encryptionKey:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.string,
+            data['${effectivePrefix}encryption_key'],
+          )!,
+      authenticationKey:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.string,
+            data['${effectivePrefix}authentication_key'],
+          )!,
       peerOhEndpoint: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}peer_oh_endpoint'],
@@ -595,18 +603,22 @@ class Channel extends DataClass implements Insertable<Channel> {
       label: Value(label),
       encryptionKey: Value(encryptionKey),
       authenticationKey: Value(authenticationKey),
-      peerOhEndpoint: peerOhEndpoint == null && nullToAbsent
-          ? const Value.absent()
-          : Value(peerOhEndpoint),
-      peerOhId: peerOhId == null && nullToAbsent
-          ? const Value.absent()
-          : Value(peerOhId),
-      peerOhPublicKey: peerOhPublicKey == null && nullToAbsent
-          ? const Value.absent()
-          : Value(peerOhPublicKey),
-      lastSeen: lastSeen == null && nullToAbsent
-          ? const Value.absent()
-          : Value(lastSeen),
+      peerOhEndpoint:
+          peerOhEndpoint == null && nullToAbsent
+              ? const Value.absent()
+              : Value(peerOhEndpoint),
+      peerOhId:
+          peerOhId == null && nullToAbsent
+              ? const Value.absent()
+              : Value(peerOhId),
+      peerOhPublicKey:
+          peerOhPublicKey == null && nullToAbsent
+              ? const Value.absent()
+              : Value(peerOhPublicKey),
+      lastSeen:
+          lastSeen == null && nullToAbsent
+              ? const Value.absent()
+              : Value(lastSeen),
     );
   }
 
@@ -655,32 +667,34 @@ class Channel extends DataClass implements Insertable<Channel> {
     label: label ?? this.label,
     encryptionKey: encryptionKey ?? this.encryptionKey,
     authenticationKey: authenticationKey ?? this.authenticationKey,
-    peerOhEndpoint: peerOhEndpoint.present
-        ? peerOhEndpoint.value
-        : this.peerOhEndpoint,
+    peerOhEndpoint:
+        peerOhEndpoint.present ? peerOhEndpoint.value : this.peerOhEndpoint,
     peerOhId: peerOhId.present ? peerOhId.value : this.peerOhId,
-    peerOhPublicKey: peerOhPublicKey.present
-        ? peerOhPublicKey.value
-        : this.peerOhPublicKey,
+    peerOhPublicKey:
+        peerOhPublicKey.present ? peerOhPublicKey.value : this.peerOhPublicKey,
     lastSeen: lastSeen.present ? lastSeen.value : this.lastSeen,
   );
   Channel copyWithCompanion(ChannelsCompanion data) {
     return Channel(
       uuid: data.uuid.present ? data.uuid.value : this.uuid,
       label: data.label.present ? data.label.value : this.label,
-      encryptionKey: data.encryptionKey.present
-          ? data.encryptionKey.value
-          : this.encryptionKey,
-      authenticationKey: data.authenticationKey.present
-          ? data.authenticationKey.value
-          : this.authenticationKey,
-      peerOhEndpoint: data.peerOhEndpoint.present
-          ? data.peerOhEndpoint.value
-          : this.peerOhEndpoint,
+      encryptionKey:
+          data.encryptionKey.present
+              ? data.encryptionKey.value
+              : this.encryptionKey,
+      authenticationKey:
+          data.authenticationKey.present
+              ? data.authenticationKey.value
+              : this.authenticationKey,
+      peerOhEndpoint:
+          data.peerOhEndpoint.present
+              ? data.peerOhEndpoint.value
+              : this.peerOhEndpoint,
       peerOhId: data.peerOhId.present ? data.peerOhId.value : this.peerOhId,
-      peerOhPublicKey: data.peerOhPublicKey.present
-          ? data.peerOhPublicKey.value
-          : this.peerOhPublicKey,
+      peerOhPublicKey:
+          data.peerOhPublicKey.present
+              ? data.peerOhPublicKey.value
+              : this.peerOhPublicKey,
       lastSeen: data.lastSeen.present ? data.lastSeen.value : this.lastSeen,
     );
   }
@@ -1026,34 +1040,41 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
   Message map(Map<String, dynamic> data, {String? tablePrefix}) {
     final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
     return Message(
-      id: attachedDatabase.typeMapping.read(
-        DriftSqlType.int,
-        data['${effectivePrefix}id'],
-      )!,
-      conversationId: attachedDatabase.typeMapping.read(
-        DriftSqlType.string,
-        data['${effectivePrefix}conversation_id'],
-      )!,
-      senderId: attachedDatabase.typeMapping.read(
-        DriftSqlType.string,
-        data['${effectivePrefix}sender_id'],
-      )!,
-      content: attachedDatabase.typeMapping.read(
-        DriftSqlType.string,
-        data['${effectivePrefix}content'],
-      )!,
-      timestamp: attachedDatabase.typeMapping.read(
-        DriftSqlType.dateTime,
-        data['${effectivePrefix}timestamp'],
-      )!,
-      status: attachedDatabase.typeMapping.read(
-        DriftSqlType.int,
-        data['${effectivePrefix}status'],
-      )!,
-      type: attachedDatabase.typeMapping.read(
-        DriftSqlType.int,
-        data['${effectivePrefix}type'],
-      )!,
+      id:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.int,
+            data['${effectivePrefix}id'],
+          )!,
+      conversationId:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.string,
+            data['${effectivePrefix}conversation_id'],
+          )!,
+      senderId:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.string,
+            data['${effectivePrefix}sender_id'],
+          )!,
+      content:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.string,
+            data['${effectivePrefix}content'],
+          )!,
+      timestamp:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.dateTime,
+            data['${effectivePrefix}timestamp'],
+          )!,
+      status:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.int,
+            data['${effectivePrefix}status'],
+          )!,
+      type:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.int,
+            data['${effectivePrefix}type'],
+          )!,
     );
   }
 
@@ -1154,9 +1175,10 @@ class Message extends DataClass implements Insertable<Message> {
   Message copyWithCompanion(MessagesCompanion data) {
     return Message(
       id: data.id.present ? data.id.value : this.id,
-      conversationId: data.conversationId.present
-          ? data.conversationId.value
-          : this.conversationId,
+      conversationId:
+          data.conversationId.present
+              ? data.conversationId.value
+              : this.conversationId,
       senderId: data.senderId.present ? data.senderId.value : this.senderId,
       content: data.content.present ? data.content.value : this.content,
       timestamp: data.timestamp.present ? data.timestamp.value : this.timestamp,
@@ -1464,26 +1486,30 @@ class $PeersTable extends Peers with TableInfo<$PeersTable, Peer> {
   Peer map(Map<String, dynamic> data, {String? tablePrefix}) {
     final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
     return Peer(
-      address: attachedDatabase.typeMapping.read(
-        DriftSqlType.string,
-        data['${effectivePrefix}address'],
-      )!,
+      address:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.string,
+            data['${effectivePrefix}address'],
+          )!,
       nodeId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}node_id'],
       ),
-      averageLatencyMs: attachedDatabase.typeMapping.read(
-        DriftSqlType.int,
-        data['${effectivePrefix}average_latency_ms'],
-      )!,
-      successCount: attachedDatabase.typeMapping.read(
-        DriftSqlType.int,
-        data['${effectivePrefix}success_count'],
-      )!,
-      failureCount: attachedDatabase.typeMapping.read(
-        DriftSqlType.int,
-        data['${effectivePrefix}failure_count'],
-      )!,
+      averageLatencyMs:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.int,
+            data['${effectivePrefix}average_latency_ms'],
+          )!,
+      successCount:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.int,
+            data['${effectivePrefix}success_count'],
+          )!,
+      failureCount:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.int,
+            data['${effectivePrefix}failure_count'],
+          )!,
       lastSeen: attachedDatabase.typeMapping.read(
         DriftSqlType.dateTime,
         data['${effectivePrefix}last_seen'],
@@ -1531,15 +1557,15 @@ class Peer extends DataClass implements Insertable<Peer> {
   PeersCompanion toCompanion(bool nullToAbsent) {
     return PeersCompanion(
       address: Value(address),
-      nodeId: nodeId == null && nullToAbsent
-          ? const Value.absent()
-          : Value(nodeId),
+      nodeId:
+          nodeId == null && nullToAbsent ? const Value.absent() : Value(nodeId),
       averageLatencyMs: Value(averageLatencyMs),
       successCount: Value(successCount),
       failureCount: Value(failureCount),
-      lastSeen: lastSeen == null && nullToAbsent
-          ? const Value.absent()
-          : Value(lastSeen),
+      lastSeen:
+          lastSeen == null && nullToAbsent
+              ? const Value.absent()
+              : Value(lastSeen),
     );
   }
 
@@ -1589,15 +1615,18 @@ class Peer extends DataClass implements Insertable<Peer> {
     return Peer(
       address: data.address.present ? data.address.value : this.address,
       nodeId: data.nodeId.present ? data.nodeId.value : this.nodeId,
-      averageLatencyMs: data.averageLatencyMs.present
-          ? data.averageLatencyMs.value
-          : this.averageLatencyMs,
-      successCount: data.successCount.present
-          ? data.successCount.value
-          : this.successCount,
-      failureCount: data.failureCount.present
-          ? data.failureCount.value
-          : this.failureCount,
+      averageLatencyMs:
+          data.averageLatencyMs.present
+              ? data.averageLatencyMs.value
+              : this.averageLatencyMs,
+      successCount:
+          data.successCount.present
+              ? data.successCount.value
+              : this.successCount,
+      failureCount:
+          data.failureCount.present
+              ? data.failureCount.value
+              : this.failureCount,
       lastSeen: data.lastSeen.present ? data.lastSeen.value : this.lastSeen,
     );
   }
@@ -1885,12 +1914,12 @@ class $$UsersTableTableManager
         TableManagerState(
           db: db,
           table: table,
-          createFilteringComposer: () =>
-              $$UsersTableFilterComposer($db: db, $table: table),
-          createOrderingComposer: () =>
-              $$UsersTableOrderingComposer($db: db, $table: table),
-          createComputedFieldComposer: () =>
-              $$UsersTableAnnotationComposer($db: db, $table: table),
+          createFilteringComposer:
+              () => $$UsersTableFilterComposer($db: db, $table: table),
+          createOrderingComposer:
+              () => $$UsersTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer:
+              () => $$UsersTableAnnotationComposer($db: db, $table: table),
           updateCompanionCallback:
               ({
                 Value<String> uuid = const Value.absent(),
@@ -1919,9 +1948,16 @@ class $$UsersTableTableManager
                 publicKey: publicKey,
                 rowid: rowid,
               ),
-          withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
-              .toList(),
+          withReferenceMapper:
+              (p0) =>
+                  p0
+                      .map(
+                        (e) => (
+                          e.readTable(table),
+                          BaseReferences(db, table, e),
+                        ),
+                      )
+                      .toList(),
           prefetchHooksCallback: null,
         ),
       );
@@ -2204,12 +2240,12 @@ class $$ChannelsTableTableManager
         TableManagerState(
           db: db,
           table: table,
-          createFilteringComposer: () =>
-              $$ChannelsTableFilterComposer($db: db, $table: table),
-          createOrderingComposer: () =>
-              $$ChannelsTableOrderingComposer($db: db, $table: table),
-          createComputedFieldComposer: () =>
-              $$ChannelsTableAnnotationComposer($db: db, $table: table),
+          createFilteringComposer:
+              () => $$ChannelsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer:
+              () => $$ChannelsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer:
+              () => $$ChannelsTableAnnotationComposer($db: db, $table: table),
           updateCompanionCallback:
               ({
                 Value<String> uuid = const Value.absent(),
@@ -2254,14 +2290,16 @@ class $$ChannelsTableTableManager
                 lastSeen: lastSeen,
                 rowid: rowid,
               ),
-          withReferenceMapper: (p0) => p0
-              .map(
-                (e) => (
-                  e.readTable(table),
-                  $$ChannelsTableReferences(db, table, e),
-                ),
-              )
-              .toList(),
+          withReferenceMapper:
+              (p0) =>
+                  p0
+                      .map(
+                        (e) => (
+                          e.readTable(table),
+                          $$ChannelsTableReferences(db, table, e),
+                        ),
+                      )
+                      .toList(),
           prefetchHooksCallback: ({messagesRefs = false}) {
             return PrefetchHooks(
               db: db,
@@ -2274,10 +2312,15 @@ class $$ChannelsTableTableManager
                       currentTable: table,
                       referencedTable: $$ChannelsTableReferences
                           ._messagesRefsTable(db),
-                      managerFromTypedResult: (p0) =>
-                          $$ChannelsTableReferences(db, table, p0).messagesRefs,
-                      referencedItemsForCurrentItem: (item, referencedItems) =>
-                          referencedItems.where(
+                      managerFromTypedResult:
+                          (p0) =>
+                              $$ChannelsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).messagesRefs,
+                      referencedItemsForCurrentItem:
+                          (item, referencedItems) => referencedItems.where(
                             (e) => e.conversationId == item.uuid,
                           ),
                       typedResults: items,
@@ -2546,12 +2589,12 @@ class $$MessagesTableTableManager
         TableManagerState(
           db: db,
           table: table,
-          createFilteringComposer: () =>
-              $$MessagesTableFilterComposer($db: db, $table: table),
-          createOrderingComposer: () =>
-              $$MessagesTableOrderingComposer($db: db, $table: table),
-          createComputedFieldComposer: () =>
-              $$MessagesTableAnnotationComposer($db: db, $table: table),
+          createFilteringComposer:
+              () => $$MessagesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer:
+              () => $$MessagesTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer:
+              () => $$MessagesTableAnnotationComposer($db: db, $table: table),
           updateCompanionCallback:
               ({
                 Value<int> id = const Value.absent(),
@@ -2588,50 +2631,52 @@ class $$MessagesTableTableManager
                 status: status,
                 type: type,
               ),
-          withReferenceMapper: (p0) => p0
-              .map(
-                (e) => (
-                  e.readTable(table),
-                  $$MessagesTableReferences(db, table, e),
-                ),
-              )
-              .toList(),
+          withReferenceMapper:
+              (p0) =>
+                  p0
+                      .map(
+                        (e) => (
+                          e.readTable(table),
+                          $$MessagesTableReferences(db, table, e),
+                        ),
+                      )
+                      .toList(),
           prefetchHooksCallback: ({conversationId = false}) {
             return PrefetchHooks(
               db: db,
               explicitlyWatchedTables: [],
-              addJoins:
-                  <
-                    T extends TableManagerState<
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic
-                    >
-                  >(state) {
-                    if (conversationId) {
-                      state =
-                          state.withJoin(
-                                currentTable: table,
-                                currentColumn: table.conversationId,
-                                referencedTable: $$MessagesTableReferences
-                                    ._conversationIdTable(db),
-                                referencedColumn: $$MessagesTableReferences
+              addJoins: <
+                T extends TableManagerState<
+                  dynamic,
+                  dynamic,
+                  dynamic,
+                  dynamic,
+                  dynamic,
+                  dynamic,
+                  dynamic,
+                  dynamic,
+                  dynamic,
+                  dynamic,
+                  dynamic
+                >
+              >(state) {
+                if (conversationId) {
+                  state =
+                      state.withJoin(
+                            currentTable: table,
+                            currentColumn: table.conversationId,
+                            referencedTable: $$MessagesTableReferences
+                                ._conversationIdTable(db),
+                            referencedColumn:
+                                $$MessagesTableReferences
                                     ._conversationIdTable(db)
                                     .uuid,
-                              )
-                              as T;
-                    }
+                          )
+                          as T;
+                }
 
-                    return state;
-                  },
+                return state;
+              },
               getPrefetchedDataCallback: (items) async {
                 return [];
               },
@@ -2809,12 +2854,12 @@ class $$PeersTableTableManager
         TableManagerState(
           db: db,
           table: table,
-          createFilteringComposer: () =>
-              $$PeersTableFilterComposer($db: db, $table: table),
-          createOrderingComposer: () =>
-              $$PeersTableOrderingComposer($db: db, $table: table),
-          createComputedFieldComposer: () =>
-              $$PeersTableAnnotationComposer($db: db, $table: table),
+          createFilteringComposer:
+              () => $$PeersTableFilterComposer($db: db, $table: table),
+          createOrderingComposer:
+              () => $$PeersTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer:
+              () => $$PeersTableAnnotationComposer($db: db, $table: table),
           updateCompanionCallback:
               ({
                 Value<String> address = const Value.absent(),
@@ -2851,9 +2896,16 @@ class $$PeersTableTableManager
                 lastSeen: lastSeen,
                 rowid: rowid,
               ),
-          withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
-              .toList(),
+          withReferenceMapper:
+              (p0) =>
+                  p0
+                      .map(
+                        (e) => (
+                          e.readTable(table),
+                          BaseReferences(db, table, e),
+                        ),
+                      )
+                      .toList(),
           prefetchHooksCallback: null,
         ),
       );
@@ -3024,26 +3076,31 @@ class $OutboundHandlesTable extends OutboundHandles
   OutboundHandle map(Map<String, dynamic> data, {String? tablePrefix}) {
     final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
     return OutboundHandle(
-      id: attachedDatabase.typeMapping.read(
-        DriftSqlType.int,
-        data['${effectivePrefix}id'],
-      )!,
-      ohId: attachedDatabase.typeMapping.read(
-        DriftSqlType.string,
-        data['${effectivePrefix}oh_id'],
-      )!,
-      keypairBytes: attachedDatabase.typeMapping.read(
-        DriftSqlType.blob,
-        data['${effectivePrefix}keypair_bytes'],
-      )!,
-      serverEndpoint: attachedDatabase.typeMapping.read(
-        DriftSqlType.string,
-        data['${effectivePrefix}server_endpoint'],
-      )!,
-      expiresAt: attachedDatabase.typeMapping.read(
-        DriftSqlType.dateTime,
-        data['${effectivePrefix}expires_at'],
-      )!,
+      id:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.int,
+            data['${effectivePrefix}id'],
+          )!,
+      ohId:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.string,
+            data['${effectivePrefix}oh_id'],
+          )!,
+      keypairBytes:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.blob,
+            data['${effectivePrefix}keypair_bytes'],
+          )!,
+      serverEndpoint:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.string,
+            data['${effectivePrefix}server_endpoint'],
+          )!,
+      expiresAt:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.dateTime,
+            data['${effectivePrefix}expires_at'],
+          )!,
       channelId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}channel_id'],
@@ -3093,9 +3150,10 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
       keypairBytes: Value(keypairBytes),
       serverEndpoint: Value(serverEndpoint),
       expiresAt: Value(expiresAt),
-      channelId: channelId == null && nullToAbsent
-          ? const Value.absent()
-          : Value(channelId),
+      channelId:
+          channelId == null && nullToAbsent
+              ? const Value.absent()
+              : Value(channelId),
     );
   }
 
@@ -3145,12 +3203,14 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
     return OutboundHandle(
       id: data.id.present ? data.id.value : this.id,
       ohId: data.ohId.present ? data.ohId.value : this.ohId,
-      keypairBytes: data.keypairBytes.present
-          ? data.keypairBytes.value
-          : this.keypairBytes,
-      serverEndpoint: data.serverEndpoint.present
-          ? data.serverEndpoint.value
-          : this.serverEndpoint,
+      keypairBytes:
+          data.keypairBytes.present
+              ? data.keypairBytes.value
+              : this.keypairBytes,
+      serverEndpoint:
+          data.serverEndpoint.present
+              ? data.serverEndpoint.value
+              : this.serverEndpoint,
       expiresAt: data.expiresAt.present ? data.expiresAt.value : this.expiresAt,
       channelId: data.channelId.present ? data.channelId.value : this.channelId,
     );
@@ -3450,12 +3510,19 @@ class $$OutboundHandlesTableTableManager
         TableManagerState(
           db: db,
           table: table,
-          createFilteringComposer: () =>
-              $$OutboundHandlesTableFilterComposer($db: db, $table: table),
-          createOrderingComposer: () =>
-              $$OutboundHandlesTableOrderingComposer($db: db, $table: table),
-          createComputedFieldComposer: () =>
-              $$OutboundHandlesTableAnnotationComposer($db: db, $table: table),
+          createFilteringComposer:
+              () =>
+                  $$OutboundHandlesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer:
+              () => $$OutboundHandlesTableOrderingComposer(
+                $db: db,
+                $table: table,
+              ),
+          createComputedFieldComposer:
+              () => $$OutboundHandlesTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
           updateCompanionCallback:
               ({
                 Value<int> id = const Value.absent(),
@@ -3488,9 +3555,16 @@ class $$OutboundHandlesTableTableManager
                 expiresAt: expiresAt,
                 channelId: channelId,
               ),
-          withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
-              .toList(),
+          withReferenceMapper:
+              (p0) =>
+                  p0
+                      .map(
+                        (e) => (
+                          e.readTable(table),
+                          BaseReferences(db, table, e),
+                        ),
+                      )
+                      .toList(),
           prefetchHooksCallback: null,
         ),
       );

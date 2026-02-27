@@ -78,8 +78,8 @@ class InMemoryPeerRepository implements PeerRepository {
 
   @override
   List<PeerStats> getBestPeers(int count) {
-    final sorted = _peers.values.toList()
-      ..sort((a, b) => b.score.compareTo(a.score));
+    final sorted =
+        _peers.values.toList()..sort((a, b) => b.score.compareTo(a.score));
     return sorted.take(count).toList();
   }
 

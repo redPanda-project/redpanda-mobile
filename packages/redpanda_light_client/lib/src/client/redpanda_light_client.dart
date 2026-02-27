@@ -157,16 +157,18 @@ class RedPandaLightClient implements RedPandaClient {
   }
 
   /// Currently active (handshake-verified) peer addresses.
-  Set<String> get activePeerAddresses => _peers.values
-      .where((p) => p.isHandshakeVerified)
-      .map((p) => p.address)
-      .toSet();
+  Set<String> get activePeerAddresses =>
+      _peers.values
+          .where((p) => p.isHandshakeVerified)
+          .map((p) => p.address)
+          .toSet();
 
   /// Currently connecting (not yet verified) peer addresses.
-  Set<String> get connectingPeerAddresses => _peers.values
-      .where((p) => !p.isHandshakeVerified && !p.isDisconnected)
-      .map((p) => p.address)
-      .toSet();
+  Set<String> get connectingPeerAddresses =>
+      _peers.values
+          .where((p) => !p.isHandshakeVerified && !p.isDisconnected)
+          .map((p) => p.address)
+          .toSet();
 
   @override
   Stream<PeerStatsSnapshot> get peerStatsStream async* {
@@ -186,9 +188,8 @@ class RedPandaLightClient implements RedPandaClient {
 
   void _updateStatus(ConnectionStatus status) {
     // Recalculate connected peers
-    int connectedCount = _peers.values
-        .where((p) => p.isHandshakeVerified)
-        .length;
+    int connectedCount =
+        _peers.values.where((p) => p.isHandshakeVerified).length;
     _peerCountController.add(connectedCount);
 
     // Simple aggregation: If ANY connected -> Connected.
@@ -281,10 +282,10 @@ class RedPandaLightClient implements RedPandaClient {
     // A. Verify Capacity
     if (_peers.length > maxConnections) {
       // Disconnect worst performing extra peers
-      final sortedParams = _peers.values.toList()
-        ..sort(
-          (a, b) => a.averageLatencyMs.compareTo(b.averageLatencyMs),
-        ); // Lower latency first
+      final sortedParams =
+          _peers.values.toList()..sort(
+            (a, b) => a.averageLatencyMs.compareTo(b.averageLatencyMs),
+          ); // Lower latency first
 
       // Remove active peers that are worst
       for (var i = maxConnections; i < sortedParams.length; i++) {
@@ -298,17 +299,19 @@ class RedPandaLightClient implements RedPandaClient {
     // B. Rotate Roaming Peers
     // B. Rotate Roaming Peers
     final best3 = _peerRepository.getBestPeers(3).map((p) => p.address).toSet();
-    final connectedRoaming = _peers.values
-        .where((p) => p.isHandshakeVerified && !best3.contains(p.address))
-        .toList();
+    final connectedRoaming =
+        _peers.values
+            .where((p) => p.isHandshakeVerified && !best3.contains(p.address))
+            .toList();
 
     if (connectedRoaming.length >= 2) {
       // Find candidates for rotation (Age > 10s)
-      final candidates = connectedRoaming.where((p) {
-        final age = DateTime.now().difference(p.connectedSince).inSeconds;
-        // print('DEBUG: Rotation Candidate: ${p.address} Age=${age}s');
-        return age >= 10;
-      }).toList();
+      final candidates =
+          connectedRoaming.where((p) {
+            final age = DateTime.now().difference(p.connectedSince).inSeconds;
+            // print('DEBUG: Rotation Candidate: ${p.address} Age=${age}s');
+            return age >= 10;
+          }).toList();
 
       // Disconnect ONLY ONE (the oldest)
       if (candidates.isNotEmpty) {
@@ -620,19 +623,14 @@ class RedPandaLightClient implements RedPandaClient {
     final payload = Uint8List(iv.length + ciphertext.length + mac.length);
     payload.setRange(0, iv.length, iv);
     payload.setRange(iv.length, iv.length + ciphertext.length, ciphertext);
-    payload.setRange(
-      iv.length + ciphertext.length,
-      payload.length,
-      mac,
-    );
+    payload.setRange(iv.length + ciphertext.length, payload.length, mac);
 
     // 5. Build FlaschenpostPut (no oh_id; backend routes by GarlicMessage destination)
     final flaschenpost = FlaschenpostPut()..content = payload;
 
     // 6. Send to a connected peer (best available)
-    final activePeer = _peers.values
-        .where((p) => p.isHandshakeVerified)
-        .firstOrNull;
+    final activePeer =
+        _peers.values.where((p) => p.isHandshakeVerified).firstOrNull;
 
     if (activePeer != null) {
       final buffer = flaschenpost.writeToBuffer();
@@ -673,18 +671,18 @@ class RedPandaLightClient implements RedPandaClient {
 
     final signature = keypair.sign(Uint8List.fromList(signingBuffer.toBytes()));
 
-    final request = RegisterOhRequest()
-      ..ohId = ohId
-      ..ohAuthPublicKey = keypair.publicKeyBytes
-      ..requestedExpiresAt = _toInt64(expiresAt.millisecondsSinceEpoch)
-      ..timestampMs = _toInt64(now.millisecondsSinceEpoch)
-      ..nonce = nonce
-      ..signature = signature;
+    final request =
+        RegisterOhRequest()
+          ..ohId = ohId
+          ..ohAuthPublicKey = keypair.publicKeyBytes
+          ..requestedExpiresAt = _toInt64(expiresAt.millisecondsSinceEpoch)
+          ..timestampMs = _toInt64(now.millisecondsSinceEpoch)
+          ..nonce = nonce
+          ..signature = signature;
 
     // Send to best active peer
-    final activePeer = _peers.values
-        .where((p) => p.isHandshakeVerified)
-        .firstOrNull;
+    final activePeer =
+        _peers.values.where((p) => p.isHandshakeVerified).firstOrNull;
 
     if (activePeer != null) {
       final buffer = request.writeToBuffer();
@@ -733,21 +731,21 @@ class RedPandaLightClient implements RedPandaClient {
       Uint8List.fromList(signingBuffer.toBytes()),
     );
 
-    final request = FetchRequest()
-      ..ohId = oh.ohId
-      ..limit = 50
-      ..timestampMs = _toInt64(now.millisecondsSinceEpoch)
-      ..nonce = nonce
-      ..signature = signature;
+    final request =
+        FetchRequest()
+          ..ohId = oh.ohId
+          ..limit = 50
+          ..timestampMs = _toInt64(now.millisecondsSinceEpoch)
+          ..nonce = nonce
+          ..signature = signature;
 
     if (oh.lastCursor != 0) {
       request.cursor = fixnum.Int64(oh.lastCursor);
     }
 
     // Send to best active peer
-    final activePeer = _peers.values
-        .where((p) => p.isHandshakeVerified)
-        .firstOrNull;
+    final activePeer =
+        _peers.values.where((p) => p.isHandshakeVerified).firstOrNull;
 
     if (activePeer != null) {
       final buffer = request.writeToBuffer();

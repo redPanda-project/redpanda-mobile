@@ -27,9 +27,10 @@ void main() async {
         expect(socket, isNotNull);
         await socket.close();
       },
-      skip: jarAvailable
-          ? null
-          : 'RedPanda JAR not found - verify references/redPandaj/target/redpanda.jar exists',
+      skip:
+          jarAvailable
+              ? null
+              : 'RedPanda JAR not found - verify references/redPandaj/target/redpanda.jar exists',
     );
   });
 }

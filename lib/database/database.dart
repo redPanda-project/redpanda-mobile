@@ -57,7 +57,8 @@ class Peers extends Table {
 
 class OutboundHandles extends Table {
   IntColumn get id => integer().autoIncrement()();
-  TextColumn get ohId => text()(); // HEX encoded, 20-byte KademliaId (40 hex chars)
+  TextColumn get ohId =>
+      text()(); // HEX encoded, 20-byte KademliaId (40 hex chars)
   BlobColumn get keypairBytes => blob()(); // Serialized ECDSA keypair
   TextColumn get serverEndpoint => text()();
   DateTimeColumn get expiresAt => dateTime()();

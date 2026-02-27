@@ -22,19 +22,19 @@ class DebugPeerStatsScreen extends ConsumerWidget {
 
           // 1. Identify Top 3 Primary Candidates based on clean Score sort
           peerStatsList.sort((a, b) => b.score.compareTo(a.score));
-          final top3Addresses = peerStatsList
-              .take(3)
-              .map((p) => p.address)
-              .toSet();
+          final top3Addresses =
+              peerStatsList.take(3).map((p) => p.address).toSet();
 
           // 2. Re-sort for display: Connected -> Connecting -> Primary -> Score
           peerStatsList.sort((a, b) {
-            final aConnected = activePeers.contains(a.address)
-                ? 2
-                : (connectingPeers.contains(a.address) ? 1 : 0);
-            final bConnected = activePeers.contains(b.address)
-                ? 2
-                : (connectingPeers.contains(b.address) ? 1 : 0);
+            final aConnected =
+                activePeers.contains(a.address)
+                    ? 2
+                    : (connectingPeers.contains(a.address) ? 1 : 0);
+            final bConnected =
+                activePeers.contains(b.address)
+                    ? 2
+                    : (connectingPeers.contains(b.address) ? 1 : 0);
             if (aConnected != bConnected) {
               return bConnected.compareTo(aConnected);
             }
@@ -62,18 +62,20 @@ class DebugPeerStatsScreen extends ConsumerWidget {
                 margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 child: ListTile(
                   leading: CircleAvatar(
-                    backgroundColor: isConnected
-                        ? (isPrimary ? Colors.amber[100] : Colors.blue[100])
-                        : (isConnecting
-                              ? Colors.orange[100]
-                              : Colors.grey[200]),
+                    backgroundColor:
+                        isConnected
+                            ? (isPrimary ? Colors.amber[100] : Colors.blue[100])
+                            : (isConnecting
+                                ? Colors.orange[100]
+                                : Colors.grey[200]),
                     child: Icon(
                       isConnecting
                           ? Icons.hourglass_empty
                           : (isPrimary ? Icons.star : Icons.public),
-                      color: isConnected
-                          ? (isPrimary ? Colors.orange : Colors.blue)
-                          : (isConnecting ? Colors.orange : Colors.grey),
+                      color:
+                          isConnected
+                              ? (isPrimary ? Colors.orange : Colors.blue)
+                              : (isConnecting ? Colors.orange : Colors.grey),
                       size: 20,
                     ),
                   ),
@@ -99,9 +101,10 @@ class DebugPeerStatsScreen extends ConsumerWidget {
                           _StatBadge(
                             icon: Icons.timer,
                             text: '${p.averageLatencyMs}ms',
-                            color: p.averageLatencyMs < 200
-                                ? Colors.green
-                                : Colors.orange,
+                            color:
+                                p.averageLatencyMs < 200
+                                    ? Colors.green
+                                    : Colors.orange,
                           ),
                           const SizedBox(width: 8),
                           _StatBadge(

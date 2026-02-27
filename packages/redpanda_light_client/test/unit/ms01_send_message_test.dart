@@ -84,15 +84,10 @@ void main() {
       final mac = hmac.process(macInput);
 
       // Build payload: [IV (16)][ciphertext][HMAC (32)]
-      final payload =
-          Uint8List(iv.length + ciphertext.length + mac.length);
+      final payload = Uint8List(iv.length + ciphertext.length + mac.length);
       payload.setRange(0, iv.length, iv);
       payload.setRange(iv.length, iv.length + ciphertext.length, ciphertext);
-      payload.setRange(
-        iv.length + ciphertext.length,
-        payload.length,
-        mac,
-      );
+      payload.setRange(iv.length + ciphertext.length, payload.length, mac);
 
       // Verify: payload is [IV (16)][ciphertext][HMAC (32)]
       expect(payload.length, equals(16 + plaintextBytes.length + 32));
@@ -103,8 +98,9 @@ void main() {
       final extractedMac = payload.sublist(payload.length - 32);
 
       // Verify HMAC before decrypting
-      final verifyInput =
-          Uint8List(extractedIv.length + extractedCiphertext.length);
+      final verifyInput = Uint8List(
+        extractedIv.length + extractedCiphertext.length,
+      );
       verifyInput.setRange(0, extractedIv.length, extractedIv);
       verifyInput.setRange(
         extractedIv.length,
@@ -147,15 +143,10 @@ void main() {
       final mac = hmac.process(macInput);
 
       // Build payload
-      final payload =
-          Uint8List(iv.length + ciphertext.length + mac.length);
+      final payload = Uint8List(iv.length + ciphertext.length + mac.length);
       payload.setRange(0, iv.length, iv);
       payload.setRange(iv.length, iv.length + ciphertext.length, ciphertext);
-      payload.setRange(
-        iv.length + ciphertext.length,
-        payload.length,
-        mac,
-      );
+      payload.setRange(iv.length + ciphertext.length, payload.length, mac);
 
       // Tamper with ciphertext (flip a bit)
       payload[17] ^= 0xFF;
@@ -165,8 +156,9 @@ void main() {
       final extractedCiphertext = payload.sublist(16, payload.length - 32);
       final extractedMac = payload.sublist(payload.length - 32);
 
-      final verifyInput =
-          Uint8List(extractedIv.length + extractedCiphertext.length);
+      final verifyInput = Uint8List(
+        extractedIv.length + extractedCiphertext.length,
+      );
       verifyInput.setRange(0, extractedIv.length, extractedIv);
       verifyInput.setRange(
         extractedIv.length,
