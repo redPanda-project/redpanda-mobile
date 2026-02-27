@@ -71,8 +71,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       if (channel != null) {
         final client = ref.read(redPandaClientProvider);
         final encKey = HEX.decode(channel.encryptionKey);
-        final peerOhId =
-            channel.peerOhId != null ? HEX.decode(channel.peerOhId!) : null;
+        final peerOhId = channel.peerOhId != null
+            ? HEX.decode(channel.peerOhId!)
+            : null;
         client.addChannelKeys(channel.uuid, encKey, peerOhId: peerOhId);
       }
     });
@@ -80,20 +81,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     return Scaffold(
       appBar: AppBar(
         title: channelAsync.when(
-          data:
-              (channel) => Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(channel?.label ?? "Unknown"),
-                  const Text(
-                    "Private Channel",
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.normal,
-                    ),
-                  ),
-                ],
+          data: (channel) => Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(channel?.label ?? "Unknown"),
+              const Text(
+                "Private Channel",
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.normal),
               ),
+            ],
+          ),
           loading: () => const Text("Loading..."),
           error: (_, _) => const Text("Chat"),
         ),
@@ -127,11 +124,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
                   showDialog(
                     context: context,
-                    builder:
-                        (context) => ShareChannelDialog(
-                          channelName: channel.label,
-                          qrData: jsonString,
-                        ),
+                    builder: (context) => ShareChannelDialog(
+                      channelName: channel.label,
+                      qrData: jsonString,
+                    ),
                   );
                 },
               );
@@ -162,8 +158,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     // But here, if senderId != peerUuid, assume it's me.
 
                     return Align(
-                      alignment:
-                          isMe ? Alignment.centerRight : Alignment.centerLeft,
+                      alignment: isMe
+                          ? Alignment.centerRight
+                          : Alignment.centerLeft,
                       child: Container(
                         margin: const EdgeInsets.symmetric(
                           horizontal: 12,
@@ -171,14 +168,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         ),
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
-                          color:
-                              isMe
-                                  ? Theme.of(
-                                    context,
-                                  ).colorScheme.primaryContainer
-                                  : Theme.of(
-                                    context,
-                                  ).colorScheme.surfaceContainerHighest,
+                          color: isMe
+                              ? Theme.of(context).colorScheme.primaryContainer
+                              : Theme.of(
+                                  context,
+                                ).colorScheme.surfaceContainerHighest,
                           borderRadius: BorderRadius.circular(16),
                         ),
                         child: Text(msg.content),
@@ -244,6 +238,7 @@ final channelProvider = FutureProvider.family<Channel?, String>((
   uuid,
 ) async {
   final db = ref.watch(dbProvider);
-  return (db.select(db.channels)
-    ..where((t) => t.uuid.equals(uuid))).getSingleOrNull();
+  return (db.select(
+    db.channels,
+  )..where((t) => t.uuid.equals(uuid))).getSingleOrNull();
 });

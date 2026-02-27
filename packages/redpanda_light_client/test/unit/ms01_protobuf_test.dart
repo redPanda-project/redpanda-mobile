@@ -13,14 +13,13 @@ void main() {
       final nonce = Uint8List.fromList(List.generate(16, (i) => i + 50));
       final sig = Uint8List.fromList(List.generate(64, (i) => i));
 
-      final request =
-          FetchRequest()
-            ..ohId = ohId
-            ..limit = 50
-            ..cursor = cursor
-            ..timestampMs = fixnum.Int64(1700000000000)
-            ..nonce = nonce
-            ..signature = sig;
+      final request = FetchRequest()
+        ..ohId = ohId
+        ..limit = 50
+        ..cursor = cursor
+        ..timestampMs = fixnum.Int64(1700000000000)
+        ..nonce = nonce
+        ..signature = sig;
 
       final buffer = request.writeToBuffer();
       final decoded = FetchRequest.fromBuffer(buffer);
@@ -34,39 +33,36 @@ void main() {
     });
 
     test('FetchResponse with MailItems', () {
-      final item1 =
-          MailItem()
-            ..messageId = Uint8List.fromList([
-              0x6D,
-              0x73,
-              0x67,
-              0x2D,
-              0x30,
-              0x30,
-              0x31,
-            ])
-            ..payload = Uint8List.fromList([1, 2, 3, 4, 5])
-            ..receivedAtMs = fixnum.Int64(1700000001000);
+      final item1 = MailItem()
+        ..messageId = Uint8List.fromList([
+          0x6D,
+          0x73,
+          0x67,
+          0x2D,
+          0x30,
+          0x30,
+          0x31,
+        ])
+        ..payload = Uint8List.fromList([1, 2, 3, 4, 5])
+        ..receivedAtMs = fixnum.Int64(1700000001000);
 
-      final item2 =
-          MailItem()
-            ..messageId = Uint8List.fromList([
-              0x6D,
-              0x73,
-              0x67,
-              0x2D,
-              0x30,
-              0x30,
-              0x32,
-            ])
-            ..payload = Uint8List.fromList([6, 7, 8])
-            ..receivedAtMs = fixnum.Int64(1700000002000);
+      final item2 = MailItem()
+        ..messageId = Uint8List.fromList([
+          0x6D,
+          0x73,
+          0x67,
+          0x2D,
+          0x30,
+          0x30,
+          0x32,
+        ])
+        ..payload = Uint8List.fromList([6, 7, 8])
+        ..receivedAtMs = fixnum.Int64(1700000002000);
 
-      final response =
-          FetchResponse()
-            ..status = Status.OK
-            ..nextCursor = fixnum.Int64(42)
-            ..items.addAll([item1, item2]);
+      final response = FetchResponse()
+        ..status = Status.OK
+        ..nextCursor = fixnum.Int64(42)
+        ..items.addAll([item1, item2]);
 
       final buffer = response.writeToBuffer();
       final decoded = FetchResponse.fromBuffer(buffer);
@@ -87,10 +83,9 @@ void main() {
     });
 
     test('FetchResponse with empty items list', () {
-      final response =
-          FetchResponse()
-            ..status = Status.OK
-            ..nextCursor = fixnum.Int64(0);
+      final response = FetchResponse()
+        ..status = Status.OK
+        ..nextCursor = fixnum.Int64(0);
 
       final decoded = FetchResponse.fromBuffer(response.writeToBuffer());
       expect(decoded.items, isEmpty);
@@ -135,11 +130,10 @@ void main() {
   group('MS01 Protobuf: MailItem', () {
     test('MailItem roundtrip', () {
       final msgId = Uint8List.fromList([0x75, 0x6E, 0x69, 0x71, 0x75, 0x65]);
-      final item =
-          MailItem()
-            ..messageId = msgId
-            ..payload = Uint8List.fromList([0xDE, 0xAD, 0xBE, 0xEF])
-            ..receivedAtMs = fixnum.Int64(1700000000000);
+      final item = MailItem()
+        ..messageId = msgId
+        ..payload = Uint8List.fromList([0xDE, 0xAD, 0xBE, 0xEF])
+        ..receivedAtMs = fixnum.Int64(1700000000000);
 
       final decoded = MailItem.fromBuffer(item.writeToBuffer());
 
@@ -156,14 +150,13 @@ void main() {
       final nonce = Uint8List.fromList(List.generate(16, (i) => i + 100));
       final sig = Uint8List.fromList(List.generate(72, (i) => i));
 
-      final request =
-          RegisterOhRequest()
-            ..ohId = ohId
-            ..ohAuthPublicKey = pubKey
-            ..requestedExpiresAt = fixnum.Int64(1700604800000)
-            ..timestampMs = fixnum.Int64(1700000000000)
-            ..nonce = nonce
-            ..signature = sig;
+      final request = RegisterOhRequest()
+        ..ohId = ohId
+        ..ohAuthPublicKey = pubKey
+        ..requestedExpiresAt = fixnum.Int64(1700604800000)
+        ..timestampMs = fixnum.Int64(1700000000000)
+        ..nonce = nonce
+        ..signature = sig;
 
       final decoded = RegisterOhRequest.fromBuffer(request.writeToBuffer());
 

@@ -45,14 +45,13 @@ class GarlicMessageWrapper {
     final signature = _sign(encryptedPayload, encryptionKeyPair);
 
     // 6. Build Protobuf
-    final proto =
-        GarlicMessage()
-          ..type = type
-          ..destination = (KademliaIdProto()..keyBytes = destination.bytes)
-          ..iv = iv
-          ..senderPublicKey = encryptionKeyPair.publicKeyBytes
-          ..encryptedPayload = encryptedPayload
-          ..signature = signature;
+    final proto = GarlicMessage()
+      ..type = type
+      ..destination = (KademliaIdProto()..keyBytes = destination.bytes)
+      ..iv = iv
+      ..senderPublicKey = encryptionKeyPair.publicKeyBytes
+      ..encryptedPayload = encryptedPayload
+      ..signature = signature;
 
     return GarlicMessageWrapper(proto);
   }

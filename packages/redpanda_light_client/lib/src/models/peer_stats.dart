@@ -33,10 +33,9 @@ class PeerStats {
       averageLatencyMs: json['averageLatencyMs'] as int? ?? 9999,
       successCount: json['successCount'] as int? ?? 0,
       failureCount: json['failureCount'] as int? ?? 0,
-      lastSeen:
-          json['lastSeen'] != null
-              ? DateTime.parse(json['lastSeen'] as String)
-              : null,
+      lastSeen: json['lastSeen'] != null
+          ? DateTime.parse(json['lastSeen'] as String)
+          : null,
     );
   }
 

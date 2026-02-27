@@ -26,9 +26,9 @@ class DriftPeerRepository implements PeerRepository {
     // We need to read current first to update averages properly or use SQL
     // Simple approach: Read, Modify, Write
     try {
-      final existing =
-          await (db.select(db.peers)
-            ..where((t) => t.address.equals(address))).getSingleOrNull();
+      final existing = await (db.select(
+        db.peers,
+      )..where((t) => t.address.equals(address))).getSingleOrNull();
 
       var newAverage = existing?.averageLatencyMs ?? 9999;
       var newSuccess = existing?.successCount ?? 0;
@@ -84,8 +84,8 @@ class DriftPeerRepository implements PeerRepository {
   @override
   List<PeerStats> getBestPeers(int count) {
     // Return sorted list limited by count
-    final sorted =
-        _cache.values.toList()..sort((a, b) => b.score.compareTo(a.score));
+    final sorted = _cache.values.toList()
+      ..sort((a, b) => b.score.compareTo(a.score));
     return sorted.take(count).toList();
   }
 
