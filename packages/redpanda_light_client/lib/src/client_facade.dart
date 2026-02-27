@@ -37,4 +37,12 @@ abstract class RedPandaClient {
 
   /// Stream of incoming messages from background polling.
   Stream<DecryptedMessage> get incomingMessages;
+
+  /// Registers channel encryption keys so [sendMessage] can encrypt outgoing
+  /// messages for [channelId]. Optionally associates a peer OH ID for routing.
+  void addChannelKeys(
+    String channelId,
+    List<int> encryptionKey, {
+    List<int>? peerOhId,
+  });
 }

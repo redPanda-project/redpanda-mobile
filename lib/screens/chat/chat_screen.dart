@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:drift/drift.dart' as drift;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:hex/hex.dart';
 import 'package:redpanda/database/database.dart';
 import 'package:redpanda/screens/chat/share_qr_dialog.dart';
 import 'package:redpanda/shared/providers.dart';
@@ -64,6 +65,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     // Watch messages for this conversation
     final messagesAsync = ref.watch(messagesStreamProvider(widget.peerUuid));
     final channelAsync = ref.watch(channelProvider(widget.peerUuid));
+
+    // Register channel encryption keys when channel data is available
+    channelAsync.whenData((channel) {
+      if (channel != null) {
+        final client = ref.read(redPandaClientProvider);
+        final encKey = HEX.decode(channel.encryptionKey);
+        final peerOhId = channel.peerOhId != null
+            ? HEX.decode(channel.peerOhId!)
+            : null;
+        client.addChannelKeys(channel.uuid, encKey, peerOhId: peerOhId);
+      }
+    });
 
     return Scaffold(
       appBar: AppBar(

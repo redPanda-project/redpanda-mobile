@@ -34,10 +34,23 @@ class OHDescriptor extends Equatable {
 
   /// Deserializes from a JSON-compatible map.
   factory OHDescriptor.fromJsonMap(Map<String, dynamic> map) {
+    final serverEndpoint = map['ep'] as String;
+    final handleId = HEX.decode(map['id'] as String);
+    if (handleId.length != 20) {
+      throw FormatException(
+        'Invalid OHDescriptor.handleId length: expected 20 bytes, got ${handleId.length}',
+      );
+    }
+    final authPublicKey = HEX.decode(map['pk'] as String);
+    if (authPublicKey.length != 65) {
+      throw FormatException(
+        'Invalid OHDescriptor.authPublicKey length: expected 65 bytes, got ${authPublicKey.length}',
+      );
+    }
     return OHDescriptor(
-      serverEndpoint: map['ep'] as String,
-      handleId: HEX.decode(map['id'] as String),
-      authPublicKey: HEX.decode(map['pk'] as String),
+      serverEndpoint: serverEndpoint,
+      handleId: handleId,
+      authPublicKey: authPublicKey,
     );
   }
 

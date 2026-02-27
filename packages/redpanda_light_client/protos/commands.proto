@@ -59,21 +59,24 @@ message JobAck {
 
 message FlaschenpostPut {
     bytes content = 1;
-    bytes oh_id = 2;          // target OH mailbox ID (32 bytes)
 }
 
 // --- Outbound Handle (OH) Registration ---
 
 enum Status {
-    UNKNOWN = 0;
+    STATUS_UNSPECIFIED = 0;
     OK = 1;
-    ERROR = 2;
-    NOT_FOUND = 3;
-    UNAUTHORIZED = 4;
+    INVALID_SIGNATURE = 2;
+    INVALID_TIMESTAMP = 3;
+    REPLAY = 4;
+    NOT_FOUND = 5;
+    RATE_LIMIT = 6;
+    QUOTA_EXCEEDED = 7;
+    BAD_REQUEST = 8;
 }
 
 message RegisterOhRequest {
-    bytes oh_id = 1;                  // 32 bytes
+    bytes oh_id = 1;                  // 20 bytes (KademliaId)
     bytes oh_auth_public_key = 2;     // 65 bytes (brainpoolp256r1 uncompressed)
     int64 requested_expires_at = 3;   // millis since epoch
     int64 timestamp_ms = 4;
@@ -83,30 +86,32 @@ message RegisterOhRequest {
 
 message RegisterOhResponse {
     Status status = 1;
-    int64 expires_at_ms = 2;
+    int64 server_time_ms = 2;
+    int64 expires_at_ms = 3;
 }
 
 // --- Fetch messages from OH mailbox ---
 
 message FetchRequest {
     bytes oh_id = 1;
-    int32 limit = 2;
-    bytes cursor = 3;
+    uint32 limit = 2;
+    uint64 cursor = 3;
     int64 timestamp_ms = 4;
     bytes nonce = 5;
     bytes signature = 6;
 }
 
 message MailItem {
-    string message_id = 1;
-    bytes payload = 2;
-    int64 received_at_ms = 3;
+    bytes message_id = 1;
+    int64 received_at_ms = 2;
+    bytes payload = 3;
 }
 
 message FetchResponse {
     Status status = 1;
-    repeated MailItem items = 2;
-    bytes next_cursor = 3;
+    uint64 next_cursor = 2;
+    repeated MailItem items = 3;
+    int64 server_time_ms = 4;
 }
 
 // Unified envelope for future-proofing or batching, 

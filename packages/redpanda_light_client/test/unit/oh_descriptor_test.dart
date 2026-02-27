@@ -54,5 +54,30 @@ void main() {
       expect(a, equals(b));
       expect(a, isNot(equals(c)));
     });
+
+    test('fromJsonMap rejects invalid handleId length', () {
+      final map = {
+        'ep': 'host:1234',
+        'id': '0102030405', // 5 bytes, not 20
+        'pk':
+            '04${'ab' * 64}', // 65 bytes
+      };
+      expect(
+        () => OHDescriptor.fromJsonMap(map),
+        throwsA(isA<FormatException>()),
+      );
+    });
+
+    test('fromJsonMap rejects invalid authPublicKey length', () {
+      final map = {
+        'ep': 'host:1234',
+        'id': '${'ab' * 20}', // 20 bytes OK
+        'pk': '0102030405', // 5 bytes, not 65
+      };
+      expect(
+        () => OHDescriptor.fromJsonMap(map),
+        throwsA(isA<FormatException>()),
+      );
+    });
   });
 }

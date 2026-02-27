@@ -170,6 +170,7 @@ class RedPandaIsolateClient implements RedPandaClient {
   }
 
   /// Register channel encryption keys in the isolate client.
+  @override
   void addChannelKeys(
     String channelId,
     List<int> encryptionKey, {

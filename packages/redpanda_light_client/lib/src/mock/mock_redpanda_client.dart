@@ -66,4 +66,13 @@ class MockRedPandaClient implements RedPandaClient {
   @override
   Stream<DecryptedMessage> get incomingMessages =>
       _incomingMessageController.stream;
+
+  @override
+  void addChannelKeys(
+    String channelId,
+    List<int> encryptionKey, {
+    List<int>? peerOhId,
+  }) {
+    // Mock: no-op
+  }
 }

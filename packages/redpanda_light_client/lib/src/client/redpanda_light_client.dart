@@ -533,6 +533,9 @@ class RedPandaLightClient implements RedPandaClient {
       await peer.disconnect();
     }
     _peers.clear();
+    _registeredOHs.clear();
+    _pendingResponses.clear();
+    await _incomingMessageController.close();
     _updateStatus(ConnectionStatus.disconnected);
   }
 
@@ -558,6 +561,7 @@ class RedPandaLightClient implements RedPandaClient {
   final Map<String, List<int>> _channelPeerOhIds = {};
 
   /// Register channel encryption info so sendMessage/fetchMessages can use it.
+  @override
   void addChannelKeys(
     String channelId,
     List<int> encryptionKey, {
@@ -603,15 +607,29 @@ class RedPandaLightClient implements RedPandaClient {
     );
     final ciphertext = cipher.process(plaintext);
 
-    // 3. Build payload: [IV (16 bytes)][ciphertext]
-    final payload = Uint8List(iv.length + ciphertext.length);
-    payload.setRange(0, iv.length, iv);
-    payload.setRange(iv.length, payload.length, ciphertext);
+    // 3. Compute HMAC-SHA256 over [IV || ciphertext] for authenticated encryption
+    final macInput = Uint8List(iv.length + ciphertext.length);
+    macInput.setRange(0, iv.length, iv);
+    macInput.setRange(iv.length, macInput.length, ciphertext);
 
-    // 4. Build FlaschenpostPut (no oh_id; backend routes by GarlicMessage destination)
+    final hmac = pc.HMac(pc.SHA256Digest(), 64)
+      ..init(pc.KeyParameter(Uint8List.fromList(encKey)));
+    final mac = hmac.process(macInput);
+
+    // 4. Build payload: [IV (16 bytes)][ciphertext][HMAC-SHA256 (32 bytes)]
+    final payload = Uint8List(iv.length + ciphertext.length + mac.length);
+    payload.setRange(0, iv.length, iv);
+    payload.setRange(iv.length, iv.length + ciphertext.length, ciphertext);
+    payload.setRange(
+      iv.length + ciphertext.length,
+      payload.length,
+      mac,
+    );
+
+    // 5. Build FlaschenpostPut (no oh_id; backend routes by GarlicMessage destination)
     final flaschenpost = FlaschenpostPut()..content = payload;
 
-    // 5. Send to a connected peer (best available)
+    // 6. Send to a connected peer (best available)
     final activePeer = _peers.values
         .where((p) => p.isHandshakeVerified)
         .firstOrNull;

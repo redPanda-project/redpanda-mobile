@@ -56,7 +56,7 @@ void main() {
     });
   });
 
-  group('MS01 AK4: AES-256-CTR encrypt → decrypt roundtrip', () {
+  group('MS01 AK4: AES-256-CTR + HMAC-SHA256 encrypt → decrypt roundtrip', () {
     test('encrypt and decrypt produces original plaintext', () {
       final channel = Channel.generate('Test');
       final encKey = Uint8List.fromList(channel.encryptionKey);
@@ -75,14 +75,46 @@ void main() {
       cipher.init(true, pc.ParametersWithIV(pc.KeyParameter(encKey), iv));
       final ciphertext = cipher.process(plaintextBytes);
 
-      // Build payload: [IV (16)][ciphertext]
-      final payload = Uint8List(iv.length + ciphertext.length);
-      payload.setRange(0, iv.length, iv);
-      payload.setRange(iv.length, payload.length, ciphertext);
+      // Compute HMAC-SHA256
+      final macInput = Uint8List(iv.length + ciphertext.length);
+      macInput.setRange(0, iv.length, iv);
+      macInput.setRange(iv.length, macInput.length, ciphertext);
+      final hmac = pc.HMac(pc.SHA256Digest(), 64)
+        ..init(pc.KeyParameter(encKey));
+      final mac = hmac.process(macInput);
 
-      // Decrypt: same logic as fetchMessages()
+      // Build payload: [IV (16)][ciphertext][HMAC (32)]
+      final payload =
+          Uint8List(iv.length + ciphertext.length + mac.length);
+      payload.setRange(0, iv.length, iv);
+      payload.setRange(iv.length, iv.length + ciphertext.length, ciphertext);
+      payload.setRange(
+        iv.length + ciphertext.length,
+        payload.length,
+        mac,
+      );
+
+      // Verify: payload is [IV (16)][ciphertext][HMAC (32)]
+      expect(payload.length, equals(16 + plaintextBytes.length + 32));
+
+      // Decrypt: extract IV, ciphertext, and HMAC
       final extractedIv = payload.sublist(0, 16);
-      final extractedCiphertext = payload.sublist(16);
+      final extractedCiphertext = payload.sublist(16, payload.length - 32);
+      final extractedMac = payload.sublist(payload.length - 32);
+
+      // Verify HMAC before decrypting
+      final verifyInput =
+          Uint8List(extractedIv.length + extractedCiphertext.length);
+      verifyInput.setRange(0, extractedIv.length, extractedIv);
+      verifyInput.setRange(
+        extractedIv.length,
+        verifyInput.length,
+        extractedCiphertext,
+      );
+      final verifyHmac = pc.HMac(pc.SHA256Digest(), 64)
+        ..init(pc.KeyParameter(encKey));
+      final expectedMac = verifyHmac.process(verifyInput);
+      expect(extractedMac, equals(expectedMac));
 
       final decipher = pc.CTRStreamCipher(pc.AESEngine());
       decipher.init(
@@ -94,6 +126,58 @@ void main() {
       );
 
       expect(utf8.decode(decrypted), equals(plaintext));
+    });
+
+    test('tampered ciphertext is detected by HMAC verification', () {
+      final encKey = Uint8List.fromList(List.generate(32, (i) => i));
+      final plaintext = Uint8List.fromList(utf8.encode('Secret message'));
+      final iv = Uint8List.fromList(List.generate(16, (i) => i));
+
+      // Encrypt
+      final cipher = pc.CTRStreamCipher(pc.AESEngine());
+      cipher.init(true, pc.ParametersWithIV(pc.KeyParameter(encKey), iv));
+      final ciphertext = cipher.process(plaintext);
+
+      // Compute HMAC
+      final macInput = Uint8List(iv.length + ciphertext.length);
+      macInput.setRange(0, iv.length, iv);
+      macInput.setRange(iv.length, macInput.length, ciphertext);
+      final hmac = pc.HMac(pc.SHA256Digest(), 64)
+        ..init(pc.KeyParameter(encKey));
+      final mac = hmac.process(macInput);
+
+      // Build payload
+      final payload =
+          Uint8List(iv.length + ciphertext.length + mac.length);
+      payload.setRange(0, iv.length, iv);
+      payload.setRange(iv.length, iv.length + ciphertext.length, ciphertext);
+      payload.setRange(
+        iv.length + ciphertext.length,
+        payload.length,
+        mac,
+      );
+
+      // Tamper with ciphertext (flip a bit)
+      payload[17] ^= 0xFF;
+
+      // Verify: HMAC should not match
+      final extractedIv = payload.sublist(0, 16);
+      final extractedCiphertext = payload.sublist(16, payload.length - 32);
+      final extractedMac = payload.sublist(payload.length - 32);
+
+      final verifyInput =
+          Uint8List(extractedIv.length + extractedCiphertext.length);
+      verifyInput.setRange(0, extractedIv.length, extractedIv);
+      verifyInput.setRange(
+        extractedIv.length,
+        verifyInput.length,
+        extractedCiphertext,
+      );
+      final verifyHmac = pc.HMac(pc.SHA256Digest(), 64)
+        ..init(pc.KeyParameter(encKey));
+      final expectedMac = verifyHmac.process(verifyInput);
+
+      expect(extractedMac, isNot(equals(expectedMac)));
     });
 
     test('different IVs produce different ciphertexts', () {
