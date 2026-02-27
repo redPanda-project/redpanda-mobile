@@ -3,6 +3,7 @@ name: Pre-Push Validation
 description: >
   Mirrors the Flutter CI pipeline exactly. Run this before every push to
   catch formatting, analysis, and test failures locally — avoiding red CI runs.
+  No push is allowed without a successful run.
 ---
 
 # Pre-Push Validation
@@ -12,14 +13,20 @@ description: >
 This skill reproduces every step of `.github/workflows/flutter_ci.yml`
 so failures are caught **before** pushing to GitHub.
 
+> **Rule:** Always run this validation **before** pushing or committing
+> changes. Do not skip any step.
+
 ## When to Run
 
 Run this skill **before every `report_progress`** (which commits and pushes).
 If any step fails, fix the issue before pushing.
 
+---
+
 ## Pipeline Steps
 
-Execute these steps **in order**. Stop on the first failure.
+Execute these steps **in order**. On any failure, stop immediately,
+fix the problem, and restart the validation from the beginning.
 
 ### 0. Environment Setup
 
@@ -33,30 +40,26 @@ curl -fsSL https://storage.googleapis.com/flutter_infra_release/releases/stable/
 export PATH="/opt/flutter/bin:/opt/flutter/bin/cache/dart-sdk/bin:$PATH"
 ```
 
-### 1. Install Dependencies (Light Client)
+### 1 · Light Client Package (`packages/redpanda_light_client`)
 
 ```bash
+# 1a) Install dependencies
 cd packages/redpanda_light_client
 flutter pub get
-```
 
-### 2. Check Formatting (Light Client)
-
-```bash
-cd packages/redpanda_light_client
+# 1b) Check formatting
 dart format --output=none --set-exit-if-changed .
+
+# 1c) Static analysis
+flutter analyze
+
+# 1d) Run tests
+flutter test
 ```
 
-> **Important:** This checks ALL files in the directory, not just changed files.
+> **Important:** Formatting checks ALL files in the directory, not just changed files.
 > If any file has formatting issues (including pre-existing ones from main),
 > this step fails.
-
-### 3. Analyze (Light Client)
-
-```bash
-cd packages/redpanda_light_client
-flutter analyze
-```
 
 > **Important:** `flutter analyze` treats `info` level issues as errors
 > (exit code 1). Common issues:
@@ -64,52 +67,30 @@ flutter analyze
 > - `non_abstract_class_inherits_abstract_member` — protobuf classes need `clone()` and `copyWith()`
 > - `use_super_parameters` — use `super.v` instead of positional → `super(v, n)`
 
-### 4. Run Tests (Light Client)
+### 2 · Main App (Project Root)
 
 ```bash
-cd packages/redpanda_light_client
-flutter test
-```
-
-> E2E tests with `@Tags(['e2e'])` are skipped if the backend JAR is not present.
-
-### 5. Install Dependencies (App)
-
-```bash
-cd <repo_root>
+# 2a) Install dependencies
+cd ../../  # Back to project root
 flutter pub get
-```
 
-### 6. Check Formatting (App)
-
-```bash
-cd <repo_root>
+# 2b) Check formatting
 dart format --output=none --set-exit-if-changed .
-```
 
-### 7. Generate Code (App)
-
-```bash
-cd <repo_root>
+# 2c) Code generation (Drift, Freezed, etc.)
 dart run build_runner build --delete-conflicting-outputs
+
+# 2d) Static analysis
+flutter analyze
+
+# 2e) Run tests (if test/ directory exists)
+if [ -d "test" ]; then flutter test; else echo "No test directory, skipping."; fi
 ```
 
 > This regenerates `database.g.dart` and other generated files. If the generated
 > output differs from what's committed, the next analyze step may fail.
 
-### 8. Analyze (App)
-
-```bash
-cd <repo_root>
-flutter analyze
-```
-
-### 9. Run Tests (App)
-
-```bash
-cd <repo_root>
-if [ -d "test" ]; then flutter test; else echo "No test directory, skipping."; fi
-```
+---
 
 ## Quick-Run Script
 
@@ -151,6 +132,8 @@ if [ -d "test" ]; then flutter test; else echo "No tests."; fi
 echo "✅ All checks passed!"
 ```
 
+---
+
 ## Common Failure Patterns
 
 | Symptom | Fix |
@@ -160,3 +143,21 @@ echo "✅ All checks passed!"
 | `non_abstract_class_inherits_abstract_member` | Add `clone()` and `copyWith()` to protobuf `GeneratedMessage` subclasses |
 | `use_super_parameters` | Use `super.paramName` instead of positional forwarding |
 | `build_runner` output differs | Commit the regenerated `.g.dart` files |
+| Analysis errors / warnings | Fix source code, re-run `flutter analyze` |
+| Tests fail | Fix tests or adjust code, re-run `flutter test` |
+
+## Checklist
+
+Use this checklist to track progress:
+
+- [ ] Light Client: `flutter pub get`
+- [ ] Light Client: `dart format --output=none --set-exit-if-changed .`
+- [ ] Light Client: `flutter analyze`
+- [ ] Light Client: `flutter test`
+- [ ] App: `flutter pub get`
+- [ ] App: `dart format --output=none --set-exit-if-changed .`
+- [ ] App: `dart run build_runner build --delete-conflicting-outputs`
+- [ ] App: `flutter analyze`
+- [ ] App: `flutter test` (if test/ exists)
+
+**Only when all items are ✅ may you push.**
