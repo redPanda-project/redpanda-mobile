@@ -30,7 +30,7 @@ abstract class RedPandaClient {
 
   /// Registers an Outbound Handle on a connected Full Node.
   /// Returns an [OHRegistration] on success.
-  Future<OHRegistration> registerOutboundHandle();
+  Future<OHRegistration> registerOutboundHandle({String? channelId});
 
   /// Fetches messages from the given OH mailbox.
   Future<List<DecryptedMessage>> fetchMessages(OHRegistration oh);

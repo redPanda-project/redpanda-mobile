@@ -155,7 +155,7 @@ class RedPandaIsolateClient implements RedPandaClient {
   }
 
   @override
-  Future<OHRegistration> registerOutboundHandle() async {
+  Future<OHRegistration> registerOutboundHandle({String? channelId}) async {
     _send(CmdRegisterOutboundHandle());
     // TODO: Wait for response from isolate with actual registration
     throw UnimplementedError(

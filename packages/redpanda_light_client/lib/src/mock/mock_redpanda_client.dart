@@ -54,7 +54,7 @@ class MockRedPandaClient implements RedPandaClient {
   );
 
   @override
-  Future<OHRegistration> registerOutboundHandle() async {
+  Future<OHRegistration> registerOutboundHandle({String? channelId}) async {
     throw UnimplementedError('Mock OH registration not available');
   }
 

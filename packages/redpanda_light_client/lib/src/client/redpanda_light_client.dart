@@ -649,7 +649,7 @@ class RedPandaLightClient implements RedPandaClient {
   }
 
   @override
-  Future<OHRegistration> registerOutboundHandle() async {
+  Future<OHRegistration> registerOutboundHandle({String? channelId}) async {
     final keypair = OHKeypair.generate();
     final random = Random.secure();
     final ohId = Uint8List.fromList(
@@ -701,6 +701,7 @@ class RedPandaLightClient implements RedPandaClient {
       ohId: ohId.toList(),
       keypair: keypair,
       expiresAtMs: expiresAt.millisecondsSinceEpoch,
+      channelId: channelId,
     );
 
     _registeredOHs.add(registration);
@@ -748,19 +749,123 @@ class RedPandaLightClient implements RedPandaClient {
         .where((p) => p.isHandshakeVerified)
         .firstOrNull;
 
-    if (activePeer != null) {
-      final buffer = request.writeToBuffer();
-      print(
-        'RedPandaLightClient: fetchMessages() serialized ${buffer.length} bytes',
-      );
-      activePeer.sendCommand(152, Uint8List.fromList(buffer));
-    } else {
+    if (activePeer == null) {
       print('RedPandaLightClient: fetchMessages() no active peer available');
+      return [];
     }
 
-    // TODO: Parse FetchResponse when backend is available
-    // For now return empty (no backend yet)
-    return [];
+    // Register completer for command 153 (OUTBOUND_FETCH_RES) before sending
+    final completer = Completer<List<int>>();
+    _pendingResponses[153] = completer;
+
+    final buffer = request.writeToBuffer();
+    print(
+      'RedPandaLightClient: fetchMessages() serialized ${buffer.length} bytes',
+    );
+    activePeer.sendCommand(152, Uint8List.fromList(buffer));
+
+    // Await the response
+    final List<int> responseBytes;
+    try {
+      responseBytes = await completer.future.timeout(
+        const Duration(seconds: 10),
+      );
+    } on TimeoutException {
+      _pendingResponses.remove(153);
+      print(
+        'RedPandaLightClient: fetchMessages() timed out waiting for response',
+      );
+      return [];
+    }
+
+    // Parse FetchResponse protobuf
+    final response = FetchResponse.fromBuffer(responseBytes);
+    print(
+      'RedPandaLightClient: fetchMessages() status=${response.status} items=${response.items.length}',
+    );
+
+    if (response.status != Status.OK) {
+      print(
+        'RedPandaLightClient: fetchMessages() non-OK status: ${response.status}',
+      );
+      return [];
+    }
+
+    // Update cursor for next fetch
+    oh.lastCursor = response.nextCursor.toInt();
+
+    // Look up the channel encryption key for this OH
+    final encKey = oh.channelId != null
+        ? _channelEncryptionKeys[oh.channelId]
+        : null;
+
+    if (encKey == null) {
+      print(
+        'RedPandaLightClient: fetchMessages() no encryption key for channelId=${oh.channelId}',
+      );
+      return [];
+    }
+
+    // Decrypt each MailItem
+    final messages = <DecryptedMessage>[];
+    for (final item in response.items) {
+      try {
+        final content = _decryptPayload(item.payload, encKey);
+        messages.add(
+          DecryptedMessage(
+            id: item.messageId
+                .map((b) => b.toRadixString(16).padLeft(2, '0'))
+                .join(),
+            content: content,
+            receivedAtMs: item.receivedAtMs.toInt(),
+          ),
+        );
+      } catch (e) {
+        print('RedPandaLightClient: failed to decrypt mail item: $e');
+      }
+    }
+
+    return messages;
+  }
+
+  /// Decrypts an encrypted payload: [IV(16)][ciphertext][HMAC-SHA256(32)]
+  String _decryptPayload(List<int> payload, List<int> encKey) {
+    if (payload.length < 49) {
+      throw ArgumentError('Payload too short: ${payload.length} bytes');
+    }
+
+    final iv = Uint8List.fromList(payload.sublist(0, 16));
+    final ciphertext = Uint8List.fromList(
+      payload.sublist(16, payload.length - 32),
+    );
+    final mac = Uint8List.fromList(payload.sublist(payload.length - 32));
+
+    // Verify HMAC-SHA256 over [IV || ciphertext]
+    final macInput = Uint8List(iv.length + ciphertext.length);
+    macInput.setRange(0, iv.length, iv);
+    macInput.setRange(iv.length, macInput.length, ciphertext);
+
+    final hmac = pc.HMac(pc.SHA256Digest(), 64)
+      ..init(pc.KeyParameter(Uint8List.fromList(encKey)));
+    final expectedMac = hmac.process(macInput);
+
+    bool macValid = mac.length == expectedMac.length;
+    for (int i = 0; macValid && i < mac.length; i++) {
+      macValid = mac[i] == expectedMac[i];
+    }
+    if (!macValid) {
+      throw StateError('HMAC verification failed');
+    }
+
+    // AES-256-CTR decrypt
+    final cipher = pc.CTRStreamCipher(pc.AESEngine());
+    cipher.init(
+      false,
+      pc.ParametersWithIV(pc.KeyParameter(Uint8List.fromList(encKey)), iv),
+    );
+    final plaintext = cipher.process(ciphertext);
+
+    return utf8.decode(plaintext);
   }
 
   void _startPolling() {
