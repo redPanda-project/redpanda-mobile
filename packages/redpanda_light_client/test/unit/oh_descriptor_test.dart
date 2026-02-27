@@ -70,7 +70,7 @@ void main() {
     test('fromJsonMap rejects invalid authPublicKey length', () {
       final map = {
         'ep': 'host:1234',
-        'id': '${'ab' * 20}', // 20 bytes OK
+        'id': 'ab' * 20, // 20 bytes OK
         'pk': '0102030405', // 5 bytes, not 65
       };
       expect(

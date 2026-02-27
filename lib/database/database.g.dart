@@ -1744,6 +1744,422 @@ class PeersCompanion extends UpdateCompanion<Peer> {
   }
 }
 
+class $OutboundHandlesTable extends OutboundHandles
+    with TableInfo<$OutboundHandlesTable, OutboundHandle> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $OutboundHandlesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+    'id',
+    aliasedName,
+    false,
+    hasAutoIncrement: true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'PRIMARY KEY AUTOINCREMENT',
+    ),
+  );
+  static const VerificationMeta _ohIdMeta = const VerificationMeta('ohId');
+  @override
+  late final GeneratedColumn<String> ohId = GeneratedColumn<String>(
+    'oh_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _keypairBytesMeta = const VerificationMeta(
+    'keypairBytes',
+  );
+  @override
+  late final GeneratedColumn<Uint8List> keypairBytes =
+      GeneratedColumn<Uint8List>(
+        'keypair_bytes',
+        aliasedName,
+        false,
+        type: DriftSqlType.blob,
+        requiredDuringInsert: true,
+      );
+  static const VerificationMeta _serverEndpointMeta = const VerificationMeta(
+    'serverEndpoint',
+  );
+  @override
+  late final GeneratedColumn<String> serverEndpoint = GeneratedColumn<String>(
+    'server_endpoint',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _expiresAtMeta = const VerificationMeta(
+    'expiresAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> expiresAt = GeneratedColumn<DateTime>(
+    'expires_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _channelIdMeta = const VerificationMeta(
+    'channelId',
+  );
+  @override
+  late final GeneratedColumn<String> channelId = GeneratedColumn<String>(
+    'channel_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    ohId,
+    keypairBytes,
+    serverEndpoint,
+    expiresAt,
+    channelId,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'outbound_handles';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<OutboundHandle> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('oh_id')) {
+      context.handle(
+        _ohIdMeta,
+        ohId.isAcceptableOrUnknown(data['oh_id']!, _ohIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_ohIdMeta);
+    }
+    if (data.containsKey('keypair_bytes')) {
+      context.handle(
+        _keypairBytesMeta,
+        keypairBytes.isAcceptableOrUnknown(
+          data['keypair_bytes']!,
+          _keypairBytesMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_keypairBytesMeta);
+    }
+    if (data.containsKey('server_endpoint')) {
+      context.handle(
+        _serverEndpointMeta,
+        serverEndpoint.isAcceptableOrUnknown(
+          data['server_endpoint']!,
+          _serverEndpointMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_serverEndpointMeta);
+    }
+    if (data.containsKey('expires_at')) {
+      context.handle(
+        _expiresAtMeta,
+        expiresAt.isAcceptableOrUnknown(data['expires_at']!, _expiresAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_expiresAtMeta);
+    }
+    if (data.containsKey('channel_id')) {
+      context.handle(
+        _channelIdMeta,
+        channelId.isAcceptableOrUnknown(data['channel_id']!, _channelIdMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  OutboundHandle map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return OutboundHandle(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}id'],
+      )!,
+      ohId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}oh_id'],
+      )!,
+      keypairBytes: attachedDatabase.typeMapping.read(
+        DriftSqlType.blob,
+        data['${effectivePrefix}keypair_bytes'],
+      )!,
+      serverEndpoint: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}server_endpoint'],
+      )!,
+      expiresAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}expires_at'],
+      )!,
+      channelId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}channel_id'],
+      ),
+    );
+  }
+
+  @override
+  $OutboundHandlesTable createAlias(String alias) {
+    return $OutboundHandlesTable(attachedDatabase, alias);
+  }
+}
+
+class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
+  final int id;
+  final String ohId;
+  final Uint8List keypairBytes;
+  final String serverEndpoint;
+  final DateTime expiresAt;
+  final String? channelId;
+  const OutboundHandle({
+    required this.id,
+    required this.ohId,
+    required this.keypairBytes,
+    required this.serverEndpoint,
+    required this.expiresAt,
+    this.channelId,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['oh_id'] = Variable<String>(ohId);
+    map['keypair_bytes'] = Variable<Uint8List>(keypairBytes);
+    map['server_endpoint'] = Variable<String>(serverEndpoint);
+    map['expires_at'] = Variable<DateTime>(expiresAt);
+    if (!nullToAbsent || channelId != null) {
+      map['channel_id'] = Variable<String>(channelId);
+    }
+    return map;
+  }
+
+  OutboundHandlesCompanion toCompanion(bool nullToAbsent) {
+    return OutboundHandlesCompanion(
+      id: Value(id),
+      ohId: Value(ohId),
+      keypairBytes: Value(keypairBytes),
+      serverEndpoint: Value(serverEndpoint),
+      expiresAt: Value(expiresAt),
+      channelId: channelId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(channelId),
+    );
+  }
+
+  factory OutboundHandle.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return OutboundHandle(
+      id: serializer.fromJson<int>(json['id']),
+      ohId: serializer.fromJson<String>(json['ohId']),
+      keypairBytes: serializer.fromJson<Uint8List>(json['keypairBytes']),
+      serverEndpoint: serializer.fromJson<String>(json['serverEndpoint']),
+      expiresAt: serializer.fromJson<DateTime>(json['expiresAt']),
+      channelId: serializer.fromJson<String?>(json['channelId']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'ohId': serializer.toJson<String>(ohId),
+      'keypairBytes': serializer.toJson<Uint8List>(keypairBytes),
+      'serverEndpoint': serializer.toJson<String>(serverEndpoint),
+      'expiresAt': serializer.toJson<DateTime>(expiresAt),
+      'channelId': serializer.toJson<String?>(channelId),
+    };
+  }
+
+  OutboundHandle copyWith({
+    int? id,
+    String? ohId,
+    Uint8List? keypairBytes,
+    String? serverEndpoint,
+    DateTime? expiresAt,
+    Value<String?> channelId = const Value.absent(),
+  }) => OutboundHandle(
+    id: id ?? this.id,
+    ohId: ohId ?? this.ohId,
+    keypairBytes: keypairBytes ?? this.keypairBytes,
+    serverEndpoint: serverEndpoint ?? this.serverEndpoint,
+    expiresAt: expiresAt ?? this.expiresAt,
+    channelId: channelId.present ? channelId.value : this.channelId,
+  );
+  OutboundHandle copyWithCompanion(OutboundHandlesCompanion data) {
+    return OutboundHandle(
+      id: data.id.present ? data.id.value : this.id,
+      ohId: data.ohId.present ? data.ohId.value : this.ohId,
+      keypairBytes: data.keypairBytes.present
+          ? data.keypairBytes.value
+          : this.keypairBytes,
+      serverEndpoint: data.serverEndpoint.present
+          ? data.serverEndpoint.value
+          : this.serverEndpoint,
+      expiresAt: data.expiresAt.present ? data.expiresAt.value : this.expiresAt,
+      channelId: data.channelId.present ? data.channelId.value : this.channelId,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('OutboundHandle(')
+          ..write('id: $id, ')
+          ..write('ohId: $ohId, ')
+          ..write('keypairBytes: $keypairBytes, ')
+          ..write('serverEndpoint: $serverEndpoint, ')
+          ..write('expiresAt: $expiresAt, ')
+          ..write('channelId: $channelId')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    ohId,
+    $driftBlobEquality.hash(keypairBytes),
+    serverEndpoint,
+    expiresAt,
+    channelId,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is OutboundHandle &&
+          other.id == this.id &&
+          other.ohId == this.ohId &&
+          $driftBlobEquality.equals(other.keypairBytes, this.keypairBytes) &&
+          other.serverEndpoint == this.serverEndpoint &&
+          other.expiresAt == this.expiresAt &&
+          other.channelId == this.channelId);
+}
+
+class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
+  final Value<int> id;
+  final Value<String> ohId;
+  final Value<Uint8List> keypairBytes;
+  final Value<String> serverEndpoint;
+  final Value<DateTime> expiresAt;
+  final Value<String?> channelId;
+  const OutboundHandlesCompanion({
+    this.id = const Value.absent(),
+    this.ohId = const Value.absent(),
+    this.keypairBytes = const Value.absent(),
+    this.serverEndpoint = const Value.absent(),
+    this.expiresAt = const Value.absent(),
+    this.channelId = const Value.absent(),
+  });
+  OutboundHandlesCompanion.insert({
+    this.id = const Value.absent(),
+    required String ohId,
+    required Uint8List keypairBytes,
+    required String serverEndpoint,
+    required DateTime expiresAt,
+    this.channelId = const Value.absent(),
+  }) : ohId = Value(ohId),
+       keypairBytes = Value(keypairBytes),
+       serverEndpoint = Value(serverEndpoint),
+       expiresAt = Value(expiresAt);
+  static Insertable<OutboundHandle> custom({
+    Expression<int>? id,
+    Expression<String>? ohId,
+    Expression<Uint8List>? keypairBytes,
+    Expression<String>? serverEndpoint,
+    Expression<DateTime>? expiresAt,
+    Expression<String>? channelId,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (ohId != null) 'oh_id': ohId,
+      if (keypairBytes != null) 'keypair_bytes': keypairBytes,
+      if (serverEndpoint != null) 'server_endpoint': serverEndpoint,
+      if (expiresAt != null) 'expires_at': expiresAt,
+      if (channelId != null) 'channel_id': channelId,
+    });
+  }
+
+  OutboundHandlesCompanion copyWith({
+    Value<int>? id,
+    Value<String>? ohId,
+    Value<Uint8List>? keypairBytes,
+    Value<String>? serverEndpoint,
+    Value<DateTime>? expiresAt,
+    Value<String?>? channelId,
+  }) {
+    return OutboundHandlesCompanion(
+      id: id ?? this.id,
+      ohId: ohId ?? this.ohId,
+      keypairBytes: keypairBytes ?? this.keypairBytes,
+      serverEndpoint: serverEndpoint ?? this.serverEndpoint,
+      expiresAt: expiresAt ?? this.expiresAt,
+      channelId: channelId ?? this.channelId,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (ohId.present) {
+      map['oh_id'] = Variable<String>(ohId.value);
+    }
+    if (keypairBytes.present) {
+      map['keypair_bytes'] = Variable<Uint8List>(keypairBytes.value);
+    }
+    if (serverEndpoint.present) {
+      map['server_endpoint'] = Variable<String>(serverEndpoint.value);
+    }
+    if (expiresAt.present) {
+      map['expires_at'] = Variable<DateTime>(expiresAt.value);
+    }
+    if (channelId.present) {
+      map['channel_id'] = Variable<String>(channelId.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('OutboundHandlesCompanion(')
+          ..write('id: $id, ')
+          ..write('ohId: $ohId, ')
+          ..write('keypairBytes: $keypairBytes, ')
+          ..write('serverEndpoint: $serverEndpoint, ')
+          ..write('expiresAt: $expiresAt, ')
+          ..write('channelId: $channelId')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -2873,423 +3289,6 @@ typedef $$PeersTableProcessedTableManager =
       Peer,
       PrefetchHooks Function()
     >;
-
-class $OutboundHandlesTable extends OutboundHandles
-    with TableInfo<$OutboundHandlesTable, OutboundHandle> {
-  @override
-  final GeneratedDatabase attachedDatabase;
-  final String? _alias;
-  $OutboundHandlesTable(this.attachedDatabase, [this._alias]);
-  static const VerificationMeta _idMeta = const VerificationMeta('id');
-  @override
-  late final GeneratedColumn<int> id = GeneratedColumn<int>(
-    'id',
-    aliasedName,
-    false,
-    hasAutoIncrement: true,
-    type: DriftSqlType.int,
-    requiredDuringInsert: false,
-    defaultConstraints: GeneratedColumn.constraintIsAlways(
-      'PRIMARY KEY AUTOINCREMENT',
-    ),
-  );
-  static const VerificationMeta _ohIdMeta = const VerificationMeta('ohId');
-  @override
-  late final GeneratedColumn<String> ohId = GeneratedColumn<String>(
-    'oh_id',
-    aliasedName,
-    false,
-    type: DriftSqlType.string,
-    requiredDuringInsert: true,
-  );
-  static const VerificationMeta _keypairBytesMeta = const VerificationMeta(
-    'keypairBytes',
-  );
-  @override
-  late final GeneratedColumn<Uint8List> keypairBytes =
-      GeneratedColumn<Uint8List>(
-        'keypair_bytes',
-        aliasedName,
-        false,
-        type: DriftSqlType.blob,
-        requiredDuringInsert: true,
-      );
-  static const VerificationMeta _serverEndpointMeta = const VerificationMeta(
-    'serverEndpoint',
-  );
-  @override
-  late final GeneratedColumn<String> serverEndpoint = GeneratedColumn<String>(
-    'server_endpoint',
-    aliasedName,
-    false,
-    type: DriftSqlType.string,
-    requiredDuringInsert: true,
-  );
-  static const VerificationMeta _expiresAtMeta = const VerificationMeta(
-    'expiresAt',
-  );
-  @override
-  late final GeneratedColumn<DateTime> expiresAt = GeneratedColumn<DateTime>(
-    'expires_at',
-    aliasedName,
-    false,
-    type: DriftSqlType.dateTime,
-    requiredDuringInsert: true,
-  );
-  static const VerificationMeta _channelIdMeta = const VerificationMeta(
-    'channelId',
-  );
-  @override
-  late final GeneratedColumn<String> channelId = GeneratedColumn<String>(
-    'channel_id',
-    aliasedName,
-    true,
-    type: DriftSqlType.string,
-    requiredDuringInsert: false,
-  );
-  @override
-  List<GeneratedColumn> get $columns => [
-    id,
-    ohId,
-    keypairBytes,
-    serverEndpoint,
-    expiresAt,
-    channelId,
-  ];
-  @override
-  String get aliasedName => _alias ?? actualTableName;
-  @override
-  String get actualTableName => $name;
-  static const String $name = 'outbound_handles';
-  @override
-  VerificationContext validateIntegrity(
-    Insertable<OutboundHandle> instance, {
-    bool isInserting = false,
-  }) {
-    final context = VerificationContext();
-    final data = instance.toColumns(true);
-    if (data.containsKey('id')) {
-      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
-    }
-    if (data.containsKey('oh_id')) {
-      context.handle(
-        _ohIdMeta,
-        ohId.isAcceptableOrUnknown(data['oh_id']!, _ohIdMeta),
-      );
-    } else if (isInserting) {
-      context.missing(_ohIdMeta);
-    }
-    if (data.containsKey('keypair_bytes')) {
-      context.handle(
-        _keypairBytesMeta,
-        keypairBytes.isAcceptableOrUnknown(
-          data['keypair_bytes']!,
-          _keypairBytesMeta,
-        ),
-      );
-    } else if (isInserting) {
-      context.missing(_keypairBytesMeta);
-    }
-    if (data.containsKey('server_endpoint')) {
-      context.handle(
-        _serverEndpointMeta,
-        serverEndpoint.isAcceptableOrUnknown(
-          data['server_endpoint']!,
-          _serverEndpointMeta,
-        ),
-      );
-    } else if (isInserting) {
-      context.missing(_serverEndpointMeta);
-    }
-    if (data.containsKey('expires_at')) {
-      context.handle(
-        _expiresAtMeta,
-        expiresAt.isAcceptableOrUnknown(data['expires_at']!, _expiresAtMeta),
-      );
-    } else if (isInserting) {
-      context.missing(_expiresAtMeta);
-    }
-    if (data.containsKey('channel_id')) {
-      context.handle(
-        _channelIdMeta,
-        channelId.isAcceptableOrUnknown(data['channel_id']!, _channelIdMeta),
-      );
-    }
-    return context;
-  }
-
-  @override
-  Set<GeneratedColumn> get $primaryKey => {id};
-  @override
-  OutboundHandle map(Map<String, dynamic> data, {String? tablePrefix}) {
-    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
-    return OutboundHandle(
-      id: attachedDatabase.typeMapping.read(
-        DriftSqlType.int,
-        data['${effectivePrefix}id'],
-      )!,
-      ohId: attachedDatabase.typeMapping.read(
-        DriftSqlType.string,
-        data['${effectivePrefix}oh_id'],
-      )!,
-      keypairBytes: attachedDatabase.typeMapping.read(
-        DriftSqlType.blob,
-        data['${effectivePrefix}keypair_bytes'],
-      )!,
-      serverEndpoint: attachedDatabase.typeMapping.read(
-        DriftSqlType.string,
-        data['${effectivePrefix}server_endpoint'],
-      )!,
-      expiresAt: attachedDatabase.typeMapping.read(
-        DriftSqlType.dateTime,
-        data['${effectivePrefix}expires_at'],
-      )!,
-      channelId: attachedDatabase.typeMapping.read(
-        DriftSqlType.string,
-        data['${effectivePrefix}channel_id'],
-      ),
-    );
-  }
-
-  @override
-  $OutboundHandlesTable createAlias(String alias) {
-    return $OutboundHandlesTable(attachedDatabase, alias);
-  }
-}
-
-class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
-  final int id;
-  final String ohId;
-  final Uint8List keypairBytes;
-  final String serverEndpoint;
-  final DateTime expiresAt;
-  final String? channelId;
-  const OutboundHandle({
-    required this.id,
-    required this.ohId,
-    required this.keypairBytes,
-    required this.serverEndpoint,
-    required this.expiresAt,
-    this.channelId,
-  });
-  @override
-  Map<String, Expression> toColumns(bool nullToAbsent) {
-    final map = <String, Expression>{};
-    map['id'] = Variable<int>(id);
-    map['oh_id'] = Variable<String>(ohId);
-    map['keypair_bytes'] = Variable<Uint8List>(keypairBytes);
-    map['server_endpoint'] = Variable<String>(serverEndpoint);
-    map['expires_at'] = Variable<DateTime>(expiresAt);
-    if (!nullToAbsent || channelId != null) {
-      map['channel_id'] = Variable<String>(channelId);
-    }
-    return map;
-  }
-
-  OutboundHandlesCompanion toCompanion(bool nullToAbsent) {
-    return OutboundHandlesCompanion(
-      id: Value(id),
-      ohId: Value(ohId),
-      keypairBytes: Value(keypairBytes),
-      serverEndpoint: Value(serverEndpoint),
-      expiresAt: Value(expiresAt),
-      channelId: channelId == null && nullToAbsent
-          ? const Value.absent()
-          : Value(channelId),
-    );
-  }
-
-  factory OutboundHandle.fromJson(
-    Map<String, dynamic> json, {
-    ValueSerializer? serializer,
-  }) {
-    serializer ??= driftRuntimeOptions.defaultSerializer;
-    return OutboundHandle(
-      id: serializer.fromJson<int>(json['id']),
-      ohId: serializer.fromJson<String>(json['ohId']),
-      keypairBytes: serializer.fromJson<Uint8List>(json['keypairBytes']),
-      serverEndpoint: serializer.fromJson<String>(json['serverEndpoint']),
-      expiresAt: serializer.fromJson<DateTime>(json['expiresAt']),
-      channelId: serializer.fromJson<String?>(json['channelId']),
-    );
-  }
-  @override
-  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
-    serializer ??= driftRuntimeOptions.defaultSerializer;
-    return <String, dynamic>{
-      'id': serializer.toJson<int>(id),
-      'ohId': serializer.toJson<String>(ohId),
-      'keypairBytes': serializer.toJson<Uint8List>(keypairBytes),
-      'serverEndpoint': serializer.toJson<String>(serverEndpoint),
-      'expiresAt': serializer.toJson<DateTime>(expiresAt),
-      'channelId': serializer.toJson<String?>(channelId),
-    };
-  }
-
-  OutboundHandle copyWith({
-    int? id,
-    String? ohId,
-    Uint8List? keypairBytes,
-    String? serverEndpoint,
-    DateTime? expiresAt,
-    Value<String?> channelId = const Value.absent(),
-  }) => OutboundHandle(
-    id: id ?? this.id,
-    ohId: ohId ?? this.ohId,
-    keypairBytes: keypairBytes ?? this.keypairBytes,
-    serverEndpoint: serverEndpoint ?? this.serverEndpoint,
-    expiresAt: expiresAt ?? this.expiresAt,
-    channelId: channelId.present ? channelId.value : this.channelId,
-  );
-  OutboundHandle copyWithCompanion(OutboundHandlesCompanion data) {
-    return OutboundHandle(
-      id: data.id.present ? data.id.value : this.id,
-      ohId: data.ohId.present ? data.ohId.value : this.ohId,
-      keypairBytes: data.keypairBytes.present
-          ? data.keypairBytes.value
-          : this.keypairBytes,
-      serverEndpoint: data.serverEndpoint.present
-          ? data.serverEndpoint.value
-          : this.serverEndpoint,
-      expiresAt: data.expiresAt.present ? data.expiresAt.value : this.expiresAt,
-      channelId: data.channelId.present ? data.channelId.value : this.channelId,
-    );
-  }
-
-  @override
-  String toString() {
-    return (StringBuffer('OutboundHandle(')
-          ..write('id: $id, ')
-          ..write('ohId: $ohId, ')
-          ..write('keypairBytes: $keypairBytes, ')
-          ..write('serverEndpoint: $serverEndpoint, ')
-          ..write('expiresAt: $expiresAt, ')
-          ..write('channelId: $channelId')
-          ..write(')'))
-        .toString();
-  }
-
-  @override
-  int get hashCode => Object.hash(
-    id,
-    ohId,
-    $driftBlobEquality.hash(keypairBytes),
-    serverEndpoint,
-    expiresAt,
-    channelId,
-  );
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      (other is OutboundHandle &&
-          other.id == this.id &&
-          other.ohId == this.ohId &&
-          $driftBlobEquality.equals(other.keypairBytes, this.keypairBytes) &&
-          other.serverEndpoint == this.serverEndpoint &&
-          other.expiresAt == this.expiresAt &&
-          other.channelId == this.channelId);
-}
-
-class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
-  final Value<int> id;
-  final Value<String> ohId;
-  final Value<Uint8List> keypairBytes;
-  final Value<String> serverEndpoint;
-  final Value<DateTime> expiresAt;
-  final Value<String?> channelId;
-  const OutboundHandlesCompanion({
-    this.id = const Value.absent(),
-    this.ohId = const Value.absent(),
-    this.keypairBytes = const Value.absent(),
-    this.serverEndpoint = const Value.absent(),
-    this.expiresAt = const Value.absent(),
-    this.channelId = const Value.absent(),
-  });
-  OutboundHandlesCompanion.insert({
-    this.id = const Value.absent(),
-    required String ohId,
-    required Uint8List keypairBytes,
-    required String serverEndpoint,
-    required DateTime expiresAt,
-    this.channelId = const Value.absent(),
-  }) : ohId = Value(ohId),
-       keypairBytes = Value(keypairBytes),
-       serverEndpoint = Value(serverEndpoint),
-       expiresAt = Value(expiresAt);
-  static Insertable<OutboundHandle> custom({
-    Expression<int>? id,
-    Expression<String>? ohId,
-    Expression<Uint8List>? keypairBytes,
-    Expression<String>? serverEndpoint,
-    Expression<DateTime>? expiresAt,
-    Expression<String>? channelId,
-  }) {
-    return RawValuesInsertable({
-      if (id != null) 'id': id,
-      if (ohId != null) 'oh_id': ohId,
-      if (keypairBytes != null) 'keypair_bytes': keypairBytes,
-      if (serverEndpoint != null) 'server_endpoint': serverEndpoint,
-      if (expiresAt != null) 'expires_at': expiresAt,
-      if (channelId != null) 'channel_id': channelId,
-    });
-  }
-
-  OutboundHandlesCompanion copyWith({
-    Value<int>? id,
-    Value<String>? ohId,
-    Value<Uint8List>? keypairBytes,
-    Value<String>? serverEndpoint,
-    Value<DateTime>? expiresAt,
-    Value<String?>? channelId,
-  }) {
-    return OutboundHandlesCompanion(
-      id: id ?? this.id,
-      ohId: ohId ?? this.ohId,
-      keypairBytes: keypairBytes ?? this.keypairBytes,
-      serverEndpoint: serverEndpoint ?? this.serverEndpoint,
-      expiresAt: expiresAt ?? this.expiresAt,
-      channelId: channelId ?? this.channelId,
-    );
-  }
-
-  @override
-  Map<String, Expression> toColumns(bool nullToAbsent) {
-    final map = <String, Expression>{};
-    if (id.present) {
-      map['id'] = Variable<int>(id.value);
-    }
-    if (ohId.present) {
-      map['oh_id'] = Variable<String>(ohId.value);
-    }
-    if (keypairBytes.present) {
-      map['keypair_bytes'] = Variable<Uint8List>(keypairBytes.value);
-    }
-    if (serverEndpoint.present) {
-      map['server_endpoint'] = Variable<String>(serverEndpoint.value);
-    }
-    if (expiresAt.present) {
-      map['expires_at'] = Variable<DateTime>(expiresAt.value);
-    }
-    if (channelId.present) {
-      map['channel_id'] = Variable<String>(channelId.value);
-    }
-    return map;
-  }
-
-  @override
-  String toString() {
-    return (StringBuffer('OutboundHandlesCompanion(')
-          ..write('id: $id, ')
-          ..write('ohId: $ohId, ')
-          ..write('keypairBytes: $keypairBytes, ')
-          ..write('serverEndpoint: $serverEndpoint, ')
-          ..write('expiresAt: $expiresAt, ')
-          ..write('channelId: $channelId')
-          ..write(')'))
-        .toString();
-  }
-}
-
 typedef $$OutboundHandlesTableCreateCompanionBuilder =
     OutboundHandlesCompanion Function({
       Value<int> id,
