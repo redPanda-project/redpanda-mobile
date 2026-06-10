@@ -13,6 +13,8 @@ import 'redpanda_node_launcher.dart';
 import 'test_helpers.dart';
 
 void main() async {
+  final jarAvailable = await RedPandaNodeLauncher.isJarAvailable();
+
   group('E2E MS01: Full exchange — Alice sends, Bob receives', () {
     late RedPandaNodeLauncher launcher;
     late RedPandaLightClient alice;
@@ -111,8 +113,7 @@ void main() async {
         expect(messages, hasLength(1));
         expect(messages.first.content, equals('Hello Bob!'));
       },
-      skip:
-          'Backend InboundCommandProcessor.isPayloadCommand() does not include OH commands (150,152,154) — NPE on RegisterOhRequest.parseFrom(null)',
+      skip: jarAvailable ? null : 'RedPanda JAR not found',
     );
   });
 }
