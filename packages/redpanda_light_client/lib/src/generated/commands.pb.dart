@@ -715,9 +715,11 @@ class JobAck extends $pb.GeneratedMessage {
 class FlaschenpostPut extends $pb.GeneratedMessage {
   factory FlaschenpostPut({
     $core.List<$core.int>? content,
+    $core.List<$core.int>? ohId,
   }) {
     final result = create();
     if (content != null) result.content = content;
+    if (ohId != null) result.ohId = ohId;
     return result;
   }
 
@@ -737,6 +739,8 @@ class FlaschenpostPut extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..a<$core.List<$core.int>>(
         1, _omitFieldNames ? '' : 'content', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(
+        2, _omitFieldNames ? '' : 'ohId', $pb.PbFieldType.OY)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -766,6 +770,451 @@ class FlaschenpostPut extends $pb.GeneratedMessage {
   $core.bool hasContent() => $_has(0);
   @$pb.TagNumber(1)
   void clearContent() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.List<$core.int> get ohId => $_getN(1);
+  @$pb.TagNumber(2)
+  set ohId($core.List<$core.int> value) => $_setBytes(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasOhId() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearOhId() => $_clearField(2);
+}
+
+// --- Status enum for OH operations ---
+class Status extends $pb.ProtobufEnum {
+  static const Status STATUS_UNSPECIFIED =
+      Status._(0, _omitEnumNames ? '' : 'STATUS_UNSPECIFIED');
+  static const Status OK = Status._(1, _omitEnumNames ? '' : 'OK');
+  static const Status INVALID_SIGNATURE =
+      Status._(2, _omitEnumNames ? '' : 'INVALID_SIGNATURE');
+  static const Status INVALID_TIMESTAMP =
+      Status._(3, _omitEnumNames ? '' : 'INVALID_TIMESTAMP');
+  static const Status REPLAY = Status._(4, _omitEnumNames ? '' : 'REPLAY');
+  static const Status NOT_FOUND =
+      Status._(5, _omitEnumNames ? '' : 'NOT_FOUND');
+  static const Status RATE_LIMIT =
+      Status._(6, _omitEnumNames ? '' : 'RATE_LIMIT');
+  static const Status QUOTA_EXCEEDED =
+      Status._(7, _omitEnumNames ? '' : 'QUOTA_EXCEEDED');
+  static const Status BAD_REQUEST =
+      Status._(8, _omitEnumNames ? '' : 'BAD_REQUEST');
+
+  static const $core.List<Status> values = <Status>[
+    STATUS_UNSPECIFIED,
+    OK,
+    INVALID_SIGNATURE,
+    INVALID_TIMESTAMP,
+    REPLAY,
+    NOT_FOUND,
+    RATE_LIMIT,
+    QUOTA_EXCEEDED,
+    BAD_REQUEST,
+  ];
+
+  static final $core.Map<$core.int, Status> _byValue =
+      $pb.ProtobufEnum.initByValue(values);
+  static Status? valueOf($core.int value) => _byValue[value];
+
+  const Status._(super.v, super.n);
+}
+
+// --- RegisterOhRequest ---
+class RegisterOhRequest extends $pb.GeneratedMessage {
+  factory RegisterOhRequest({
+    $core.List<$core.int>? ohId,
+    $core.List<$core.int>? ohAuthPublicKey,
+    $fixnum.Int64? requestedExpiresAt,
+    $fixnum.Int64? timestampMs,
+    $core.List<$core.int>? nonce,
+    $core.List<$core.int>? signature,
+  }) {
+    final result = create();
+    if (ohId != null) result.ohId = ohId;
+    if (ohAuthPublicKey != null) result.ohAuthPublicKey = ohAuthPublicKey;
+    if (requestedExpiresAt != null)
+      result.requestedExpiresAt = requestedExpiresAt;
+    if (timestampMs != null) result.timestampMs = timestampMs;
+    if (nonce != null) result.nonce = nonce;
+    if (signature != null) result.signature = signature;
+    return result;
+  }
+
+  RegisterOhRequest._();
+
+  factory RegisterOhRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'RegisterOhRequest',
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
+      createEmptyInstance: create)
+    ..a<$core.List<$core.int>>(
+        1, _omitFieldNames ? '' : 'ohId', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(
+        2, _omitFieldNames ? '' : 'ohAuthPublicKey', $pb.PbFieldType.OY)
+    ..aInt64(3, _omitFieldNames ? '' : 'requestedExpiresAt')
+    ..aInt64(4, _omitFieldNames ? '' : 'timestampMs')
+    ..a<$core.List<$core.int>>(
+        5, _omitFieldNames ? '' : 'nonce', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(
+        6, _omitFieldNames ? '' : 'signature', $pb.PbFieldType.OY)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RegisterOhRequest clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RegisterOhRequest copyWith(void Function(RegisterOhRequest) updates) =>
+      super.copyWith((message) => updates(message as RegisterOhRequest))
+          as RegisterOhRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static RegisterOhRequest create() => RegisterOhRequest._();
+  @$core.override
+  RegisterOhRequest createEmptyInstance() => create();
+  static RegisterOhRequest? _defaultInstance;
+  @$core.pragma('dart2js:noInline')
+  static RegisterOhRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<RegisterOhRequest>(create);
+
+  @$pb.TagNumber(1)
+  $core.List<$core.int> get ohId => $_getN(0);
+  @$pb.TagNumber(1)
+  set ohId($core.List<$core.int> value) => $_setBytes(0, value);
+
+  @$pb.TagNumber(2)
+  $core.List<$core.int> get ohAuthPublicKey => $_getN(1);
+  @$pb.TagNumber(2)
+  set ohAuthPublicKey($core.List<$core.int> value) => $_setBytes(1, value);
+
+  @$pb.TagNumber(3)
+  $fixnum.Int64 get requestedExpiresAt => $_getI64(2);
+  @$pb.TagNumber(3)
+  set requestedExpiresAt($fixnum.Int64 value) => $_setInt64(2, value);
+
+  @$pb.TagNumber(4)
+  $fixnum.Int64 get timestampMs => $_getI64(3);
+  @$pb.TagNumber(4)
+  set timestampMs($fixnum.Int64 value) => $_setInt64(3, value);
+
+  @$pb.TagNumber(5)
+  $core.List<$core.int> get nonce => $_getN(4);
+  @$pb.TagNumber(5)
+  set nonce($core.List<$core.int> value) => $_setBytes(4, value);
+
+  @$pb.TagNumber(6)
+  $core.List<$core.int> get signature => $_getN(5);
+  @$pb.TagNumber(6)
+  set signature($core.List<$core.int> value) => $_setBytes(5, value);
+}
+
+// --- RegisterOhResponse ---
+class RegisterOhResponse extends $pb.GeneratedMessage {
+  factory RegisterOhResponse({
+    Status? status,
+    $fixnum.Int64? serverTimeMs,
+    $fixnum.Int64? expiresAtMs,
+  }) {
+    final result = create();
+    if (status != null) result.status = status;
+    if (serverTimeMs != null) result.serverTimeMs = serverTimeMs;
+    if (expiresAtMs != null) result.expiresAtMs = expiresAtMs;
+    return result;
+  }
+
+  RegisterOhResponse._();
+
+  factory RegisterOhResponse.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'RegisterOhResponse',
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
+      createEmptyInstance: create)
+    ..e<Status>(1, _omitFieldNames ? '' : 'status', $pb.PbFieldType.OE,
+        defaultOrMaker: Status.STATUS_UNSPECIFIED,
+        valueOf: Status.valueOf,
+        enumValues: Status.values)
+    ..aInt64(2, _omitFieldNames ? '' : 'serverTimeMs')
+    ..aInt64(3, _omitFieldNames ? '' : 'expiresAtMs')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RegisterOhResponse clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RegisterOhResponse copyWith(void Function(RegisterOhResponse) updates) =>
+      super.copyWith((message) => updates(message as RegisterOhResponse))
+          as RegisterOhResponse;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static RegisterOhResponse create() => RegisterOhResponse._();
+  @$core.override
+  RegisterOhResponse createEmptyInstance() => create();
+  static RegisterOhResponse? _defaultInstance;
+  @$core.pragma('dart2js:noInline')
+  static RegisterOhResponse getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<RegisterOhResponse>(create);
+
+  @$pb.TagNumber(1)
+  Status get status => $_getN(0);
+  @$pb.TagNumber(1)
+  set status(Status value) => $_setField(1, value);
+
+  @$pb.TagNumber(2)
+  $fixnum.Int64 get serverTimeMs => $_getI64(1);
+  @$pb.TagNumber(2)
+  set serverTimeMs($fixnum.Int64 value) => $_setInt64(1, value);
+
+  @$pb.TagNumber(3)
+  $fixnum.Int64 get expiresAtMs => $_getI64(2);
+  @$pb.TagNumber(3)
+  set expiresAtMs($fixnum.Int64 value) => $_setInt64(2, value);
+}
+
+// --- FetchRequest ---
+class FetchRequest extends $pb.GeneratedMessage {
+  factory FetchRequest({
+    $core.List<$core.int>? ohId,
+    $core.int? limit,
+    $fixnum.Int64? cursor,
+    $fixnum.Int64? timestampMs,
+    $core.List<$core.int>? nonce,
+    $core.List<$core.int>? signature,
+  }) {
+    final result = create();
+    if (ohId != null) result.ohId = ohId;
+    if (limit != null) result.limit = limit;
+    if (cursor != null) result.cursor = cursor;
+    if (timestampMs != null) result.timestampMs = timestampMs;
+    if (nonce != null) result.nonce = nonce;
+    if (signature != null) result.signature = signature;
+    return result;
+  }
+
+  FetchRequest._();
+
+  factory FetchRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'FetchRequest',
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
+      createEmptyInstance: create)
+    ..a<$core.List<$core.int>>(
+        1, _omitFieldNames ? '' : 'ohId', $pb.PbFieldType.OY)
+    ..a<$core.int>(2, _omitFieldNames ? '' : 'limit', $pb.PbFieldType.OU3)
+    ..a<$fixnum.Int64>(3, _omitFieldNames ? '' : 'cursor', $pb.PbFieldType.OU6,
+        defaultOrMaker: $fixnum.Int64.ZERO)
+    ..aInt64(4, _omitFieldNames ? '' : 'timestampMs')
+    ..a<$core.List<$core.int>>(
+        5, _omitFieldNames ? '' : 'nonce', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(
+        6, _omitFieldNames ? '' : 'signature', $pb.PbFieldType.OY)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  FetchRequest clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  FetchRequest copyWith(void Function(FetchRequest) updates) =>
+      super.copyWith((message) => updates(message as FetchRequest))
+          as FetchRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static FetchRequest create() => FetchRequest._();
+  @$core.override
+  FetchRequest createEmptyInstance() => create();
+  static FetchRequest? _defaultInstance;
+  @$core.pragma('dart2js:noInline')
+  static FetchRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<FetchRequest>(create);
+
+  @$pb.TagNumber(1)
+  $core.List<$core.int> get ohId => $_getN(0);
+  @$pb.TagNumber(1)
+  set ohId($core.List<$core.int> value) => $_setBytes(0, value);
+
+  @$pb.TagNumber(2)
+  $core.int get limit => $_getIZ(1);
+  @$pb.TagNumber(2)
+  set limit($core.int value) => $_setUnsignedInt32(1, value);
+
+  @$pb.TagNumber(3)
+  $fixnum.Int64 get cursor => $_getI64(2);
+  @$pb.TagNumber(3)
+  set cursor($fixnum.Int64 value) => $_setInt64(2, value);
+
+  @$pb.TagNumber(4)
+  $fixnum.Int64 get timestampMs => $_getI64(3);
+  @$pb.TagNumber(4)
+  set timestampMs($fixnum.Int64 value) => $_setInt64(3, value);
+
+  @$pb.TagNumber(5)
+  $core.List<$core.int> get nonce => $_getN(4);
+  @$pb.TagNumber(5)
+  set nonce($core.List<$core.int> value) => $_setBytes(4, value);
+
+  @$pb.TagNumber(6)
+  $core.List<$core.int> get signature => $_getN(5);
+  @$pb.TagNumber(6)
+  set signature($core.List<$core.int> value) => $_setBytes(5, value);
+}
+
+// --- MailItem ---
+class MailItem extends $pb.GeneratedMessage {
+  factory MailItem({
+    $core.List<$core.int>? messageId,
+    $fixnum.Int64? receivedAtMs,
+    $core.List<$core.int>? payload,
+  }) {
+    final result = create();
+    if (messageId != null) result.messageId = messageId;
+    if (receivedAtMs != null) result.receivedAtMs = receivedAtMs;
+    if (payload != null) result.payload = payload;
+    return result;
+  }
+
+  MailItem._();
+
+  factory MailItem.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'MailItem',
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
+      createEmptyInstance: create)
+    ..a<$core.List<$core.int>>(
+        1, _omitFieldNames ? '' : 'messageId', $pb.PbFieldType.OY)
+    ..aInt64(2, _omitFieldNames ? '' : 'receivedAtMs')
+    ..a<$core.List<$core.int>>(
+        3, _omitFieldNames ? '' : 'payload', $pb.PbFieldType.OY)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  MailItem clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  MailItem copyWith(void Function(MailItem) updates) =>
+      super.copyWith((message) => updates(message as MailItem)) as MailItem;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static MailItem create() => MailItem._();
+  @$core.override
+  MailItem createEmptyInstance() => create();
+  static MailItem? _defaultInstance;
+  @$core.pragma('dart2js:noInline')
+  static MailItem getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<MailItem>(create);
+
+  @$pb.TagNumber(1)
+  $core.List<$core.int> get messageId => $_getN(0);
+  @$pb.TagNumber(1)
+  set messageId($core.List<$core.int> value) => $_setBytes(0, value);
+
+  @$pb.TagNumber(2)
+  $fixnum.Int64 get receivedAtMs => $_getI64(1);
+  @$pb.TagNumber(2)
+  set receivedAtMs($fixnum.Int64 value) => $_setInt64(1, value);
+
+  @$pb.TagNumber(3)
+  $core.List<$core.int> get payload => $_getN(2);
+  @$pb.TagNumber(3)
+  set payload($core.List<$core.int> value) => $_setBytes(2, value);
+}
+
+// --- FetchResponse ---
+class FetchResponse extends $pb.GeneratedMessage {
+  factory FetchResponse({
+    Status? status,
+    $fixnum.Int64? nextCursor,
+    $core.Iterable<MailItem>? items,
+    $fixnum.Int64? serverTimeMs,
+  }) {
+    final result = create();
+    if (status != null) result.status = status;
+    if (nextCursor != null) result.nextCursor = nextCursor;
+    if (items != null) result.items.addAll(items);
+    if (serverTimeMs != null) result.serverTimeMs = serverTimeMs;
+    return result;
+  }
+
+  FetchResponse._();
+
+  factory FetchResponse.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'FetchResponse',
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
+      createEmptyInstance: create)
+    ..e<Status>(1, _omitFieldNames ? '' : 'status', $pb.PbFieldType.OE,
+        defaultOrMaker: Status.STATUS_UNSPECIFIED,
+        valueOf: Status.valueOf,
+        enumValues: Status.values)
+    ..a<$fixnum.Int64>(
+        2, _omitFieldNames ? '' : 'nextCursor', $pb.PbFieldType.OU6,
+        defaultOrMaker: $fixnum.Int64.ZERO)
+    ..pc<MailItem>(3, _omitFieldNames ? '' : 'items', $pb.PbFieldType.PM,
+        subBuilder: MailItem.create)
+    ..aInt64(4, _omitFieldNames ? '' : 'serverTimeMs')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  FetchResponse clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  FetchResponse copyWith(void Function(FetchResponse) updates) =>
+      super.copyWith((message) => updates(message as FetchResponse))
+          as FetchResponse;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static FetchResponse create() => FetchResponse._();
+  @$core.override
+  FetchResponse createEmptyInstance() => create();
+  static FetchResponse? _defaultInstance;
+  @$core.pragma('dart2js:noInline')
+  static FetchResponse getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<FetchResponse>(create);
+
+  @$pb.TagNumber(1)
+  Status get status => $_getN(0);
+  @$pb.TagNumber(1)
+  set status(Status value) => $_setField(1, value);
+
+  @$pb.TagNumber(2)
+  $fixnum.Int64 get nextCursor => $_getI64(1);
+  @$pb.TagNumber(2)
+  set nextCursor($fixnum.Int64 value) => $_setInt64(1, value);
+
+  @$pb.TagNumber(3)
+  $core.List<MailItem> get items => $_getList(2);
+
+  @$pb.TagNumber(4)
+  $fixnum.Int64 get serverTimeMs => $_getI64(3);
+  @$pb.TagNumber(4)
+  set serverTimeMs($fixnum.Int64 value) => $_setInt64(3, value);
 }
 
 enum PandaMessage_Content {
@@ -1120,3 +1569,5 @@ const $core.bool _omitFieldNames =
     $core.bool.fromEnvironment('protobuf.omit_field_names');
 const $core.bool _omitMessageNames =
     $core.bool.fromEnvironment('protobuf.omit_message_names');
+const $core.bool _omitEnumNames =
+    $core.bool.fromEnvironment('protobuf.omit_enum_names');

@@ -1,3 +1,4 @@
+import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
@@ -29,9 +30,22 @@ class CmdLifecyclePause extends IsolateCommand {}
 class CmdLifecycleResume extends IsolateCommand {}
 
 class CmdSendMessage extends IsolateCommand {
-  final String recipientPublicKey;
+  final String channelId;
   final String content;
-  CmdSendMessage(this.recipientPublicKey, this.content);
+  CmdSendMessage(this.channelId, this.content);
+}
+
+class CmdRegisterOutboundHandle extends IsolateCommand {
+  final int requestId;
+  final String? channelId;
+  CmdRegisterOutboundHandle(this.requestId, {this.channelId});
+}
+
+class CmdAddChannelKeys extends IsolateCommand {
+  final String channelId;
+  final List<int> encryptionKey;
+  final List<int>? peerOhId;
+  CmdAddChannelKeys(this.channelId, this.encryptionKey, {this.peerOhId});
 }
 
 // --- Events (Isolate -> Main) ---
@@ -63,4 +77,38 @@ class EventPeerStatsSnapshot extends IsolateEvent {
   );
 }
 
-// TODO: Add EventMessageReceived when we have message handling
+class EventMessageSent extends IsolateEvent {
+  final String messageId;
+  EventMessageSent(this.messageId);
+}
+
+class EventIncomingMessage extends IsolateEvent {
+  final DecryptedMessage message;
+  EventIncomingMessage(this.message);
+}
+
+/// Successful OH registration. Carries only isolate-sendable primitives;
+/// the keypair travels as its 32-byte private scalar
+/// (see OHKeypair.privateKeyBytes / OHKeypair.fromPrivateKeyBytes).
+class EventOhRegistered extends IsolateEvent {
+  final int requestId;
+  final List<int> ohId;
+  final List<int> privateKeyBytes;
+  final int expiresAtMs;
+  final String? channelId;
+  final String? serverEndpoint;
+  EventOhRegistered({
+    required this.requestId,
+    required this.ohId,
+    required this.privateKeyBytes,
+    required this.expiresAtMs,
+    this.channelId,
+    this.serverEndpoint,
+  });
+}
+
+class EventOhRegisterFailed extends IsolateEvent {
+  final int requestId;
+  final String error;
+  EventOhRegisterFailed(this.requestId, this.error);
+}

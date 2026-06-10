@@ -363,6 +363,39 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
         type: DriftSqlType.string,
         requiredDuringInsert: true,
       );
+  static const VerificationMeta _peerOhEndpointMeta = const VerificationMeta(
+    'peerOhEndpoint',
+  );
+  @override
+  late final GeneratedColumn<String> peerOhEndpoint = GeneratedColumn<String>(
+    'peer_oh_endpoint',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _peerOhIdMeta = const VerificationMeta(
+    'peerOhId',
+  );
+  @override
+  late final GeneratedColumn<String> peerOhId = GeneratedColumn<String>(
+    'peer_oh_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _peerOhPublicKeyMeta = const VerificationMeta(
+    'peerOhPublicKey',
+  );
+  @override
+  late final GeneratedColumn<String> peerOhPublicKey = GeneratedColumn<String>(
+    'peer_oh_public_key',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _lastSeenMeta = const VerificationMeta(
     'lastSeen',
   );
@@ -380,6 +413,9 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
     label,
     encryptionKey,
     authenticationKey,
+    peerOhEndpoint,
+    peerOhId,
+    peerOhPublicKey,
     lastSeen,
   ];
   @override
@@ -432,6 +468,30 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
     } else if (isInserting) {
       context.missing(_authenticationKeyMeta);
     }
+    if (data.containsKey('peer_oh_endpoint')) {
+      context.handle(
+        _peerOhEndpointMeta,
+        peerOhEndpoint.isAcceptableOrUnknown(
+          data['peer_oh_endpoint']!,
+          _peerOhEndpointMeta,
+        ),
+      );
+    }
+    if (data.containsKey('peer_oh_id')) {
+      context.handle(
+        _peerOhIdMeta,
+        peerOhId.isAcceptableOrUnknown(data['peer_oh_id']!, _peerOhIdMeta),
+      );
+    }
+    if (data.containsKey('peer_oh_public_key')) {
+      context.handle(
+        _peerOhPublicKeyMeta,
+        peerOhPublicKey.isAcceptableOrUnknown(
+          data['peer_oh_public_key']!,
+          _peerOhPublicKeyMeta,
+        ),
+      );
+    }
     if (data.containsKey('last_seen')) {
       context.handle(
         _lastSeenMeta,
@@ -463,6 +523,18 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
         DriftSqlType.string,
         data['${effectivePrefix}authentication_key'],
       )!,
+      peerOhEndpoint: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}peer_oh_endpoint'],
+      ),
+      peerOhId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}peer_oh_id'],
+      ),
+      peerOhPublicKey: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}peer_oh_public_key'],
+      ),
       lastSeen: attachedDatabase.typeMapping.read(
         DriftSqlType.dateTime,
         data['${effectivePrefix}last_seen'],
@@ -481,12 +553,18 @@ class Channel extends DataClass implements Insertable<Channel> {
   final String label;
   final String encryptionKey;
   final String authenticationKey;
+  final String? peerOhEndpoint;
+  final String? peerOhId;
+  final String? peerOhPublicKey;
   final DateTime? lastSeen;
   const Channel({
     required this.uuid,
     required this.label,
     required this.encryptionKey,
     required this.authenticationKey,
+    this.peerOhEndpoint,
+    this.peerOhId,
+    this.peerOhPublicKey,
     this.lastSeen,
   });
   @override
@@ -496,6 +574,15 @@ class Channel extends DataClass implements Insertable<Channel> {
     map['label'] = Variable<String>(label);
     map['encryption_key'] = Variable<String>(encryptionKey);
     map['authentication_key'] = Variable<String>(authenticationKey);
+    if (!nullToAbsent || peerOhEndpoint != null) {
+      map['peer_oh_endpoint'] = Variable<String>(peerOhEndpoint);
+    }
+    if (!nullToAbsent || peerOhId != null) {
+      map['peer_oh_id'] = Variable<String>(peerOhId);
+    }
+    if (!nullToAbsent || peerOhPublicKey != null) {
+      map['peer_oh_public_key'] = Variable<String>(peerOhPublicKey);
+    }
     if (!nullToAbsent || lastSeen != null) {
       map['last_seen'] = Variable<DateTime>(lastSeen);
     }
@@ -508,6 +595,15 @@ class Channel extends DataClass implements Insertable<Channel> {
       label: Value(label),
       encryptionKey: Value(encryptionKey),
       authenticationKey: Value(authenticationKey),
+      peerOhEndpoint: peerOhEndpoint == null && nullToAbsent
+          ? const Value.absent()
+          : Value(peerOhEndpoint),
+      peerOhId: peerOhId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(peerOhId),
+      peerOhPublicKey: peerOhPublicKey == null && nullToAbsent
+          ? const Value.absent()
+          : Value(peerOhPublicKey),
       lastSeen: lastSeen == null && nullToAbsent
           ? const Value.absent()
           : Value(lastSeen),
@@ -524,6 +620,9 @@ class Channel extends DataClass implements Insertable<Channel> {
       label: serializer.fromJson<String>(json['label']),
       encryptionKey: serializer.fromJson<String>(json['encryptionKey']),
       authenticationKey: serializer.fromJson<String>(json['authenticationKey']),
+      peerOhEndpoint: serializer.fromJson<String?>(json['peerOhEndpoint']),
+      peerOhId: serializer.fromJson<String?>(json['peerOhId']),
+      peerOhPublicKey: serializer.fromJson<String?>(json['peerOhPublicKey']),
       lastSeen: serializer.fromJson<DateTime?>(json['lastSeen']),
     );
   }
@@ -535,6 +634,9 @@ class Channel extends DataClass implements Insertable<Channel> {
       'label': serializer.toJson<String>(label),
       'encryptionKey': serializer.toJson<String>(encryptionKey),
       'authenticationKey': serializer.toJson<String>(authenticationKey),
+      'peerOhEndpoint': serializer.toJson<String?>(peerOhEndpoint),
+      'peerOhId': serializer.toJson<String?>(peerOhId),
+      'peerOhPublicKey': serializer.toJson<String?>(peerOhPublicKey),
       'lastSeen': serializer.toJson<DateTime?>(lastSeen),
     };
   }
@@ -544,12 +646,22 @@ class Channel extends DataClass implements Insertable<Channel> {
     String? label,
     String? encryptionKey,
     String? authenticationKey,
+    Value<String?> peerOhEndpoint = const Value.absent(),
+    Value<String?> peerOhId = const Value.absent(),
+    Value<String?> peerOhPublicKey = const Value.absent(),
     Value<DateTime?> lastSeen = const Value.absent(),
   }) => Channel(
     uuid: uuid ?? this.uuid,
     label: label ?? this.label,
     encryptionKey: encryptionKey ?? this.encryptionKey,
     authenticationKey: authenticationKey ?? this.authenticationKey,
+    peerOhEndpoint: peerOhEndpoint.present
+        ? peerOhEndpoint.value
+        : this.peerOhEndpoint,
+    peerOhId: peerOhId.present ? peerOhId.value : this.peerOhId,
+    peerOhPublicKey: peerOhPublicKey.present
+        ? peerOhPublicKey.value
+        : this.peerOhPublicKey,
     lastSeen: lastSeen.present ? lastSeen.value : this.lastSeen,
   );
   Channel copyWithCompanion(ChannelsCompanion data) {
@@ -562,6 +674,13 @@ class Channel extends DataClass implements Insertable<Channel> {
       authenticationKey: data.authenticationKey.present
           ? data.authenticationKey.value
           : this.authenticationKey,
+      peerOhEndpoint: data.peerOhEndpoint.present
+          ? data.peerOhEndpoint.value
+          : this.peerOhEndpoint,
+      peerOhId: data.peerOhId.present ? data.peerOhId.value : this.peerOhId,
+      peerOhPublicKey: data.peerOhPublicKey.present
+          ? data.peerOhPublicKey.value
+          : this.peerOhPublicKey,
       lastSeen: data.lastSeen.present ? data.lastSeen.value : this.lastSeen,
     );
   }
@@ -573,14 +692,25 @@ class Channel extends DataClass implements Insertable<Channel> {
           ..write('label: $label, ')
           ..write('encryptionKey: $encryptionKey, ')
           ..write('authenticationKey: $authenticationKey, ')
+          ..write('peerOhEndpoint: $peerOhEndpoint, ')
+          ..write('peerOhId: $peerOhId, ')
+          ..write('peerOhPublicKey: $peerOhPublicKey, ')
           ..write('lastSeen: $lastSeen')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode =>
-      Object.hash(uuid, label, encryptionKey, authenticationKey, lastSeen);
+  int get hashCode => Object.hash(
+    uuid,
+    label,
+    encryptionKey,
+    authenticationKey,
+    peerOhEndpoint,
+    peerOhId,
+    peerOhPublicKey,
+    lastSeen,
+  );
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -589,6 +719,9 @@ class Channel extends DataClass implements Insertable<Channel> {
           other.label == this.label &&
           other.encryptionKey == this.encryptionKey &&
           other.authenticationKey == this.authenticationKey &&
+          other.peerOhEndpoint == this.peerOhEndpoint &&
+          other.peerOhId == this.peerOhId &&
+          other.peerOhPublicKey == this.peerOhPublicKey &&
           other.lastSeen == this.lastSeen);
 }
 
@@ -597,6 +730,9 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
   final Value<String> label;
   final Value<String> encryptionKey;
   final Value<String> authenticationKey;
+  final Value<String?> peerOhEndpoint;
+  final Value<String?> peerOhId;
+  final Value<String?> peerOhPublicKey;
   final Value<DateTime?> lastSeen;
   final Value<int> rowid;
   const ChannelsCompanion({
@@ -604,6 +740,9 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     this.label = const Value.absent(),
     this.encryptionKey = const Value.absent(),
     this.authenticationKey = const Value.absent(),
+    this.peerOhEndpoint = const Value.absent(),
+    this.peerOhId = const Value.absent(),
+    this.peerOhPublicKey = const Value.absent(),
     this.lastSeen = const Value.absent(),
     this.rowid = const Value.absent(),
   });
@@ -612,6 +751,9 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     required String label,
     required String encryptionKey,
     required String authenticationKey,
+    this.peerOhEndpoint = const Value.absent(),
+    this.peerOhId = const Value.absent(),
+    this.peerOhPublicKey = const Value.absent(),
     this.lastSeen = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : uuid = Value(uuid),
@@ -623,6 +765,9 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     Expression<String>? label,
     Expression<String>? encryptionKey,
     Expression<String>? authenticationKey,
+    Expression<String>? peerOhEndpoint,
+    Expression<String>? peerOhId,
+    Expression<String>? peerOhPublicKey,
     Expression<DateTime>? lastSeen,
     Expression<int>? rowid,
   }) {
@@ -631,6 +776,9 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
       if (label != null) 'label': label,
       if (encryptionKey != null) 'encryption_key': encryptionKey,
       if (authenticationKey != null) 'authentication_key': authenticationKey,
+      if (peerOhEndpoint != null) 'peer_oh_endpoint': peerOhEndpoint,
+      if (peerOhId != null) 'peer_oh_id': peerOhId,
+      if (peerOhPublicKey != null) 'peer_oh_public_key': peerOhPublicKey,
       if (lastSeen != null) 'last_seen': lastSeen,
       if (rowid != null) 'rowid': rowid,
     });
@@ -641,6 +789,9 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     Value<String>? label,
     Value<String>? encryptionKey,
     Value<String>? authenticationKey,
+    Value<String?>? peerOhEndpoint,
+    Value<String?>? peerOhId,
+    Value<String?>? peerOhPublicKey,
     Value<DateTime?>? lastSeen,
     Value<int>? rowid,
   }) {
@@ -649,6 +800,9 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
       label: label ?? this.label,
       encryptionKey: encryptionKey ?? this.encryptionKey,
       authenticationKey: authenticationKey ?? this.authenticationKey,
+      peerOhEndpoint: peerOhEndpoint ?? this.peerOhEndpoint,
+      peerOhId: peerOhId ?? this.peerOhId,
+      peerOhPublicKey: peerOhPublicKey ?? this.peerOhPublicKey,
       lastSeen: lastSeen ?? this.lastSeen,
       rowid: rowid ?? this.rowid,
     );
@@ -669,6 +823,15 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     if (authenticationKey.present) {
       map['authentication_key'] = Variable<String>(authenticationKey.value);
     }
+    if (peerOhEndpoint.present) {
+      map['peer_oh_endpoint'] = Variable<String>(peerOhEndpoint.value);
+    }
+    if (peerOhId.present) {
+      map['peer_oh_id'] = Variable<String>(peerOhId.value);
+    }
+    if (peerOhPublicKey.present) {
+      map['peer_oh_public_key'] = Variable<String>(peerOhPublicKey.value);
+    }
     if (lastSeen.present) {
       map['last_seen'] = Variable<DateTime>(lastSeen.value);
     }
@@ -685,6 +848,9 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
           ..write('label: $label, ')
           ..write('encryptionKey: $encryptionKey, ')
           ..write('authenticationKey: $authenticationKey, ')
+          ..write('peerOhEndpoint: $peerOhEndpoint, ')
+          ..write('peerOhId: $peerOhId, ')
+          ..write('peerOhPublicKey: $peerOhPublicKey, ')
           ..write('lastSeen: $lastSeen, ')
           ..write('rowid: $rowid')
           ..write(')'))
@@ -1578,6 +1744,422 @@ class PeersCompanion extends UpdateCompanion<Peer> {
   }
 }
 
+class $OutboundHandlesTable extends OutboundHandles
+    with TableInfo<$OutboundHandlesTable, OutboundHandle> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $OutboundHandlesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+    'id',
+    aliasedName,
+    false,
+    hasAutoIncrement: true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'PRIMARY KEY AUTOINCREMENT',
+    ),
+  );
+  static const VerificationMeta _ohIdMeta = const VerificationMeta('ohId');
+  @override
+  late final GeneratedColumn<String> ohId = GeneratedColumn<String>(
+    'oh_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _keypairBytesMeta = const VerificationMeta(
+    'keypairBytes',
+  );
+  @override
+  late final GeneratedColumn<Uint8List> keypairBytes =
+      GeneratedColumn<Uint8List>(
+        'keypair_bytes',
+        aliasedName,
+        false,
+        type: DriftSqlType.blob,
+        requiredDuringInsert: true,
+      );
+  static const VerificationMeta _serverEndpointMeta = const VerificationMeta(
+    'serverEndpoint',
+  );
+  @override
+  late final GeneratedColumn<String> serverEndpoint = GeneratedColumn<String>(
+    'server_endpoint',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _expiresAtMeta = const VerificationMeta(
+    'expiresAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> expiresAt = GeneratedColumn<DateTime>(
+    'expires_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _channelIdMeta = const VerificationMeta(
+    'channelId',
+  );
+  @override
+  late final GeneratedColumn<String> channelId = GeneratedColumn<String>(
+    'channel_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    ohId,
+    keypairBytes,
+    serverEndpoint,
+    expiresAt,
+    channelId,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'outbound_handles';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<OutboundHandle> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('oh_id')) {
+      context.handle(
+        _ohIdMeta,
+        ohId.isAcceptableOrUnknown(data['oh_id']!, _ohIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_ohIdMeta);
+    }
+    if (data.containsKey('keypair_bytes')) {
+      context.handle(
+        _keypairBytesMeta,
+        keypairBytes.isAcceptableOrUnknown(
+          data['keypair_bytes']!,
+          _keypairBytesMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_keypairBytesMeta);
+    }
+    if (data.containsKey('server_endpoint')) {
+      context.handle(
+        _serverEndpointMeta,
+        serverEndpoint.isAcceptableOrUnknown(
+          data['server_endpoint']!,
+          _serverEndpointMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_serverEndpointMeta);
+    }
+    if (data.containsKey('expires_at')) {
+      context.handle(
+        _expiresAtMeta,
+        expiresAt.isAcceptableOrUnknown(data['expires_at']!, _expiresAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_expiresAtMeta);
+    }
+    if (data.containsKey('channel_id')) {
+      context.handle(
+        _channelIdMeta,
+        channelId.isAcceptableOrUnknown(data['channel_id']!, _channelIdMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  OutboundHandle map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return OutboundHandle(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}id'],
+      )!,
+      ohId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}oh_id'],
+      )!,
+      keypairBytes: attachedDatabase.typeMapping.read(
+        DriftSqlType.blob,
+        data['${effectivePrefix}keypair_bytes'],
+      )!,
+      serverEndpoint: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}server_endpoint'],
+      )!,
+      expiresAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}expires_at'],
+      )!,
+      channelId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}channel_id'],
+      ),
+    );
+  }
+
+  @override
+  $OutboundHandlesTable createAlias(String alias) {
+    return $OutboundHandlesTable(attachedDatabase, alias);
+  }
+}
+
+class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
+  final int id;
+  final String ohId;
+  final Uint8List keypairBytes;
+  final String serverEndpoint;
+  final DateTime expiresAt;
+  final String? channelId;
+  const OutboundHandle({
+    required this.id,
+    required this.ohId,
+    required this.keypairBytes,
+    required this.serverEndpoint,
+    required this.expiresAt,
+    this.channelId,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['oh_id'] = Variable<String>(ohId);
+    map['keypair_bytes'] = Variable<Uint8List>(keypairBytes);
+    map['server_endpoint'] = Variable<String>(serverEndpoint);
+    map['expires_at'] = Variable<DateTime>(expiresAt);
+    if (!nullToAbsent || channelId != null) {
+      map['channel_id'] = Variable<String>(channelId);
+    }
+    return map;
+  }
+
+  OutboundHandlesCompanion toCompanion(bool nullToAbsent) {
+    return OutboundHandlesCompanion(
+      id: Value(id),
+      ohId: Value(ohId),
+      keypairBytes: Value(keypairBytes),
+      serverEndpoint: Value(serverEndpoint),
+      expiresAt: Value(expiresAt),
+      channelId: channelId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(channelId),
+    );
+  }
+
+  factory OutboundHandle.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return OutboundHandle(
+      id: serializer.fromJson<int>(json['id']),
+      ohId: serializer.fromJson<String>(json['ohId']),
+      keypairBytes: serializer.fromJson<Uint8List>(json['keypairBytes']),
+      serverEndpoint: serializer.fromJson<String>(json['serverEndpoint']),
+      expiresAt: serializer.fromJson<DateTime>(json['expiresAt']),
+      channelId: serializer.fromJson<String?>(json['channelId']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'ohId': serializer.toJson<String>(ohId),
+      'keypairBytes': serializer.toJson<Uint8List>(keypairBytes),
+      'serverEndpoint': serializer.toJson<String>(serverEndpoint),
+      'expiresAt': serializer.toJson<DateTime>(expiresAt),
+      'channelId': serializer.toJson<String?>(channelId),
+    };
+  }
+
+  OutboundHandle copyWith({
+    int? id,
+    String? ohId,
+    Uint8List? keypairBytes,
+    String? serverEndpoint,
+    DateTime? expiresAt,
+    Value<String?> channelId = const Value.absent(),
+  }) => OutboundHandle(
+    id: id ?? this.id,
+    ohId: ohId ?? this.ohId,
+    keypairBytes: keypairBytes ?? this.keypairBytes,
+    serverEndpoint: serverEndpoint ?? this.serverEndpoint,
+    expiresAt: expiresAt ?? this.expiresAt,
+    channelId: channelId.present ? channelId.value : this.channelId,
+  );
+  OutboundHandle copyWithCompanion(OutboundHandlesCompanion data) {
+    return OutboundHandle(
+      id: data.id.present ? data.id.value : this.id,
+      ohId: data.ohId.present ? data.ohId.value : this.ohId,
+      keypairBytes: data.keypairBytes.present
+          ? data.keypairBytes.value
+          : this.keypairBytes,
+      serverEndpoint: data.serverEndpoint.present
+          ? data.serverEndpoint.value
+          : this.serverEndpoint,
+      expiresAt: data.expiresAt.present ? data.expiresAt.value : this.expiresAt,
+      channelId: data.channelId.present ? data.channelId.value : this.channelId,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('OutboundHandle(')
+          ..write('id: $id, ')
+          ..write('ohId: $ohId, ')
+          ..write('keypairBytes: $keypairBytes, ')
+          ..write('serverEndpoint: $serverEndpoint, ')
+          ..write('expiresAt: $expiresAt, ')
+          ..write('channelId: $channelId')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    ohId,
+    $driftBlobEquality.hash(keypairBytes),
+    serverEndpoint,
+    expiresAt,
+    channelId,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is OutboundHandle &&
+          other.id == this.id &&
+          other.ohId == this.ohId &&
+          $driftBlobEquality.equals(other.keypairBytes, this.keypairBytes) &&
+          other.serverEndpoint == this.serverEndpoint &&
+          other.expiresAt == this.expiresAt &&
+          other.channelId == this.channelId);
+}
+
+class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
+  final Value<int> id;
+  final Value<String> ohId;
+  final Value<Uint8List> keypairBytes;
+  final Value<String> serverEndpoint;
+  final Value<DateTime> expiresAt;
+  final Value<String?> channelId;
+  const OutboundHandlesCompanion({
+    this.id = const Value.absent(),
+    this.ohId = const Value.absent(),
+    this.keypairBytes = const Value.absent(),
+    this.serverEndpoint = const Value.absent(),
+    this.expiresAt = const Value.absent(),
+    this.channelId = const Value.absent(),
+  });
+  OutboundHandlesCompanion.insert({
+    this.id = const Value.absent(),
+    required String ohId,
+    required Uint8List keypairBytes,
+    required String serverEndpoint,
+    required DateTime expiresAt,
+    this.channelId = const Value.absent(),
+  }) : ohId = Value(ohId),
+       keypairBytes = Value(keypairBytes),
+       serverEndpoint = Value(serverEndpoint),
+       expiresAt = Value(expiresAt);
+  static Insertable<OutboundHandle> custom({
+    Expression<int>? id,
+    Expression<String>? ohId,
+    Expression<Uint8List>? keypairBytes,
+    Expression<String>? serverEndpoint,
+    Expression<DateTime>? expiresAt,
+    Expression<String>? channelId,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (ohId != null) 'oh_id': ohId,
+      if (keypairBytes != null) 'keypair_bytes': keypairBytes,
+      if (serverEndpoint != null) 'server_endpoint': serverEndpoint,
+      if (expiresAt != null) 'expires_at': expiresAt,
+      if (channelId != null) 'channel_id': channelId,
+    });
+  }
+
+  OutboundHandlesCompanion copyWith({
+    Value<int>? id,
+    Value<String>? ohId,
+    Value<Uint8List>? keypairBytes,
+    Value<String>? serverEndpoint,
+    Value<DateTime>? expiresAt,
+    Value<String?>? channelId,
+  }) {
+    return OutboundHandlesCompanion(
+      id: id ?? this.id,
+      ohId: ohId ?? this.ohId,
+      keypairBytes: keypairBytes ?? this.keypairBytes,
+      serverEndpoint: serverEndpoint ?? this.serverEndpoint,
+      expiresAt: expiresAt ?? this.expiresAt,
+      channelId: channelId ?? this.channelId,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (ohId.present) {
+      map['oh_id'] = Variable<String>(ohId.value);
+    }
+    if (keypairBytes.present) {
+      map['keypair_bytes'] = Variable<Uint8List>(keypairBytes.value);
+    }
+    if (serverEndpoint.present) {
+      map['server_endpoint'] = Variable<String>(serverEndpoint.value);
+    }
+    if (expiresAt.present) {
+      map['expires_at'] = Variable<DateTime>(expiresAt.value);
+    }
+    if (channelId.present) {
+      map['channel_id'] = Variable<String>(channelId.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('OutboundHandlesCompanion(')
+          ..write('id: $id, ')
+          ..write('ohId: $ohId, ')
+          ..write('keypairBytes: $keypairBytes, ')
+          ..write('serverEndpoint: $serverEndpoint, ')
+          ..write('expiresAt: $expiresAt, ')
+          ..write('channelId: $channelId')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -1585,6 +2167,9 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $ChannelsTable channels = $ChannelsTable(this);
   late final $MessagesTable messages = $MessagesTable(this);
   late final $PeersTable peers = $PeersTable(this);
+  late final $OutboundHandlesTable outboundHandles = $OutboundHandlesTable(
+    this,
+  );
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -1594,6 +2179,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     channels,
     messages,
     peers,
+    outboundHandles,
   ];
 }
 
@@ -1777,6 +2363,9 @@ typedef $$ChannelsTableCreateCompanionBuilder =
       required String label,
       required String encryptionKey,
       required String authenticationKey,
+      Value<String?> peerOhEndpoint,
+      Value<String?> peerOhId,
+      Value<String?> peerOhPublicKey,
       Value<DateTime?> lastSeen,
       Value<int> rowid,
     });
@@ -1786,6 +2375,9 @@ typedef $$ChannelsTableUpdateCompanionBuilder =
       Value<String> label,
       Value<String> encryptionKey,
       Value<String> authenticationKey,
+      Value<String?> peerOhEndpoint,
+      Value<String?> peerOhId,
+      Value<String?> peerOhPublicKey,
       Value<DateTime?> lastSeen,
       Value<int> rowid,
     });
@@ -1842,6 +2434,21 @@ class $$ChannelsTableFilterComposer
 
   ColumnFilters<String> get authenticationKey => $composableBuilder(
     column: $table.authenticationKey,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get peerOhEndpoint => $composableBuilder(
+    column: $table.peerOhEndpoint,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get peerOhId => $composableBuilder(
+    column: $table.peerOhId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get peerOhPublicKey => $composableBuilder(
+    column: $table.peerOhPublicKey,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -1905,6 +2512,21 @@ class $$ChannelsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get peerOhEndpoint => $composableBuilder(
+    column: $table.peerOhEndpoint,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get peerOhId => $composableBuilder(
+    column: $table.peerOhId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get peerOhPublicKey => $composableBuilder(
+    column: $table.peerOhPublicKey,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<DateTime> get lastSeen => $composableBuilder(
     column: $table.lastSeen,
     builder: (column) => ColumnOrderings(column),
@@ -1933,6 +2555,19 @@ class $$ChannelsTableAnnotationComposer
 
   GeneratedColumn<String> get authenticationKey => $composableBuilder(
     column: $table.authenticationKey,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get peerOhEndpoint => $composableBuilder(
+    column: $table.peerOhEndpoint,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get peerOhId =>
+      $composableBuilder(column: $table.peerOhId, builder: (column) => column);
+
+  GeneratedColumn<String> get peerOhPublicKey => $composableBuilder(
+    column: $table.peerOhPublicKey,
     builder: (column) => column,
   );
 
@@ -1997,6 +2632,9 @@ class $$ChannelsTableTableManager
                 Value<String> label = const Value.absent(),
                 Value<String> encryptionKey = const Value.absent(),
                 Value<String> authenticationKey = const Value.absent(),
+                Value<String?> peerOhEndpoint = const Value.absent(),
+                Value<String?> peerOhId = const Value.absent(),
+                Value<String?> peerOhPublicKey = const Value.absent(),
                 Value<DateTime?> lastSeen = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ChannelsCompanion(
@@ -2004,6 +2642,9 @@ class $$ChannelsTableTableManager
                 label: label,
                 encryptionKey: encryptionKey,
                 authenticationKey: authenticationKey,
+                peerOhEndpoint: peerOhEndpoint,
+                peerOhId: peerOhId,
+                peerOhPublicKey: peerOhPublicKey,
                 lastSeen: lastSeen,
                 rowid: rowid,
               ),
@@ -2013,6 +2654,9 @@ class $$ChannelsTableTableManager
                 required String label,
                 required String encryptionKey,
                 required String authenticationKey,
+                Value<String?> peerOhEndpoint = const Value.absent(),
+                Value<String?> peerOhId = const Value.absent(),
+                Value<String?> peerOhPublicKey = const Value.absent(),
                 Value<DateTime?> lastSeen = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ChannelsCompanion.insert(
@@ -2020,6 +2664,9 @@ class $$ChannelsTableTableManager
                 label: label,
                 encryptionKey: encryptionKey,
                 authenticationKey: authenticationKey,
+                peerOhEndpoint: peerOhEndpoint,
+                peerOhId: peerOhId,
+                peerOhPublicKey: peerOhPublicKey,
                 lastSeen: lastSeen,
                 rowid: rowid,
               ),
@@ -2642,6 +3289,229 @@ typedef $$PeersTableProcessedTableManager =
       Peer,
       PrefetchHooks Function()
     >;
+typedef $$OutboundHandlesTableCreateCompanionBuilder =
+    OutboundHandlesCompanion Function({
+      Value<int> id,
+      required String ohId,
+      required Uint8List keypairBytes,
+      required String serverEndpoint,
+      required DateTime expiresAt,
+      Value<String?> channelId,
+    });
+typedef $$OutboundHandlesTableUpdateCompanionBuilder =
+    OutboundHandlesCompanion Function({
+      Value<int> id,
+      Value<String> ohId,
+      Value<Uint8List> keypairBytes,
+      Value<String> serverEndpoint,
+      Value<DateTime> expiresAt,
+      Value<String?> channelId,
+    });
+
+class $$OutboundHandlesTableFilterComposer
+    extends Composer<_$AppDatabase, $OutboundHandlesTable> {
+  $$OutboundHandlesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get ohId => $composableBuilder(
+    column: $table.ohId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<Uint8List> get keypairBytes => $composableBuilder(
+    column: $table.keypairBytes,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get serverEndpoint => $composableBuilder(
+    column: $table.serverEndpoint,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get expiresAt => $composableBuilder(
+    column: $table.expiresAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get channelId => $composableBuilder(
+    column: $table.channelId,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$OutboundHandlesTableOrderingComposer
+    extends Composer<_$AppDatabase, $OutboundHandlesTable> {
+  $$OutboundHandlesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get ohId => $composableBuilder(
+    column: $table.ohId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<Uint8List> get keypairBytes => $composableBuilder(
+    column: $table.keypairBytes,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get serverEndpoint => $composableBuilder(
+    column: $table.serverEndpoint,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get expiresAt => $composableBuilder(
+    column: $table.expiresAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get channelId => $composableBuilder(
+    column: $table.channelId,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$OutboundHandlesTableAnnotationComposer
+    extends Composer<_$AppDatabase, $OutboundHandlesTable> {
+  $$OutboundHandlesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get ohId =>
+      $composableBuilder(column: $table.ohId, builder: (column) => column);
+
+  GeneratedColumn<Uint8List> get keypairBytes => $composableBuilder(
+    column: $table.keypairBytes,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get serverEndpoint => $composableBuilder(
+    column: $table.serverEndpoint,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get expiresAt =>
+      $composableBuilder(column: $table.expiresAt, builder: (column) => column);
+
+  GeneratedColumn<String> get channelId =>
+      $composableBuilder(column: $table.channelId, builder: (column) => column);
+}
+
+class $$OutboundHandlesTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $OutboundHandlesTable,
+          OutboundHandle,
+          $$OutboundHandlesTableFilterComposer,
+          $$OutboundHandlesTableOrderingComposer,
+          $$OutboundHandlesTableAnnotationComposer,
+          $$OutboundHandlesTableCreateCompanionBuilder,
+          $$OutboundHandlesTableUpdateCompanionBuilder,
+          (
+            OutboundHandle,
+            BaseReferences<
+              _$AppDatabase,
+              $OutboundHandlesTable,
+              OutboundHandle
+            >,
+          ),
+          OutboundHandle,
+          PrefetchHooks Function()
+        > {
+  $$OutboundHandlesTableTableManager(
+    _$AppDatabase db,
+    $OutboundHandlesTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$OutboundHandlesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$OutboundHandlesTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$OutboundHandlesTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<int> id = const Value.absent(),
+                Value<String> ohId = const Value.absent(),
+                Value<Uint8List> keypairBytes = const Value.absent(),
+                Value<String> serverEndpoint = const Value.absent(),
+                Value<DateTime> expiresAt = const Value.absent(),
+                Value<String?> channelId = const Value.absent(),
+              }) => OutboundHandlesCompanion(
+                id: id,
+                ohId: ohId,
+                keypairBytes: keypairBytes,
+                serverEndpoint: serverEndpoint,
+                expiresAt: expiresAt,
+                channelId: channelId,
+              ),
+          createCompanionCallback:
+              ({
+                Value<int> id = const Value.absent(),
+                required String ohId,
+                required Uint8List keypairBytes,
+                required String serverEndpoint,
+                required DateTime expiresAt,
+                Value<String?> channelId = const Value.absent(),
+              }) => OutboundHandlesCompanion.insert(
+                id: id,
+                ohId: ohId,
+                keypairBytes: keypairBytes,
+                serverEndpoint: serverEndpoint,
+                expiresAt: expiresAt,
+                channelId: channelId,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$OutboundHandlesTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $OutboundHandlesTable,
+      OutboundHandle,
+      $$OutboundHandlesTableFilterComposer,
+      $$OutboundHandlesTableOrderingComposer,
+      $$OutboundHandlesTableAnnotationComposer,
+      $$OutboundHandlesTableCreateCompanionBuilder,
+      $$OutboundHandlesTableUpdateCompanionBuilder,
+      (
+        OutboundHandle,
+        BaseReferences<_$AppDatabase, $OutboundHandlesTable, OutboundHandle>,
+      ),
+      OutboundHandle,
+      PrefetchHooks Function()
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -2654,4 +3524,6 @@ class $AppDatabaseManager {
       $$MessagesTableTableManager(_db, _db.messages);
   $$PeersTableTableManager get peers =>
       $$PeersTableTableManager(_db, _db.peers);
+  $$OutboundHandlesTableTableManager get outboundHandles =>
+      $$OutboundHandlesTableTableManager(_db, _db.outboundHandles);
 }

@@ -1,7 +1,17 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
+import 'dart:typed_data';
+
+import 'package:fixnum/fixnum.dart' as fixnum;
+import 'package:pointycastle/export.dart' as pc;
 
 import 'package:redpanda_light_client/src/client_facade.dart';
+import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
+import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
+import 'package:redpanda_light_client/src/domain/oh_registration.dart';
+import 'package:redpanda_light_client/src/generated/commands.pb.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
@@ -435,6 +445,7 @@ class RedPandaLightClient implements RedPandaClient {
             );
           },
         );
+        peer.onCommandResponse = _handleCommandResponse;
         _peers[address] = peer;
         peer.connect(); // Fire and forget (it is async inside)
       } catch (e) {
@@ -516,19 +527,374 @@ class RedPandaLightClient implements RedPandaClient {
   @override
   Future<void> disconnect() async {
     _connectionTimer?.cancel();
+    _pollingTimer?.cancel();
+    _pollingTimer = null;
     for (final peer in _peers.values) {
       await peer.disconnect();
     }
     _peers.clear();
+    _registeredOHs.clear();
+    _pendingResponses.clear();
+    await _incomingMessageController.close();
     _updateStatus(ConnectionStatus.disconnected);
   }
 
+  // --- OH Registration & Message state ---
+  final List<OHRegistration> _registeredOHs = [];
+  final _incomingMessageController =
+      StreamController<DecryptedMessage>.broadcast();
+  Timer? _pollingTimer;
+
+  /// Pending response completers keyed by command byte.
+  final Map<int, Completer<List<int>>> _pendingResponses = {};
+
+  void _handleCommandResponse(int command, List<int> payload) {
+    final completer = _pendingResponses.remove(command);
+    if (completer != null && !completer.isCompleted) {
+      completer.complete(payload);
+    }
+  }
+
+  /// Channel encryption keys indexed by channel ID.
+  /// Populated externally or via addChannelKeys().
+  final Map<String, List<int>> _channelEncryptionKeys = {};
+  final Map<String, List<int>> _channelPeerOhIds = {};
+
+  /// Register channel encryption info so sendMessage/fetchMessages can use it.
   @override
-  Future<String> sendMessage(String recipientPublicKey, String content) async {
-    // TODO: Implement Garlic Routing / Flaschenpost
-    throw UnimplementedError(
-      "sendMessage not implemented in RealRedPandaClient yet",
+  void addChannelKeys(
+    String channelId,
+    List<int> encryptionKey, {
+    List<int>? peerOhId,
+  }) {
+    _channelEncryptionKeys[channelId] = encryptionKey;
+    if (peerOhId != null) {
+      _channelPeerOhIds[channelId] = peerOhId;
+    }
+  }
+
+  @override
+  Stream<DecryptedMessage> get incomingMessages =>
+      _incomingMessageController.stream;
+
+  @override
+  Future<String> sendMessage(String channelId, String content) async {
+    final random = Random.secure();
+    final messageId =
+        '${DateTime.now().millisecondsSinceEpoch}-${random.nextInt(999999)}';
+
+    final encKey = _channelEncryptionKeys[channelId];
+    if (encKey == null) {
+      // Channel keys not yet registered in the network layer.
+      // Message is stored locally by the UI; encryption will happen once keys are provided.
+      print(
+        'RedPandaLightClient: sendMessage() channel $channelId has no encryption keys registered yet — queued locally',
+      );
+      return messageId;
+    }
+
+    // 1. Generate random IV (16 bytes)
+    final iv = Uint8List.fromList(
+      List<int>.generate(16, (_) => random.nextInt(256)),
     );
+
+    // 2. Encrypt with AES-256-CTR
+    final plaintext = Uint8List.fromList(utf8.encode(content));
+    final cipher = pc.CTRStreamCipher(pc.AESEngine());
+    cipher.init(
+      true,
+      pc.ParametersWithIV(pc.KeyParameter(Uint8List.fromList(encKey)), iv),
+    );
+    final ciphertext = cipher.process(plaintext);
+
+    // 3. Compute HMAC-SHA256 over [IV || ciphertext] for authenticated encryption
+    final macInput = Uint8List(iv.length + ciphertext.length);
+    macInput.setRange(0, iv.length, iv);
+    macInput.setRange(iv.length, macInput.length, ciphertext);
+
+    final hmac = pc.HMac(pc.SHA256Digest(), 64)
+      ..init(pc.KeyParameter(Uint8List.fromList(encKey)));
+    final mac = hmac.process(macInput);
+
+    // 4. Build payload: [IV (16 bytes)][ciphertext][HMAC-SHA256 (32 bytes)]
+    final payload = Uint8List(iv.length + ciphertext.length + mac.length);
+    payload.setRange(0, iv.length, iv);
+    payload.setRange(iv.length, iv.length + ciphertext.length, ciphertext);
+    payload.setRange(iv.length + ciphertext.length, payload.length, mac);
+
+    // 5. Build FlaschenpostPut with target OH mailbox id for direct routing
+    final peerOhId = _channelPeerOhIds[channelId];
+    final flaschenpost = FlaschenpostPut()
+      ..content = payload
+      ..ohId = peerOhId ?? Uint8List(0);
+
+    // 6. Send to a connected peer (best available)
+    final activePeer = _peers.values
+        .where((p) => p.isHandshakeVerified)
+        .firstOrNull;
+
+    if (activePeer != null) {
+      final buffer = flaschenpost.writeToBuffer();
+      print(
+        'RedPandaLightClient: sendMessage() serialized ${buffer.length} bytes for channel $channelId',
+      );
+      activePeer.sendCommand(141, Uint8List.fromList(buffer));
+    } else {
+      print(
+        'RedPandaLightClient: sendMessage() no active peer available, message queued locally',
+      );
+    }
+
+    return messageId;
+  }
+
+  @override
+  Future<OHRegistration> registerOutboundHandle({String? channelId}) async {
+    final keypair = OHKeypair.generate();
+    final random = Random.secure();
+    final ohId = Uint8List.fromList(
+      List<int>.generate(20, (_) => random.nextInt(256)),
+    );
+    final nonce = Uint8List.fromList(
+      List<int>.generate(16, (_) => random.nextInt(256)),
+    );
+
+    final now = DateTime.now();
+    final expiresAt = now.add(const Duration(days: 7));
+
+    // Build signing bytes: [CMD_BYTE(150) | oh_id | requested_expires_at(8 BE) | timestamp_ms(8 BE) | nonce]
+    final signingBuffer = BytesBuilder();
+    signingBuffer.addByte(150); // OUTBOUND_REGISTER_OH_REQ
+    signingBuffer.add(ohId);
+    signingBuffer.add(_int64Bytes(expiresAt.millisecondsSinceEpoch));
+    signingBuffer.add(_int64Bytes(now.millisecondsSinceEpoch));
+    signingBuffer.add(nonce);
+
+    final signature = keypair.sign(Uint8List.fromList(signingBuffer.toBytes()));
+
+    final request = RegisterOhRequest()
+      ..ohId = ohId
+      ..ohAuthPublicKey = keypair.publicKeyBytes
+      ..requestedExpiresAt = _toInt64(expiresAt.millisecondsSinceEpoch)
+      ..timestampMs = _toInt64(now.millisecondsSinceEpoch)
+      ..nonce = nonce
+      ..signature = signature;
+
+    // Send to best active peer
+    final activePeer = _peers.values
+        .where((p) => p.isHandshakeVerified)
+        .firstOrNull;
+
+    if (activePeer != null) {
+      final buffer = request.writeToBuffer();
+      print(
+        'RedPandaLightClient: registerOutboundHandle() serialized ${buffer.length} bytes',
+      );
+      activePeer.sendCommand(150, Uint8List.fromList(buffer));
+    } else {
+      print(
+        'RedPandaLightClient: registerOutboundHandle() no active peer available',
+      );
+    }
+
+    final registration = OHRegistration(
+      ohId: ohId.toList(),
+      keypair: keypair,
+      expiresAtMs: expiresAt.millisecondsSinceEpoch,
+      channelId: channelId,
+      serverEndpoint: activePeer?.address,
+    );
+
+    _registeredOHs.add(registration);
+    _startPolling();
+
+    return registration;
+  }
+
+  @override
+  Future<List<DecryptedMessage>> fetchMessages(OHRegistration oh) async {
+    final random = Random.secure();
+    final nonce = Uint8List.fromList(
+      List<int>.generate(16, (_) => random.nextInt(256)),
+    );
+    final now = DateTime.now();
+
+    // Build signing bytes: [CMD_BYTE(152) | oh_id | timestamp_ms(8 BE) | nonce | limit(4 BE) | cursor(8 BE)]
+    final signingBuffer = BytesBuilder();
+    signingBuffer.addByte(152); // OUTBOUND_FETCH_REQ
+    signingBuffer.add(oh.ohId);
+    signingBuffer.add(_int64Bytes(now.millisecondsSinceEpoch));
+    signingBuffer.add(nonce);
+    final limitData = ByteData(4);
+    limitData.setInt32(0, 50, Endian.big);
+    signingBuffer.add(limitData.buffer.asUint8List());
+    signingBuffer.add(_int64Bytes(oh.lastCursor));
+
+    final signature = oh.keypair.sign(
+      Uint8List.fromList(signingBuffer.toBytes()),
+    );
+
+    final request = FetchRequest()
+      ..ohId = oh.ohId
+      ..limit = 50
+      ..timestampMs = _toInt64(now.millisecondsSinceEpoch)
+      ..nonce = nonce
+      ..signature = signature;
+
+    if (oh.lastCursor != 0) {
+      request.cursor = fixnum.Int64(oh.lastCursor);
+    }
+
+    // Send to best active peer
+    final activePeer = _peers.values
+        .where((p) => p.isHandshakeVerified)
+        .firstOrNull;
+
+    if (activePeer == null) {
+      print('RedPandaLightClient: fetchMessages() no active peer available');
+      return [];
+    }
+
+    // Register completer for command 153 (OUTBOUND_FETCH_RES) before sending
+    final completer = Completer<List<int>>();
+    _pendingResponses[153] = completer;
+
+    final buffer = request.writeToBuffer();
+    print(
+      'RedPandaLightClient: fetchMessages() serialized ${buffer.length} bytes',
+    );
+    activePeer.sendCommand(152, Uint8List.fromList(buffer));
+
+    // Await the response
+    final List<int> responseBytes;
+    try {
+      responseBytes = await completer.future.timeout(
+        const Duration(seconds: 10),
+      );
+    } on TimeoutException {
+      _pendingResponses.remove(153);
+      print(
+        'RedPandaLightClient: fetchMessages() timed out waiting for response',
+      );
+      return [];
+    }
+
+    // Parse FetchResponse protobuf
+    final response = FetchResponse.fromBuffer(responseBytes);
+    print(
+      'RedPandaLightClient: fetchMessages() status=${response.status} items=${response.items.length}',
+    );
+
+    if (response.status != Status.OK) {
+      print(
+        'RedPandaLightClient: fetchMessages() non-OK status: ${response.status}',
+      );
+      return [];
+    }
+
+    // Update cursor for next fetch
+    oh.lastCursor = response.nextCursor.toInt();
+
+    // Look up the channel encryption key for this OH
+    final encKey = oh.channelId != null
+        ? _channelEncryptionKeys[oh.channelId]
+        : null;
+
+    if (encKey == null) {
+      print(
+        'RedPandaLightClient: fetchMessages() no encryption key for channelId=${oh.channelId}',
+      );
+      return [];
+    }
+
+    // Decrypt each MailItem
+    final messages = <DecryptedMessage>[];
+    for (final item in response.items) {
+      try {
+        final content = _decryptPayload(item.payload, encKey);
+        messages.add(
+          DecryptedMessage(
+            id: item.messageId
+                .map((b) => b.toRadixString(16).padLeft(2, '0'))
+                .join(),
+            content: content,
+            receivedAtMs: item.receivedAtMs.toInt(),
+          ),
+        );
+      } catch (e) {
+        print('RedPandaLightClient: failed to decrypt mail item: $e');
+      }
+    }
+
+    return messages;
+  }
+
+  /// Decrypts an encrypted payload: [IV(16)][ciphertext][HMAC-SHA256(32)]
+  String _decryptPayload(List<int> payload, List<int> encKey) {
+    if (payload.length < 49) {
+      throw ArgumentError('Payload too short: ${payload.length} bytes');
+    }
+
+    final iv = Uint8List.fromList(payload.sublist(0, 16));
+    final ciphertext = Uint8List.fromList(
+      payload.sublist(16, payload.length - 32),
+    );
+    final mac = Uint8List.fromList(payload.sublist(payload.length - 32));
+
+    // Verify HMAC-SHA256 over [IV || ciphertext]
+    final macInput = Uint8List(iv.length + ciphertext.length);
+    macInput.setRange(0, iv.length, iv);
+    macInput.setRange(iv.length, macInput.length, ciphertext);
+
+    final hmac = pc.HMac(pc.SHA256Digest(), 64)
+      ..init(pc.KeyParameter(Uint8List.fromList(encKey)));
+    final expectedMac = hmac.process(macInput);
+
+    bool macValid = mac.length == expectedMac.length;
+    for (int i = 0; macValid && i < mac.length; i++) {
+      macValid = mac[i] == expectedMac[i];
+    }
+    if (!macValid) {
+      throw StateError('HMAC verification failed');
+    }
+
+    // AES-256-CTR decrypt
+    final cipher = pc.CTRStreamCipher(pc.AESEngine());
+    cipher.init(
+      false,
+      pc.ParametersWithIV(pc.KeyParameter(Uint8List.fromList(encKey)), iv),
+    );
+    final plaintext = cipher.process(ciphertext);
+
+    return utf8.decode(plaintext);
+  }
+
+  void _startPolling() {
+    if (_pollingTimer != null) return;
+    _pollingTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+      for (final oh in _registeredOHs) {
+        try {
+          final messages = await fetchMessages(oh);
+          for (final msg in messages) {
+            _incomingMessageController.add(msg);
+          }
+        } catch (e) {
+          print('RedPandaLightClient: Polling error: $e');
+        }
+      }
+    });
+  }
+
+  /// Converts an int to 8-byte big-endian representation.
+  static Uint8List _int64Bytes(int value) {
+    final data = ByteData(8);
+    data.setInt64(0, value, Endian.big);
+    return data.buffer.asUint8List();
+  }
+
+  /// Converts an int to fixnum Int64 for protobuf.
+  static fixnum.Int64 _toInt64(int value) {
+    return fixnum.Int64(value);
   }
 
   /// DEBUG ONLY: Get current peer stats

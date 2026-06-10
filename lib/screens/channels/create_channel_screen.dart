@@ -4,6 +4,8 @@ import 'package:go_router/go_router.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
 import 'package:redpanda/repositories/channel_repository.dart';
+import 'package:redpanda/repositories/outbound_handle_repository.dart';
+import 'package:redpanda/shared/providers.dart';
 
 class CreateChannelScreen extends ConsumerStatefulWidget {
   const CreateChannelScreen({super.key});
@@ -16,6 +18,8 @@ class CreateChannelScreen extends ConsumerStatefulWidget {
 class _CreateChannelScreenState extends ConsumerState<CreateChannelScreen> {
   final _labelController = TextEditingController();
   Channel? _createdChannel;
+  String? _qrData;
+  bool _ohRegistered = false;
 
   @override
   void dispose() {
@@ -29,10 +33,34 @@ class _CreateChannelScreenState extends ConsumerState<CreateChannelScreen> {
     final channel = Channel.generate(_labelController.text.trim());
     setState(() {
       _createdChannel = channel;
+      // Show a v1 QR right away; upgraded to v2 once our OH is registered.
+      _qrData = channel.toJson();
     });
 
     // Add to repository
     ref.read(channelRepositoryProvider).addChannel(channel);
+
+    _registerOwnOh(channel);
+  }
+
+  /// Registers our own Outbound Handle for this channel and embeds it into
+  /// the QR code (v2), so the scanning peer knows where to send messages.
+  Future<void> _registerOwnOh(Channel channel) async {
+    final client = ref.read(redPandaClientProvider);
+    final ownDescriptor = await ref
+        .read(outboundHandleRepositoryProvider)
+        .ensureOwnDescriptor(client, channel.id);
+
+    if (ownDescriptor == null || !mounted) return;
+    if (_createdChannel?.id != channel.id) return;
+
+    setState(() {
+      // Transient copy for the QR only: in the QR JSON, `oh` means "the OH
+      // of whoever generated this code". Our persisted channel keeps
+      // peerOhDescriptor = null until we scan the peer's code.
+      _qrData = channel.copyWith(peerOhDescriptor: ownDescriptor).toJson();
+      _ohRegistered = true;
+    });
   }
 
   @override
@@ -51,14 +79,18 @@ class _CreateChannelScreenState extends ConsumerState<CreateChannelScreen> {
               ),
               const SizedBox(height: 20),
               QrImageView(
-                data: _createdChannel!.toJson(),
+                data: _qrData!,
                 version: QrVersions.auto,
                 size: 250.0,
                 backgroundColor: Colors.white,
               ),
               const SizedBox(height: 20),
-              const Text(
-                'Scan this code on another device to join.',
+              Text(
+                _ohRegistered
+                    ? 'Scan this code on another device to join.'
+                    : 'Scan this code on another device to join.\n'
+                          '(Registering mailbox… reopen the QR via the chat '
+                          'screen to include it.)',
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 40),

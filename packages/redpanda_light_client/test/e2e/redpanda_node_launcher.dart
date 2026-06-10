@@ -16,61 +16,14 @@ class RedPandaNodeLauncher {
   static Future<bool> isJarAvailable() async {
     try {
       final launcher = RedPandaNodeLauncher(port: 0);
-      final projectRoot = launcher._findProjectRoot();
-      // Try to find the redpandaj directory (case-insensitive)
-      final referencesDir = Directory(p.join(projectRoot, 'references'));
-      String redpandajDirName = 'redPandaj'; // Default
-
-      if (referencesDir.existsSync()) {
-        final dirs = referencesDir.listSync().whereType<Directory>();
-        for (final dir in dirs) {
-          final name = p.basename(dir.path);
-          if (name.toLowerCase() == 'redpandaj') {
-            redpandajDirName = name;
-            break;
-          }
-        }
-      }
-
-      final jarPath = p.join(
-        projectRoot,
-        'references',
-        redpandajDirName,
-        'target',
-        'redpanda.jar',
-      );
-      return File(jarPath).existsSync();
+      return File(launcher._findJarPath()).existsSync();
     } catch (e) {
       return false;
     }
   }
 
   Future<void> start() async {
-    // Locate the jar file relative to the project root
-    final projectRoot = _findProjectRoot();
-
-    // Try to find the redpandaj directory (case-insensitive)
-    final referencesDir = Directory(p.join(projectRoot, 'references'));
-    String redpandajDirName = 'redPandaj'; // Default
-
-    if (referencesDir.existsSync()) {
-      final dirs = referencesDir.listSync().whereType<Directory>();
-      for (final dir in dirs) {
-        final name = p.basename(dir.path);
-        if (name.toLowerCase() == 'redpandaj') {
-          redpandajDirName = name;
-          break;
-        }
-      }
-    }
-
-    final jarPath = p.join(
-      projectRoot,
-      'references',
-      redpandajDirName,
-      'target',
-      'redpanda.jar',
-    );
+    final jarPath = _findJarPath();
 
     print('Looking for JAR at: $jarPath');
 
@@ -159,6 +112,30 @@ class RedPandaNodeLauncher {
     } on TimeoutException {
       return false; // Still running
     }
+  }
+
+  String _findJarPath() {
+    final projectRoot = _findProjectRoot();
+
+    // Try references/redpandaj first (case-insensitive)
+    final referencesDir = Directory(p.join(projectRoot, 'references'));
+    if (referencesDir.existsSync()) {
+      for (final dir in referencesDir.listSync().whereType<Directory>()) {
+        if (p.basename(dir.path).toLowerCase() == 'redpandaj') {
+          final candidate = p.join(dir.path, 'target', 'redpanda.jar');
+          if (File(candidate).existsSync()) return candidate;
+        }
+      }
+    }
+
+    // Fallback: direct redpandaj in root
+    final directJar = p.join(
+      projectRoot,
+      'redpandaj',
+      'target',
+      'redpanda.jar',
+    );
+    return directJar;
   }
 
   String _findProjectRoot() {

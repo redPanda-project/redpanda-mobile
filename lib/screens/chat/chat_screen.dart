@@ -2,7 +2,9 @@ import 'dart:convert';
 import 'package:drift/drift.dart' as drift;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:hex/hex.dart';
 import 'package:redpanda/database/database.dart';
+import 'package:redpanda/repositories/outbound_handle_repository.dart';
 import 'package:redpanda/screens/chat/share_qr_dialog.dart';
 import 'package:redpanda/shared/providers.dart';
 
@@ -29,6 +31,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final currentUser = await db.select(db.users).getSingleOrNull();
     if (currentUser == null) return;
 
+    // Insert message locally with pending status
     await db
         .into(db.messages)
         .insert(
@@ -42,23 +45,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ),
         );
 
-    // START: Simulate receiving a reply (Mock logic)
-    Future.delayed(const Duration(seconds: 1), () async {
-      if (!mounted) return;
-      await db
-          .into(db.messages)
-          .insert(
-            MessagesCompanion.insert(
-              conversationId: widget.peerUuid,
-              senderId: widget.peerUuid, // From them
-              content: "Replying to: $content",
-              timestamp: DateTime.now(),
-              status: 1, // Delivered
-              type: 0,
-            ),
-          );
-    });
-    // END: Mock logic
+    // Send via network
+    try {
+      await ref
+          .read(redPandaClientProvider)
+          .sendMessage(widget.peerUuid, content);
+      // TODO: Update message status to sent (1) after confirmation
+    } catch (e) {
+      // TODO: Update message status to failed (5), show Snackbar
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to send: $e')));
+      }
+    }
   }
 
   @override
@@ -66,6 +66,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     // Watch messages for this conversation
     final messagesAsync = ref.watch(messagesStreamProvider(widget.peerUuid));
     final channelAsync = ref.watch(channelProvider(widget.peerUuid));
+
+    // Register channel encryption keys when channel data is available
+    channelAsync.whenData((channel) {
+      if (channel != null) {
+        final client = ref.read(redPandaClientProvider);
+        final encKey = HEX.decode(channel.encryptionKey);
+        final peerOhId = channel.peerOhId != null
+            ? HEX.decode(channel.peerOhId!)
+            : null;
+        client.addChannelKeys(channel.uuid, encKey, peerOhId: peerOhId);
+      }
+    });
 
     return Scaffold(
       appBar: AppBar(
@@ -89,14 +101,33 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               if (channel == null) return const SizedBox.shrink();
               return IconButton(
                 icon: const Icon(Icons.qr_code),
-                onPressed: () {
-                  final jsonString = jsonEncode({
+                onPressed: () async {
+                  final map = <String, dynamic>{
                     'l': channel.label,
                     'k_enc': channel.encryptionKey,
                     'k_auth': channel.authenticationKey,
-                    'v': 1,
-                  });
+                  };
 
+                  // Embed our OWN outbound handle so the scanning peer
+                  // knows where to deposit messages for us. Registers one
+                  // on the fly if we don't have a valid OH yet.
+                  final ownDescriptor = await ref
+                      .read(outboundHandleRepositoryProvider)
+                      .ensureOwnDescriptor(
+                        ref.read(redPandaClientProvider),
+                        channel.uuid,
+                      );
+
+                  if (ownDescriptor != null) {
+                    map['oh'] = ownDescriptor.toJsonMap();
+                    map['v'] = 2;
+                  } else {
+                    map['v'] = 1;
+                  }
+
+                  final jsonString = jsonEncode(map);
+
+                  if (!context.mounted) return;
                   showDialog(
                     context: context,
                     builder: (context) => ShareChannelDialog(

@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'package:redpanda_light_client/src/client_facade.dart';
+import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
+import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/peer_stats_snapshot.dart';
 
@@ -7,6 +9,8 @@ import 'package:redpanda_light_client/src/models/peer_stats_snapshot.dart';
 class MockRedPandaClient implements RedPandaClient {
   final _connectionStatusController =
       StreamController<ConnectionStatus>.broadcast();
+  final _incomingMessageController =
+      StreamController<DecryptedMessage>.broadcast();
 
   @override
   Stream<ConnectionStatus> get connectionStatus =>
@@ -28,7 +32,7 @@ class MockRedPandaClient implements RedPandaClient {
   }
 
   @override
-  Future<String> sendMessage(String recipientPublicKey, String content) async {
+  Future<String> sendMessage(String channelId, String content) async {
     // Simulate sending
     await Future.delayed(Duration(milliseconds: 500));
     return "mock-message-id-${DateTime.now().millisecondsSinceEpoch}";
@@ -48,4 +52,27 @@ class MockRedPandaClient implements RedPandaClient {
       connectingPeerAddresses: {},
     ),
   );
+
+  @override
+  Future<OHRegistration> registerOutboundHandle({String? channelId}) async {
+    throw UnimplementedError('Mock OH registration not available');
+  }
+
+  @override
+  Future<List<DecryptedMessage>> fetchMessages(OHRegistration oh) async {
+    return [];
+  }
+
+  @override
+  Stream<DecryptedMessage> get incomingMessages =>
+      _incomingMessageController.stream;
+
+  @override
+  void addChannelKeys(
+    String channelId,
+    List<int> encryptionKey, {
+    List<int>? peerOhId,
+  }) {
+    // Mock: no-op
+  }
 }
