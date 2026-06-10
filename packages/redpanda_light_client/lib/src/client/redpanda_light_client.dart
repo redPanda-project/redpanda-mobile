@@ -702,6 +702,7 @@ class RedPandaLightClient implements RedPandaClient {
       keypair: keypair,
       expiresAtMs: expiresAt.millisecondsSinceEpoch,
       channelId: channelId,
+      serverEndpoint: activePeer?.address,
     );
 
     _registeredOHs.add(registration);

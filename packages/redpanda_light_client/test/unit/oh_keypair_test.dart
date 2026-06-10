@@ -38,6 +38,33 @@ void main() {
       expect(isValid, true);
     });
 
+    test('should export 32-byte private key and restore the same keypair', () {
+      final original = OHKeypair.generate();
+
+      final privBytes = original.privateKeyBytes;
+      expect(privBytes.length, 32);
+
+      final restored = OHKeypair.fromPrivateKeyBytes(privBytes);
+      expect(restored.publicKeyBytes, equals(original.publicKeyBytes));
+      expect(restored.privateKeyBytes, equals(privBytes));
+
+      // Signature from the restored key must verify with the original key
+      final data = Uint8List.fromList(List.generate(16, (i) => i));
+      final signature = restored.sign(data);
+      expect(original.verify(data, signature), true);
+    });
+
+    test('should reject invalid private key bytes', () {
+      expect(
+        () => OHKeypair.fromPrivateKeyBytes(Uint8List(16)),
+        throwsArgumentError,
+      );
+      expect(
+        () => OHKeypair.fromPrivateKeyBytes(Uint8List(32)), // all zeros
+        throwsArgumentError,
+      );
+    });
+
     test('should fail verification with tampered data', () {
       final keypair = OHKeypair.generate();
       final data = Uint8List.fromList([1, 2, 3, 4, 5, 6, 7, 8]);

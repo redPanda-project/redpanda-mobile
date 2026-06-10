@@ -33,9 +33,38 @@ class OHKeypair {
     return OHKeypair(publicKey: pair.publicKey, privateKey: pair.privateKey);
   }
 
+  /// Restores a keypair from its 32-byte private scalar (see [privateKeyBytes]).
+  ///
+  /// The public key is recomputed as Q = d * G on brainpoolp256r1.
+  factory OHKeypair.fromPrivateKeyBytes(Uint8List bytes) {
+    if (bytes.length != 32) {
+      throw ArgumentError.value(
+        bytes.length,
+        'bytes',
+        'Expected 32 bytes for brainpoolp256r1 private key',
+      );
+    }
+    final ecParams = ECDomainParameters('brainpoolp256r1');
+    final d = _bytesToBigInt(bytes);
+    if (d == BigInt.zero || d >= ecParams.n) {
+      throw ArgumentError('Private key scalar out of range');
+    }
+    final q = (ecParams.G * d)!;
+    return OHKeypair(
+      publicKey: ECPublicKey(q, ecParams),
+      privateKey: ECPrivateKey(d, ecParams),
+    );
+  }
+
   /// Uncompressed public key bytes (65 bytes: 0x04 + X + Y).
   Uint8List get publicKeyBytes {
     return publicKey.Q!.getEncoded(false);
+  }
+
+  /// Private scalar as 32 bytes big-endian, for persistence and
+  /// isolate transfer. Restore with [OHKeypair.fromPrivateKeyBytes].
+  Uint8List get privateKeyBytes {
+    return _bigIntToBytes(privateKey.d!, 32);
   }
 
   /// Signs [data] using SHA256withECDSA and returns a DER-encoded signature.

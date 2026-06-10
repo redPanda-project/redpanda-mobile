@@ -10,6 +10,10 @@ class OHRegistration {
   final int expiresAtMs;
   final String? channelId;
 
+  /// Address (host:port) of the Full Node the OH was registered on.
+  /// Needed to build the OHDescriptor shared via QR code.
+  final String? serverEndpoint;
+
   /// Cursor for paginated fetching; updated after each fetch.
   int lastCursor;
 
@@ -18,6 +22,7 @@ class OHRegistration {
     required this.keypair,
     required this.expiresAtMs,
     this.channelId,
+    this.serverEndpoint,
     int? lastCursor,
   }) : lastCursor = lastCursor ?? 0;
 }

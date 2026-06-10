@@ -35,7 +35,11 @@ class CmdSendMessage extends IsolateCommand {
   CmdSendMessage(this.channelId, this.content);
 }
 
-class CmdRegisterOutboundHandle extends IsolateCommand {}
+class CmdRegisterOutboundHandle extends IsolateCommand {
+  final int requestId;
+  final String? channelId;
+  CmdRegisterOutboundHandle(this.requestId, {this.channelId});
+}
 
 class CmdAddChannelKeys extends IsolateCommand {
   final String channelId;
@@ -81,4 +85,30 @@ class EventMessageSent extends IsolateEvent {
 class EventIncomingMessage extends IsolateEvent {
   final DecryptedMessage message;
   EventIncomingMessage(this.message);
+}
+
+/// Successful OH registration. Carries only isolate-sendable primitives;
+/// the keypair travels as its 32-byte private scalar
+/// (see OHKeypair.privateKeyBytes / OHKeypair.fromPrivateKeyBytes).
+class EventOhRegistered extends IsolateEvent {
+  final int requestId;
+  final List<int> ohId;
+  final List<int> privateKeyBytes;
+  final int expiresAtMs;
+  final String? channelId;
+  final String? serverEndpoint;
+  EventOhRegistered({
+    required this.requestId,
+    required this.ohId,
+    required this.privateKeyBytes,
+    required this.expiresAtMs,
+    this.channelId,
+    this.serverEndpoint,
+  });
+}
+
+class EventOhRegisterFailed extends IsolateEvent {
+  final int requestId;
+  final String error;
+  EventOhRegisterFailed(this.requestId, this.error);
 }

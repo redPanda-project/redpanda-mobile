@@ -1,9 +1,12 @@
 import 'dart:async';
 import 'dart:isolate';
 
+import 'dart:typed_data';
+
 import 'package:redpanda_light_client/src/client/isolate_protocol.dart';
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/client_facade.dart';
+import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
@@ -32,6 +35,10 @@ class RedPandaIsolateClient implements RedPandaClient {
 
   final _incomingMessageController =
       StreamController<DecryptedMessage>.broadcast();
+
+  // Pending OH registrations awaiting their isolate response, by requestId.
+  final Map<int, Completer<OHRegistration>> _pendingOhRegistrations = {};
+  int _nextRequestId = 0;
 
   // Cache last known status
   ConnectionStatus _currentStatus = ConnectionStatus.disconnected;
@@ -91,6 +98,30 @@ class RedPandaIsolateClient implements RedPandaClient {
       _peerStatsController.add(snapshot);
     } else if (event is EventIncomingMessage) {
       _incomingMessageController.add(event.message);
+    } else if (event is EventOhRegistered) {
+      final completer = _pendingOhRegistrations.remove(event.requestId);
+      if (completer != null && !completer.isCompleted) {
+        try {
+          completer.complete(
+            OHRegistration(
+              ohId: event.ohId,
+              keypair: OHKeypair.fromPrivateKeyBytes(
+                Uint8List.fromList(event.privateKeyBytes),
+              ),
+              expiresAtMs: event.expiresAtMs,
+              channelId: event.channelId,
+              serverEndpoint: event.serverEndpoint,
+            ),
+          );
+        } catch (e) {
+          completer.completeError(e);
+        }
+      }
+    } else if (event is EventOhRegisterFailed) {
+      final completer = _pendingOhRegistrations.remove(event.requestId);
+      if (completer != null && !completer.isCompleted) {
+        completer.completeError(StateError(event.error));
+      }
     } else if (event is EventLog) {
       print('[Isolate] ${event.message}');
     }
@@ -156,16 +187,28 @@ class RedPandaIsolateClient implements RedPandaClient {
 
   @override
   Future<OHRegistration> registerOutboundHandle({String? channelId}) async {
-    _send(CmdRegisterOutboundHandle());
-    // TODO: Wait for response from isolate with actual registration
-    throw UnimplementedError(
-      'registerOutboundHandle via isolate not yet wired - use direct client for now',
+    await _isolateReady.future;
+    final requestId = _nextRequestId++;
+    final completer = Completer<OHRegistration>();
+    _pendingOhRegistrations[requestId] = completer;
+    _send(CmdRegisterOutboundHandle(requestId, channelId: channelId));
+    return completer.future.timeout(
+      const Duration(seconds: 15),
+      onTimeout: () {
+        _pendingOhRegistrations.remove(requestId);
+        throw TimeoutException(
+          'OH registration timed out',
+          const Duration(seconds: 15),
+        );
+      },
     );
   }
 
   @override
   Future<List<DecryptedMessage>> fetchMessages(OHRegistration oh) async {
-    // Polling is handled internally by the client in the isolate
+    // Polling is handled internally by the client in the isolate; fetched
+    // messages are delivered via [incomingMessages]. This facade method
+    // therefore has nothing to return directly.
     return [];
   }
 
@@ -271,7 +314,25 @@ void _isolateEntryPoint(SendPort mainSendPort) {
         );
         mainSendPort.send(EventMessageSent(messageId));
       } else if (message is CmdRegisterOutboundHandle) {
-        await client!.registerOutboundHandle();
+        try {
+          final registration = await client!.registerOutboundHandle(
+            channelId: message.channelId,
+          );
+          mainSendPort.send(
+            EventOhRegistered(
+              requestId: message.requestId,
+              ohId: registration.ohId,
+              privateKeyBytes: registration.keypair.privateKeyBytes.toList(),
+              expiresAtMs: registration.expiresAtMs,
+              channelId: registration.channelId,
+              serverEndpoint: registration.serverEndpoint,
+            ),
+          );
+        } catch (e) {
+          mainSendPort.send(
+            EventOhRegisterFailed(message.requestId, e.toString()),
+          );
+        }
       } else if (message is CmdAddChannelKeys) {
         client!.addChannelKeys(
           message.channelId,
