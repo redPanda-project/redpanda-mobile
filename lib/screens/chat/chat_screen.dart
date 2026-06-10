@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hex/hex.dart';
 import 'package:redpanda/database/database.dart';
+import 'package:redpanda/repositories/outbound_handle_repository.dart';
 import 'package:redpanda/screens/chat/share_qr_dialog.dart';
 import 'package:redpanda/shared/providers.dart';
 
@@ -100,21 +101,25 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               if (channel == null) return const SizedBox.shrink();
               return IconButton(
                 icon: const Icon(Icons.qr_code),
-                onPressed: () {
+                onPressed: () async {
                   final map = <String, dynamic>{
                     'l': channel.label,
                     'k_enc': channel.encryptionKey,
                     'k_auth': channel.authenticationKey,
                   };
 
-                  if (channel.peerOhEndpoint != null &&
-                      channel.peerOhId != null &&
-                      channel.peerOhPublicKey != null) {
-                    map['oh'] = {
-                      'ep': channel.peerOhEndpoint,
-                      'id': channel.peerOhId,
-                      'pk': channel.peerOhPublicKey,
-                    };
+                  // Embed our OWN outbound handle so the scanning peer
+                  // knows where to deposit messages for us. Registers one
+                  // on the fly if we don't have a valid OH yet.
+                  final ownDescriptor = await ref
+                      .read(outboundHandleRepositoryProvider)
+                      .ensureOwnDescriptor(
+                        ref.read(redPandaClientProvider),
+                        channel.uuid,
+                      );
+
+                  if (ownDescriptor != null) {
+                    map['oh'] = ownDescriptor.toJsonMap();
                     map['v'] = 2;
                   } else {
                     map['v'] = 1;
@@ -122,6 +127,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
                   final jsonString = jsonEncode(map);
 
+                  if (!context.mounted) return;
                   showDialog(
                     context: context,
                     builder: (context) => ShareChannelDialog(

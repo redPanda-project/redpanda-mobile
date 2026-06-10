@@ -29,19 +29,23 @@ void main() {
       timeout: const Timeout(Duration(seconds: 30)),
     );
 
-    test('concurrent registrations resolve independently', () async {
-      final client = RedPandaIsolateClient(seeds: const []);
+    test(
+      'concurrent registrations resolve independently',
+      () async {
+        final client = RedPandaIsolateClient(seeds: const []);
 
-      final results = await Future.wait([
-        client.registerOutboundHandle(channelId: 'channel-a'),
-        client.registerOutboundHandle(channelId: 'channel-b'),
-      ]);
+        final results = await Future.wait([
+          client.registerOutboundHandle(channelId: 'channel-a'),
+          client.registerOutboundHandle(channelId: 'channel-b'),
+        ]);
 
-      expect(results[0].channelId, 'channel-a');
-      expect(results[1].channelId, 'channel-b');
-      expect(results[0].ohId, isNot(equals(results[1].ohId)));
+        expect(results[0].channelId, 'channel-a');
+        expect(results[1].channelId, 'channel-b');
+        expect(results[0].ohId, isNot(equals(results[1].ohId)));
 
-      await client.disconnect();
-    }, timeout: const Timeout(Duration(seconds: 30)));
+        await client.disconnect();
+      },
+      timeout: const Timeout(Duration(seconds: 30)),
+    );
   });
 }

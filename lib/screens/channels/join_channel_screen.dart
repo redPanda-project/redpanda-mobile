@@ -1,9 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
 import 'package:redpanda/repositories/channel_repository.dart';
+import 'package:redpanda/repositories/outbound_handle_repository.dart';
+import 'package:redpanda/shared/providers.dart';
 
 class JoinChannelScreen extends ConsumerStatefulWidget {
   const JoinChannelScreen({super.key});
@@ -44,6 +48,14 @@ class _JoinChannelScreenState extends ConsumerState<JoinChannelScreen> {
 
       // Add to repository
       await ref.read(channelRepositoryProvider).addChannel(channel);
+
+      // Register our own OH for this channel in the background so it's
+      // ready when we share our QR code with the peer later.
+      unawaited(
+        ref
+            .read(outboundHandleRepositoryProvider)
+            .ensureOwnDescriptor(ref.read(redPandaClientProvider), channel.id),
+      );
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
