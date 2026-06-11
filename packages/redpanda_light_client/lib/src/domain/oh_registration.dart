@@ -7,7 +7,9 @@ import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
 class OHRegistration {
   final List<int> ohId;
   final OHKeypair keypair;
-  final int expiresAtMs;
+
+  /// Expiry of the registration; updated in place after a successful renewal.
+  int expiresAtMs;
   final String? channelId;
 
   /// Address (host:port) of the Full Node the OH was registered on.

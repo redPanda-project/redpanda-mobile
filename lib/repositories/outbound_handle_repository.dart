@@ -21,6 +21,44 @@ class OutboundHandleRepository {
     )..where((t) => t.channelId.equals(channelId))).getSingleOrNull();
   }
 
+  /// All persisted OHs that have not expired yet.
+  Future<List<db.OutboundHandle>> getAllValid() {
+    return (_db.select(
+      _db.outboundHandles,
+    )..where((t) => t.expiresAt.isBiggerThanValue(DateTime.now()))).get();
+  }
+
+  /// Persists the latest acknowledged fetch cursor for [ohIdHex].
+  Future<void> updateCursor(String ohIdHex, int lastCursor) async {
+    await (_db.update(
+      _db.outboundHandles,
+    )..where((t) => t.ohId.equals(ohIdHex))).write(
+      db.OutboundHandlesCompanion(lastCursor: drift.Value(lastCursor)),
+    );
+  }
+
+  /// Persists the new expiry after a successful OH renewal.
+  Future<void> updateExpiry(String ohIdHex, DateTime expiresAt) async {
+    await (_db.update(_db.outboundHandles)
+          ..where((t) => t.ohId.equals(ohIdHex)))
+        .write(db.OutboundHandlesCompanion(expiresAt: drift.Value(expiresAt)));
+  }
+
+  /// Maps a persisted row back to an [OHRegistration] for restoring into
+  /// the network client after an app restart.
+  OHRegistration toRegistration(db.OutboundHandle row) {
+    return OHRegistration(
+      ohId: HEX.decode(row.ohId),
+      keypair: OHKeypair.fromPrivateKeyBytes(
+        Uint8List.fromList(row.keypairBytes),
+      ),
+      expiresAtMs: row.expiresAt.millisecondsSinceEpoch,
+      channelId: row.channelId,
+      serverEndpoint: row.serverEndpoint,
+      lastCursor: row.lastCursor,
+    );
+  }
+
   Future<void> save(OHRegistration registration) async {
     await _db
         .into(_db.outboundHandles)

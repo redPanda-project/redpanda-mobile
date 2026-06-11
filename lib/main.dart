@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:redpanda/router.dart';
+import 'package:redpanda/services/message_sync_service.dart';
+import 'package:redpanda/services/send_retry_queue.dart';
 import 'package:redpanda/shared/providers.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
 
@@ -21,6 +25,16 @@ class _MyAppState extends ConsumerState<MyApp> {
     super.initState();
     // Synchronous connection trigger (KeyPair gen is now fast)
     ref.read(redPandaClientProvider).connect();
+
+    // MS02: persist incoming messages/cursors, restore OHs, retry sends
+    final syncService = ref.read(messageSyncServiceProvider);
+    syncService.start();
+    unawaited(
+      syncService.restorePersistedState().catchError(
+        (Object e) => debugPrint('Failed to restore persisted OH state: $e'),
+      ),
+    );
+    ref.read(sendRetryQueueProvider).start();
 
     // Lifecycle listener
     _lifecycleListener = AppLifecycleListener(onStateChange: _onStateChanged);

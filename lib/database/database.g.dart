@@ -941,6 +941,40 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     type: DriftSqlType.int,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _messageIdMeta = const VerificationMeta(
+    'messageId',
+  );
+  @override
+  late final GeneratedColumn<String> messageId = GeneratedColumn<String>(
+    'message_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _retryCountMeta = const VerificationMeta(
+    'retryCount',
+  );
+  @override
+  late final GeneratedColumn<int> retryCount = GeneratedColumn<int>(
+    'retry_count',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  static const VerificationMeta _lastRetryAtMeta = const VerificationMeta(
+    'lastRetryAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> lastRetryAt = GeneratedColumn<DateTime>(
+    'last_retry_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -950,6 +984,9 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     timestamp,
     status,
     type,
+    messageId,
+    retryCount,
+    lastRetryAt,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -1017,6 +1054,27 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     } else if (isInserting) {
       context.missing(_typeMeta);
     }
+    if (data.containsKey('message_id')) {
+      context.handle(
+        _messageIdMeta,
+        messageId.isAcceptableOrUnknown(data['message_id']!, _messageIdMeta),
+      );
+    }
+    if (data.containsKey('retry_count')) {
+      context.handle(
+        _retryCountMeta,
+        retryCount.isAcceptableOrUnknown(data['retry_count']!, _retryCountMeta),
+      );
+    }
+    if (data.containsKey('last_retry_at')) {
+      context.handle(
+        _lastRetryAtMeta,
+        lastRetryAt.isAcceptableOrUnknown(
+          data['last_retry_at']!,
+          _lastRetryAtMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -1054,6 +1112,18 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
         DriftSqlType.int,
         data['${effectivePrefix}type'],
       )!,
+      messageId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}message_id'],
+      ),
+      retryCount: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}retry_count'],
+      )!,
+      lastRetryAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}last_retry_at'],
+      ),
     );
   }
 
@@ -1071,6 +1141,9 @@ class Message extends DataClass implements Insertable<Message> {
   final DateTime timestamp;
   final int status;
   final int type;
+  final String? messageId;
+  final int retryCount;
+  final DateTime? lastRetryAt;
   const Message({
     required this.id,
     required this.conversationId,
@@ -1079,6 +1152,9 @@ class Message extends DataClass implements Insertable<Message> {
     required this.timestamp,
     required this.status,
     required this.type,
+    this.messageId,
+    required this.retryCount,
+    this.lastRetryAt,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -1090,6 +1166,13 @@ class Message extends DataClass implements Insertable<Message> {
     map['timestamp'] = Variable<DateTime>(timestamp);
     map['status'] = Variable<int>(status);
     map['type'] = Variable<int>(type);
+    if (!nullToAbsent || messageId != null) {
+      map['message_id'] = Variable<String>(messageId);
+    }
+    map['retry_count'] = Variable<int>(retryCount);
+    if (!nullToAbsent || lastRetryAt != null) {
+      map['last_retry_at'] = Variable<DateTime>(lastRetryAt);
+    }
     return map;
   }
 
@@ -1102,6 +1185,13 @@ class Message extends DataClass implements Insertable<Message> {
       timestamp: Value(timestamp),
       status: Value(status),
       type: Value(type),
+      messageId: messageId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(messageId),
+      retryCount: Value(retryCount),
+      lastRetryAt: lastRetryAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastRetryAt),
     );
   }
 
@@ -1118,6 +1208,9 @@ class Message extends DataClass implements Insertable<Message> {
       timestamp: serializer.fromJson<DateTime>(json['timestamp']),
       status: serializer.fromJson<int>(json['status']),
       type: serializer.fromJson<int>(json['type']),
+      messageId: serializer.fromJson<String?>(json['messageId']),
+      retryCount: serializer.fromJson<int>(json['retryCount']),
+      lastRetryAt: serializer.fromJson<DateTime?>(json['lastRetryAt']),
     );
   }
   @override
@@ -1131,6 +1224,9 @@ class Message extends DataClass implements Insertable<Message> {
       'timestamp': serializer.toJson<DateTime>(timestamp),
       'status': serializer.toJson<int>(status),
       'type': serializer.toJson<int>(type),
+      'messageId': serializer.toJson<String?>(messageId),
+      'retryCount': serializer.toJson<int>(retryCount),
+      'lastRetryAt': serializer.toJson<DateTime?>(lastRetryAt),
     };
   }
 
@@ -1142,6 +1238,9 @@ class Message extends DataClass implements Insertable<Message> {
     DateTime? timestamp,
     int? status,
     int? type,
+    Value<String?> messageId = const Value.absent(),
+    int? retryCount,
+    Value<DateTime?> lastRetryAt = const Value.absent(),
   }) => Message(
     id: id ?? this.id,
     conversationId: conversationId ?? this.conversationId,
@@ -1150,6 +1249,9 @@ class Message extends DataClass implements Insertable<Message> {
     timestamp: timestamp ?? this.timestamp,
     status: status ?? this.status,
     type: type ?? this.type,
+    messageId: messageId.present ? messageId.value : this.messageId,
+    retryCount: retryCount ?? this.retryCount,
+    lastRetryAt: lastRetryAt.present ? lastRetryAt.value : this.lastRetryAt,
   );
   Message copyWithCompanion(MessagesCompanion data) {
     return Message(
@@ -1162,6 +1264,13 @@ class Message extends DataClass implements Insertable<Message> {
       timestamp: data.timestamp.present ? data.timestamp.value : this.timestamp,
       status: data.status.present ? data.status.value : this.status,
       type: data.type.present ? data.type.value : this.type,
+      messageId: data.messageId.present ? data.messageId.value : this.messageId,
+      retryCount: data.retryCount.present
+          ? data.retryCount.value
+          : this.retryCount,
+      lastRetryAt: data.lastRetryAt.present
+          ? data.lastRetryAt.value
+          : this.lastRetryAt,
     );
   }
 
@@ -1174,7 +1283,10 @@ class Message extends DataClass implements Insertable<Message> {
           ..write('content: $content, ')
           ..write('timestamp: $timestamp, ')
           ..write('status: $status, ')
-          ..write('type: $type')
+          ..write('type: $type, ')
+          ..write('messageId: $messageId, ')
+          ..write('retryCount: $retryCount, ')
+          ..write('lastRetryAt: $lastRetryAt')
           ..write(')'))
         .toString();
   }
@@ -1188,6 +1300,9 @@ class Message extends DataClass implements Insertable<Message> {
     timestamp,
     status,
     type,
+    messageId,
+    retryCount,
+    lastRetryAt,
   );
   @override
   bool operator ==(Object other) =>
@@ -1199,7 +1314,10 @@ class Message extends DataClass implements Insertable<Message> {
           other.content == this.content &&
           other.timestamp == this.timestamp &&
           other.status == this.status &&
-          other.type == this.type);
+          other.type == this.type &&
+          other.messageId == this.messageId &&
+          other.retryCount == this.retryCount &&
+          other.lastRetryAt == this.lastRetryAt);
 }
 
 class MessagesCompanion extends UpdateCompanion<Message> {
@@ -1210,6 +1328,9 @@ class MessagesCompanion extends UpdateCompanion<Message> {
   final Value<DateTime> timestamp;
   final Value<int> status;
   final Value<int> type;
+  final Value<String?> messageId;
+  final Value<int> retryCount;
+  final Value<DateTime?> lastRetryAt;
   const MessagesCompanion({
     this.id = const Value.absent(),
     this.conversationId = const Value.absent(),
@@ -1218,6 +1339,9 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     this.timestamp = const Value.absent(),
     this.status = const Value.absent(),
     this.type = const Value.absent(),
+    this.messageId = const Value.absent(),
+    this.retryCount = const Value.absent(),
+    this.lastRetryAt = const Value.absent(),
   });
   MessagesCompanion.insert({
     this.id = const Value.absent(),
@@ -1227,6 +1351,9 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     required DateTime timestamp,
     required int status,
     required int type,
+    this.messageId = const Value.absent(),
+    this.retryCount = const Value.absent(),
+    this.lastRetryAt = const Value.absent(),
   }) : conversationId = Value(conversationId),
        senderId = Value(senderId),
        content = Value(content),
@@ -1241,6 +1368,9 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Expression<DateTime>? timestamp,
     Expression<int>? status,
     Expression<int>? type,
+    Expression<String>? messageId,
+    Expression<int>? retryCount,
+    Expression<DateTime>? lastRetryAt,
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
@@ -1250,6 +1380,9 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       if (timestamp != null) 'timestamp': timestamp,
       if (status != null) 'status': status,
       if (type != null) 'type': type,
+      if (messageId != null) 'message_id': messageId,
+      if (retryCount != null) 'retry_count': retryCount,
+      if (lastRetryAt != null) 'last_retry_at': lastRetryAt,
     });
   }
 
@@ -1261,6 +1394,9 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Value<DateTime>? timestamp,
     Value<int>? status,
     Value<int>? type,
+    Value<String?>? messageId,
+    Value<int>? retryCount,
+    Value<DateTime?>? lastRetryAt,
   }) {
     return MessagesCompanion(
       id: id ?? this.id,
@@ -1270,6 +1406,9 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       timestamp: timestamp ?? this.timestamp,
       status: status ?? this.status,
       type: type ?? this.type,
+      messageId: messageId ?? this.messageId,
+      retryCount: retryCount ?? this.retryCount,
+      lastRetryAt: lastRetryAt ?? this.lastRetryAt,
     );
   }
 
@@ -1297,6 +1436,15 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     if (type.present) {
       map['type'] = Variable<int>(type.value);
     }
+    if (messageId.present) {
+      map['message_id'] = Variable<String>(messageId.value);
+    }
+    if (retryCount.present) {
+      map['retry_count'] = Variable<int>(retryCount.value);
+    }
+    if (lastRetryAt.present) {
+      map['last_retry_at'] = Variable<DateTime>(lastRetryAt.value);
+    }
     return map;
   }
 
@@ -1309,7 +1457,10 @@ class MessagesCompanion extends UpdateCompanion<Message> {
           ..write('content: $content, ')
           ..write('timestamp: $timestamp, ')
           ..write('status: $status, ')
-          ..write('type: $type')
+          ..write('type: $type, ')
+          ..write('messageId: $messageId, ')
+          ..write('retryCount: $retryCount, ')
+          ..write('lastRetryAt: $lastRetryAt')
           ..write(')'))
         .toString();
   }
@@ -1817,6 +1968,18 @@ class $OutboundHandlesTable extends OutboundHandles
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _lastCursorMeta = const VerificationMeta(
+    'lastCursor',
+  );
+  @override
+  late final GeneratedColumn<int> lastCursor = GeneratedColumn<int>(
+    'last_cursor',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -1825,6 +1988,7 @@ class $OutboundHandlesTable extends OutboundHandles
     serverEndpoint,
     expiresAt,
     channelId,
+    lastCursor,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -1885,6 +2049,12 @@ class $OutboundHandlesTable extends OutboundHandles
         channelId.isAcceptableOrUnknown(data['channel_id']!, _channelIdMeta),
       );
     }
+    if (data.containsKey('last_cursor')) {
+      context.handle(
+        _lastCursorMeta,
+        lastCursor.isAcceptableOrUnknown(data['last_cursor']!, _lastCursorMeta),
+      );
+    }
     return context;
   }
 
@@ -1918,6 +2088,10 @@ class $OutboundHandlesTable extends OutboundHandles
         DriftSqlType.string,
         data['${effectivePrefix}channel_id'],
       ),
+      lastCursor: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}last_cursor'],
+      )!,
     );
   }
 
@@ -1934,6 +2108,7 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
   final String serverEndpoint;
   final DateTime expiresAt;
   final String? channelId;
+  final int lastCursor;
   const OutboundHandle({
     required this.id,
     required this.ohId,
@@ -1941,6 +2116,7 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
     required this.serverEndpoint,
     required this.expiresAt,
     this.channelId,
+    required this.lastCursor,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -1953,6 +2129,7 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
     if (!nullToAbsent || channelId != null) {
       map['channel_id'] = Variable<String>(channelId);
     }
+    map['last_cursor'] = Variable<int>(lastCursor);
     return map;
   }
 
@@ -1966,6 +2143,7 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
       channelId: channelId == null && nullToAbsent
           ? const Value.absent()
           : Value(channelId),
+      lastCursor: Value(lastCursor),
     );
   }
 
@@ -1981,6 +2159,7 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
       serverEndpoint: serializer.fromJson<String>(json['serverEndpoint']),
       expiresAt: serializer.fromJson<DateTime>(json['expiresAt']),
       channelId: serializer.fromJson<String?>(json['channelId']),
+      lastCursor: serializer.fromJson<int>(json['lastCursor']),
     );
   }
   @override
@@ -1993,6 +2172,7 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
       'serverEndpoint': serializer.toJson<String>(serverEndpoint),
       'expiresAt': serializer.toJson<DateTime>(expiresAt),
       'channelId': serializer.toJson<String?>(channelId),
+      'lastCursor': serializer.toJson<int>(lastCursor),
     };
   }
 
@@ -2003,6 +2183,7 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
     String? serverEndpoint,
     DateTime? expiresAt,
     Value<String?> channelId = const Value.absent(),
+    int? lastCursor,
   }) => OutboundHandle(
     id: id ?? this.id,
     ohId: ohId ?? this.ohId,
@@ -2010,6 +2191,7 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
     serverEndpoint: serverEndpoint ?? this.serverEndpoint,
     expiresAt: expiresAt ?? this.expiresAt,
     channelId: channelId.present ? channelId.value : this.channelId,
+    lastCursor: lastCursor ?? this.lastCursor,
   );
   OutboundHandle copyWithCompanion(OutboundHandlesCompanion data) {
     return OutboundHandle(
@@ -2023,6 +2205,9 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
           : this.serverEndpoint,
       expiresAt: data.expiresAt.present ? data.expiresAt.value : this.expiresAt,
       channelId: data.channelId.present ? data.channelId.value : this.channelId,
+      lastCursor: data.lastCursor.present
+          ? data.lastCursor.value
+          : this.lastCursor,
     );
   }
 
@@ -2034,7 +2219,8 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
           ..write('keypairBytes: $keypairBytes, ')
           ..write('serverEndpoint: $serverEndpoint, ')
           ..write('expiresAt: $expiresAt, ')
-          ..write('channelId: $channelId')
+          ..write('channelId: $channelId, ')
+          ..write('lastCursor: $lastCursor')
           ..write(')'))
         .toString();
   }
@@ -2047,6 +2233,7 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
     serverEndpoint,
     expiresAt,
     channelId,
+    lastCursor,
   );
   @override
   bool operator ==(Object other) =>
@@ -2057,7 +2244,8 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
           $driftBlobEquality.equals(other.keypairBytes, this.keypairBytes) &&
           other.serverEndpoint == this.serverEndpoint &&
           other.expiresAt == this.expiresAt &&
-          other.channelId == this.channelId);
+          other.channelId == this.channelId &&
+          other.lastCursor == this.lastCursor);
 }
 
 class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
@@ -2067,6 +2255,7 @@ class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
   final Value<String> serverEndpoint;
   final Value<DateTime> expiresAt;
   final Value<String?> channelId;
+  final Value<int> lastCursor;
   const OutboundHandlesCompanion({
     this.id = const Value.absent(),
     this.ohId = const Value.absent(),
@@ -2074,6 +2263,7 @@ class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
     this.serverEndpoint = const Value.absent(),
     this.expiresAt = const Value.absent(),
     this.channelId = const Value.absent(),
+    this.lastCursor = const Value.absent(),
   });
   OutboundHandlesCompanion.insert({
     this.id = const Value.absent(),
@@ -2082,6 +2272,7 @@ class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
     required String serverEndpoint,
     required DateTime expiresAt,
     this.channelId = const Value.absent(),
+    this.lastCursor = const Value.absent(),
   }) : ohId = Value(ohId),
        keypairBytes = Value(keypairBytes),
        serverEndpoint = Value(serverEndpoint),
@@ -2093,6 +2284,7 @@ class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
     Expression<String>? serverEndpoint,
     Expression<DateTime>? expiresAt,
     Expression<String>? channelId,
+    Expression<int>? lastCursor,
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
@@ -2101,6 +2293,7 @@ class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
       if (serverEndpoint != null) 'server_endpoint': serverEndpoint,
       if (expiresAt != null) 'expires_at': expiresAt,
       if (channelId != null) 'channel_id': channelId,
+      if (lastCursor != null) 'last_cursor': lastCursor,
     });
   }
 
@@ -2111,6 +2304,7 @@ class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
     Value<String>? serverEndpoint,
     Value<DateTime>? expiresAt,
     Value<String?>? channelId,
+    Value<int>? lastCursor,
   }) {
     return OutboundHandlesCompanion(
       id: id ?? this.id,
@@ -2119,6 +2313,7 @@ class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
       serverEndpoint: serverEndpoint ?? this.serverEndpoint,
       expiresAt: expiresAt ?? this.expiresAt,
       channelId: channelId ?? this.channelId,
+      lastCursor: lastCursor ?? this.lastCursor,
     );
   }
 
@@ -2143,6 +2338,9 @@ class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
     if (channelId.present) {
       map['channel_id'] = Variable<String>(channelId.value);
     }
+    if (lastCursor.present) {
+      map['last_cursor'] = Variable<int>(lastCursor.value);
+    }
     return map;
   }
 
@@ -2154,7 +2352,8 @@ class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
           ..write('keypairBytes: $keypairBytes, ')
           ..write('serverEndpoint: $serverEndpoint, ')
           ..write('expiresAt: $expiresAt, ')
-          ..write('channelId: $channelId')
+          ..write('channelId: $channelId, ')
+          ..write('lastCursor: $lastCursor')
           ..write(')'))
         .toString();
   }
@@ -2170,6 +2369,10 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $OutboundHandlesTable outboundHandles = $OutboundHandlesTable(
     this,
   );
+  late final Index idxMessagesMessageId = Index(
+    'idx_messages_message_id',
+    'CREATE UNIQUE INDEX idx_messages_message_id ON messages (message_id)',
+  );
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -2180,6 +2383,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     messages,
     peers,
     outboundHandles,
+    idxMessagesMessageId,
   ];
 }
 
@@ -2729,6 +2933,9 @@ typedef $$MessagesTableCreateCompanionBuilder =
       required DateTime timestamp,
       required int status,
       required int type,
+      Value<String?> messageId,
+      Value<int> retryCount,
+      Value<DateTime?> lastRetryAt,
     });
 typedef $$MessagesTableUpdateCompanionBuilder =
     MessagesCompanion Function({
@@ -2739,6 +2946,9 @@ typedef $$MessagesTableUpdateCompanionBuilder =
       Value<DateTime> timestamp,
       Value<int> status,
       Value<int> type,
+      Value<String?> messageId,
+      Value<int> retryCount,
+      Value<DateTime?> lastRetryAt,
     });
 
 final class $$MessagesTableReferences
@@ -2801,6 +3011,21 @@ class $$MessagesTableFilterComposer
 
   ColumnFilters<int> get type => $composableBuilder(
     column: $table.type,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get messageId => $composableBuilder(
+    column: $table.messageId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get retryCount => $composableBuilder(
+    column: $table.retryCount,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get lastRetryAt => $composableBuilder(
+    column: $table.lastRetryAt,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -2867,6 +3092,21 @@ class $$MessagesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get messageId => $composableBuilder(
+    column: $table.messageId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get retryCount => $composableBuilder(
+    column: $table.retryCount,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get lastRetryAt => $composableBuilder(
+    column: $table.lastRetryAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   $$ChannelsTableOrderingComposer get conversationId {
     final $$ChannelsTableOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -2917,6 +3157,19 @@ class $$MessagesTableAnnotationComposer
 
   GeneratedColumn<int> get type =>
       $composableBuilder(column: $table.type, builder: (column) => column);
+
+  GeneratedColumn<String> get messageId =>
+      $composableBuilder(column: $table.messageId, builder: (column) => column);
+
+  GeneratedColumn<int> get retryCount => $composableBuilder(
+    column: $table.retryCount,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get lastRetryAt => $composableBuilder(
+    column: $table.lastRetryAt,
+    builder: (column) => column,
+  );
 
   $$ChannelsTableAnnotationComposer get conversationId {
     final $$ChannelsTableAnnotationComposer composer = $composerBuilder(
@@ -2977,6 +3230,9 @@ class $$MessagesTableTableManager
                 Value<DateTime> timestamp = const Value.absent(),
                 Value<int> status = const Value.absent(),
                 Value<int> type = const Value.absent(),
+                Value<String?> messageId = const Value.absent(),
+                Value<int> retryCount = const Value.absent(),
+                Value<DateTime?> lastRetryAt = const Value.absent(),
               }) => MessagesCompanion(
                 id: id,
                 conversationId: conversationId,
@@ -2985,6 +3241,9 @@ class $$MessagesTableTableManager
                 timestamp: timestamp,
                 status: status,
                 type: type,
+                messageId: messageId,
+                retryCount: retryCount,
+                lastRetryAt: lastRetryAt,
               ),
           createCompanionCallback:
               ({
@@ -2995,6 +3254,9 @@ class $$MessagesTableTableManager
                 required DateTime timestamp,
                 required int status,
                 required int type,
+                Value<String?> messageId = const Value.absent(),
+                Value<int> retryCount = const Value.absent(),
+                Value<DateTime?> lastRetryAt = const Value.absent(),
               }) => MessagesCompanion.insert(
                 id: id,
                 conversationId: conversationId,
@@ -3003,6 +3265,9 @@ class $$MessagesTableTableManager
                 timestamp: timestamp,
                 status: status,
                 type: type,
+                messageId: messageId,
+                retryCount: retryCount,
+                lastRetryAt: lastRetryAt,
               ),
           withReferenceMapper: (p0) => p0
               .map(
@@ -3297,6 +3562,7 @@ typedef $$OutboundHandlesTableCreateCompanionBuilder =
       required String serverEndpoint,
       required DateTime expiresAt,
       Value<String?> channelId,
+      Value<int> lastCursor,
     });
 typedef $$OutboundHandlesTableUpdateCompanionBuilder =
     OutboundHandlesCompanion Function({
@@ -3306,6 +3572,7 @@ typedef $$OutboundHandlesTableUpdateCompanionBuilder =
       Value<String> serverEndpoint,
       Value<DateTime> expiresAt,
       Value<String?> channelId,
+      Value<int> lastCursor,
     });
 
 class $$OutboundHandlesTableFilterComposer
@@ -3344,6 +3611,11 @@ class $$OutboundHandlesTableFilterComposer
 
   ColumnFilters<String> get channelId => $composableBuilder(
     column: $table.channelId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get lastCursor => $composableBuilder(
+    column: $table.lastCursor,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -3386,6 +3658,11 @@ class $$OutboundHandlesTableOrderingComposer
     column: $table.channelId,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<int> get lastCursor => $composableBuilder(
+    column: $table.lastCursor,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$OutboundHandlesTableAnnotationComposer
@@ -3418,6 +3695,11 @@ class $$OutboundHandlesTableAnnotationComposer
 
   GeneratedColumn<String> get channelId =>
       $composableBuilder(column: $table.channelId, builder: (column) => column);
+
+  GeneratedColumn<int> get lastCursor => $composableBuilder(
+    column: $table.lastCursor,
+    builder: (column) => column,
+  );
 }
 
 class $$OutboundHandlesTableTableManager
@@ -3463,6 +3745,7 @@ class $$OutboundHandlesTableTableManager
                 Value<String> serverEndpoint = const Value.absent(),
                 Value<DateTime> expiresAt = const Value.absent(),
                 Value<String?> channelId = const Value.absent(),
+                Value<int> lastCursor = const Value.absent(),
               }) => OutboundHandlesCompanion(
                 id: id,
                 ohId: ohId,
@@ -3470,6 +3753,7 @@ class $$OutboundHandlesTableTableManager
                 serverEndpoint: serverEndpoint,
                 expiresAt: expiresAt,
                 channelId: channelId,
+                lastCursor: lastCursor,
               ),
           createCompanionCallback:
               ({
@@ -3479,6 +3763,7 @@ class $$OutboundHandlesTableTableManager
                 required String serverEndpoint,
                 required DateTime expiresAt,
                 Value<String?> channelId = const Value.absent(),
+                Value<int> lastCursor = const Value.absent(),
               }) => OutboundHandlesCompanion.insert(
                 id: id,
                 ohId: ohId,
@@ -3486,6 +3771,7 @@ class $$OutboundHandlesTableTableManager
                 serverEndpoint: serverEndpoint,
                 expiresAt: expiresAt,
                 channelId: channelId,
+                lastCursor: lastCursor,
               ),
           withReferenceMapper: (p0) => p0
               .map((e) => (e.readTable(table), BaseReferences(db, table, e)))

@@ -10,7 +10,7 @@ import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
 
 void main() {
-  group('MS01 AK1: sendMessage() does not throw UnimplementedError', () {
+  group('MS01 AK1 / MS02: sendMessage() reports delivery failures', () {
     late RedPandaLightClient client;
 
     setUp(() {
@@ -26,34 +26,40 @@ void main() {
       await client.disconnect();
     });
 
-    test('sendMessage returns a message ID without throwing', () async {
+    test('sendMessage without channel keys throws StateError', () async {
       final channel = Channel.generate('Test');
-      final messageId = await client.sendMessage(channel.id, 'Hello World');
 
-      expect(messageId, isNotEmpty);
-      expect(messageId, isA<String>());
+      // MS02: failures must surface so the retry queue can re-send later.
+      expect(
+        () => client.sendMessage(channel.id, 'Hello World'),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('no encryption keys'),
+          ),
+        ),
+      );
     });
 
     test(
-      'sendMessage with registered channel keys returns message ID',
+      'sendMessage with keys but no connected peer throws StateError',
       () async {
         final channel = Channel.generate('Test');
         client.addChannelKeys(channel.id, channel.encryptionKey);
 
-        final messageId = await client.sendMessage(channel.id, 'Hello');
-        expect(messageId, isNotEmpty);
+        expect(
+          () => client.sendMessage(channel.id, 'Hello'),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              contains('no active peer'),
+            ),
+          ),
+        );
       },
     );
-
-    test('sendMessage with different content returns unique IDs', () async {
-      final channel = Channel.generate('Test');
-      client.addChannelKeys(channel.id, channel.encryptionKey);
-
-      final id1 = await client.sendMessage(channel.id, 'Message 1');
-      final id2 = await client.sendMessage(channel.id, 'Message 2');
-
-      expect(id1, isNot(equals(id2)));
-    });
   });
 
   group('MS01 AK4: AES-256-CTR + HMAC-SHA256 encrypt → decrypt roundtrip', () {

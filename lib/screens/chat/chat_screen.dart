@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hex/hex.dart';
 import 'package:redpanda/database/database.dart';
+import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/repositories/outbound_handle_repository.dart';
 import 'package:redpanda/screens/chat/share_qr_dialog.dart';
+import 'package:redpanda/services/message_sync_service.dart';
 import 'package:redpanda/shared/providers.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
@@ -31,33 +33,38 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final currentUser = await db.select(db.users).getSingleOrNull();
     if (currentUser == null) return;
 
-    // Insert message locally with pending status
-    await db
-        .into(db.messages)
-        .insert(
-          MessagesCompanion.insert(
-            conversationId: widget.peerUuid,
-            senderId: currentUser.uuid,
-            content: content,
-            timestamp: DateTime.now(),
-            status: 0, // MessageStatus.pending
-            type: 0, // MessageType.text
-          ),
-        );
+    final messages = ref.read(messageRepositoryProvider);
 
-    // Send via network
+    // Insert message locally with pending status
+    final rowId = await messages.insertOutgoing(
+      conversationId: widget.peerUuid,
+      senderId: currentUser.uuid,
+      content: content,
+    );
+
+    // Send via network. On failure the message stays pending and the
+    // SendRetryQueue re-sends it with backoff.
     try {
       await ref
           .read(redPandaClientProvider)
           .sendMessage(widget.peerUuid, content);
-      // TODO: Update message status to sent (1) after confirmation
-    } catch (e) {
-      // TODO: Update message status to failed (5), show Snackbar
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Failed to send: $e')));
-      }
+      await messages.updateMessageStatus(rowId, MessageStatus.sent);
+    } catch (_) {
+      await messages.markRetryAttempt(rowId);
+    }
+  }
+
+  /// Status icon for own outgoing messages (MS02: pending/sent/failed).
+  Widget? _statusIcon(int status) {
+    switch (status) {
+      case MessageStatus.pending:
+        return const Icon(Icons.access_time, size: 14, color: Colors.grey);
+      case MessageStatus.sent:
+        return const Icon(Icons.check, size: 14, color: Colors.grey);
+      case MessageStatus.failed:
+        return const Icon(Icons.close, size: 14, color: Colors.red);
+      default:
+        return null;
     }
   }
 
@@ -66,6 +73,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     // Watch messages for this conversation
     final messagesAsync = ref.watch(messagesStreamProvider(widget.peerUuid));
     final channelAsync = ref.watch(channelProvider(widget.peerUuid));
+
+    // Warn when the Full Node evicted messages from our mailbox.
+    ref.listen(mailboxOverflowProvider, (_, next) {
+      final update = next.value;
+      if (update == null) return;
+      if (update.channelId != null && update.channelId != widget.peerUuid) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Some older messages may have been lost (mailbox full).',
+          ),
+        ),
+      );
+    });
 
     // Register channel encryption keys when channel data is available
     channelAsync.whenData((channel) {
@@ -163,6 +186,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     // Note: Logic above is a bit simplified. Usually check if senderId == myUuid.
                     // But here, if senderId != peerUuid, assume it's me.
 
+                    final statusIcon = isMe ? _statusIcon(msg.status) : null;
+
                     return Align(
                       alignment: isMe
                           ? Alignment.centerRight
@@ -181,7 +206,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                 ).colorScheme.surfaceContainerHighest,
                           borderRadius: BorderRadius.circular(16),
                         ),
-                        child: Text(msg.content),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Flexible(child: Text(msg.content)),
+                            if (statusIcon != null) ...[
+                              const SizedBox(width: 6),
+                              statusIcon,
+                            ],
+                          ],
+                        ),
                       ),
                     );
                   },

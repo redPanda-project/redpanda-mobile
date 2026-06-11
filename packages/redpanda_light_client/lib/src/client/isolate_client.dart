@@ -8,6 +8,7 @@ import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/client_facade.dart';
 import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
+import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
@@ -36,8 +37,14 @@ class RedPandaIsolateClient implements RedPandaClient {
   final _incomingMessageController =
       StreamController<DecryptedMessage>.broadcast();
 
+  final _ohMailboxUpdateController =
+      StreamController<OhMailboxUpdate>.broadcast();
+
   // Pending OH registrations awaiting their isolate response, by requestId.
   final Map<int, Completer<OHRegistration>> _pendingOhRegistrations = {};
+
+  // Pending sends awaiting their isolate response, by requestId.
+  final Map<int, Completer<String>> _pendingSends = {};
   int _nextRequestId = 0;
 
   // Cache last known status
@@ -122,6 +129,26 @@ class RedPandaIsolateClient implements RedPandaClient {
       if (completer != null && !completer.isCompleted) {
         completer.completeError(StateError(event.error));
       }
+    } else if (event is EventMessageSent) {
+      final completer = _pendingSends.remove(event.requestId);
+      if (completer != null && !completer.isCompleted) {
+        completer.complete(event.messageId);
+      }
+    } else if (event is EventMessageSendFailed) {
+      final completer = _pendingSends.remove(event.requestId);
+      if (completer != null && !completer.isCompleted) {
+        completer.completeError(StateError(event.error));
+      }
+    } else if (event is EventOhMailboxUpdate) {
+      _ohMailboxUpdateController.add(
+        OhMailboxUpdate(
+          ohId: event.ohId,
+          channelId: event.channelId,
+          lastCursor: event.lastCursor,
+          expiresAtMs: event.expiresAtMs,
+          mailboxOverflow: event.mailboxOverflow,
+        ),
+      );
     } else if (event is EventLog) {
       print('[Isolate] ${event.message}');
     }
@@ -180,9 +207,21 @@ class RedPandaIsolateClient implements RedPandaClient {
 
   @override
   Future<String> sendMessage(String channelId, String content) async {
-    _send(CmdSendMessage(channelId, content));
-    // TODO: Wait for EventMessageSent response from isolate
-    return '${DateTime.now().millisecondsSinceEpoch}';
+    await _isolateReady.future;
+    final requestId = _nextRequestId++;
+    final completer = Completer<String>();
+    _pendingSends[requestId] = completer;
+    _send(CmdSendMessage(requestId, channelId, content));
+    return completer.future.timeout(
+      const Duration(seconds: 15),
+      onTimeout: () {
+        _pendingSends.remove(requestId);
+        throw TimeoutException(
+          'sendMessage timed out',
+          const Duration(seconds: 15),
+        );
+      },
+    );
   }
 
   @override
@@ -211,6 +250,25 @@ class RedPandaIsolateClient implements RedPandaClient {
     // therefore has nothing to return directly.
     return [];
   }
+
+  @override
+  Future<void> restoreOutboundHandle(OHRegistration registration) async {
+    await _isolateReady.future;
+    _send(
+      CmdRestoreOutboundHandle(
+        ohId: registration.ohId,
+        privateKeyBytes: registration.keypair.privateKeyBytes.toList(),
+        expiresAtMs: registration.expiresAtMs,
+        channelId: registration.channelId,
+        serverEndpoint: registration.serverEndpoint,
+        lastCursor: registration.lastCursor,
+      ),
+    );
+  }
+
+  @override
+  Stream<OhMailboxUpdate> get ohMailboxUpdates =>
+      _ohMailboxUpdateController.stream;
 
   /// Register channel encryption keys in the isolate client.
   @override
@@ -276,6 +334,19 @@ void _isolateEntryPoint(SendPort mainSendPort) {
         mainSendPort.send(EventIncomingMessage(msg));
       });
 
+      // Forward OH mailbox updates (cursor/expiry/overflow) to main isolate
+      client!.ohMailboxUpdates.listen((update) {
+        mainSendPort.send(
+          EventOhMailboxUpdate(
+            ohId: update.ohId,
+            channelId: update.channelId,
+            lastCursor: update.lastCursor,
+            expiresAtMs: update.expiresAtMs,
+            mailboxOverflow: update.mailboxOverflow,
+          ),
+        );
+      });
+
       // Send periodic peer stats snapshots to main thread
       Timer.periodic(const Duration(seconds: 3), (_) {
         if (client != null) {
@@ -308,11 +379,17 @@ void _isolateEntryPoint(SendPort mainSendPort) {
       } else if (message is CmdLifecycleResume) {
         client!.onResume();
       } else if (message is CmdSendMessage) {
-        final messageId = await client!.sendMessage(
-          message.channelId,
-          message.content,
-        );
-        mainSendPort.send(EventMessageSent(messageId));
+        try {
+          final messageId = await client!.sendMessage(
+            message.channelId,
+            message.content,
+          );
+          mainSendPort.send(EventMessageSent(message.requestId, messageId));
+        } catch (e) {
+          mainSendPort.send(
+            EventMessageSendFailed(message.requestId, e.toString()),
+          );
+        }
       } else if (message is CmdRegisterOutboundHandle) {
         try {
           final registration = await client!.registerOutboundHandle(
@@ -338,6 +415,19 @@ void _isolateEntryPoint(SendPort mainSendPort) {
           message.channelId,
           message.encryptionKey,
           peerOhId: message.peerOhId,
+        );
+      } else if (message is CmdRestoreOutboundHandle) {
+        await client!.restoreOutboundHandle(
+          OHRegistration(
+            ohId: message.ohId,
+            keypair: OHKeypair.fromPrivateKeyBytes(
+              Uint8List.fromList(message.privateKeyBytes),
+            ),
+            expiresAtMs: message.expiresAtMs,
+            channelId: message.channelId,
+            serverEndpoint: message.serverEndpoint,
+            lastCursor: message.lastCursor,
+          ),
         );
       }
     } catch (e, stack) {

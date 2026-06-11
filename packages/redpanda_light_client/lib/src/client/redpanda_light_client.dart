@@ -10,6 +10,7 @@ import 'package:pointycastle/export.dart' as pc;
 import 'package:redpanda_light_client/src/client_facade.dart';
 import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
+import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/generated/commands.pb.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
@@ -480,7 +481,8 @@ class RedPandaLightClient implements RedPandaClient {
 
   Future<Set<String>> _resolveConnectedIps() async {
     final connectedIps = <String>{};
-    for (final peer in _peers.values) {
+    // Copy: _peers may be mutated by peer callbacks while we await lookups.
+    for (final peer in List.of(_peers.values)) {
       if (!peer.isDisconnected) {
         try {
           final parts = peer.address.split(':');
@@ -529,6 +531,8 @@ class RedPandaLightClient implements RedPandaClient {
     _connectionTimer?.cancel();
     _pollingTimer?.cancel();
     _pollingTimer = null;
+    _renewalTimer?.cancel();
+    _renewalTimer = null;
     for (final peer in _peers.values) {
       await peer.disconnect();
     }
@@ -536,6 +540,7 @@ class RedPandaLightClient implements RedPandaClient {
     _registeredOHs.clear();
     _pendingResponses.clear();
     await _incomingMessageController.close();
+    await _ohMailboxUpdateController.close();
     _updateStatus(ConnectionStatus.disconnected);
   }
 
@@ -543,7 +548,21 @@ class RedPandaLightClient implements RedPandaClient {
   final List<OHRegistration> _registeredOHs = [];
   final _incomingMessageController =
       StreamController<DecryptedMessage>.broadcast();
+  final _ohMailboxUpdateController =
+      StreamController<OhMailboxUpdate>.broadcast();
   Timer? _pollingTimer;
+  Timer? _renewalTimer;
+
+  // Guards against overlapping timer ticks: fetch/renew share
+  // _pendingResponses (keyed by command byte), so cycles must not race.
+  bool _pollInProgress = false;
+  bool _renewalInProgress = false;
+
+  /// OHs are renewed when they expire within this window.
+  static const Duration renewalThreshold = Duration(days: 1);
+
+  /// Interval for the renewal check timer.
+  static const Duration renewalCheckInterval = Duration(minutes: 5);
 
   /// Pending response completers keyed by command byte.
   final Map<int, Completer<List<int>>> _pendingResponses = {};
@@ -578,6 +597,33 @@ class RedPandaLightClient implements RedPandaClient {
       _incomingMessageController.stream;
 
   @override
+  Stream<OhMailboxUpdate> get ohMailboxUpdates =>
+      _ohMailboxUpdateController.stream;
+
+  /// Currently registered/restored OHs (read-only view, for tests).
+  List<OHRegistration> get registeredOutboundHandles =>
+      List.unmodifiable(_registeredOHs);
+
+  @override
+  Future<void> restoreOutboundHandle(OHRegistration registration) async {
+    final alreadyKnown = _registeredOHs.any(
+      (oh) => _sameOhId(oh.ohId, registration.ohId),
+    );
+    if (alreadyKnown) return;
+
+    _registeredOHs.add(registration);
+    _startPolling();
+  }
+
+  static bool _sameOhId(List<int> a, List<int> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  @override
   Future<String> sendMessage(String channelId, String content) async {
     final random = Random.secure();
     final messageId =
@@ -585,12 +631,12 @@ class RedPandaLightClient implements RedPandaClient {
 
     final encKey = _channelEncryptionKeys[channelId];
     if (encKey == null) {
-      // Channel keys not yet registered in the network layer.
-      // Message is stored locally by the UI; encryption will happen once keys are provided.
-      print(
-        'RedPandaLightClient: sendMessage() channel $channelId has no encryption keys registered yet — queued locally',
+      // Channel keys not yet registered in the network layer. The message
+      // stays pending in the app database; the retry queue re-sends it once
+      // the keys have been registered.
+      throw StateError(
+        'sendMessage: channel $channelId has no encryption keys registered',
       );
-      return messageId;
     }
 
     // 1. Generate random IV (16 bytes)
@@ -633,17 +679,16 @@ class RedPandaLightClient implements RedPandaClient {
         .where((p) => p.isHandshakeVerified)
         .firstOrNull;
 
-    if (activePeer != null) {
-      final buffer = flaschenpost.writeToBuffer();
-      print(
-        'RedPandaLightClient: sendMessage() serialized ${buffer.length} bytes for channel $channelId',
-      );
-      activePeer.sendCommand(141, Uint8List.fromList(buffer));
-    } else {
-      print(
-        'RedPandaLightClient: sendMessage() no active peer available, message queued locally',
-      );
+    if (activePeer == null) {
+      // No connected Full Node — the retry queue will try again later.
+      throw StateError('sendMessage: no active peer available');
     }
+
+    final buffer = flaschenpost.writeToBuffer();
+    print(
+      'RedPandaLightClient: sendMessage() serialized ${buffer.length} bytes for channel $channelId',
+    );
+    activePeer.sendCommand(141, Uint8List.fromList(buffer));
 
     return messageId;
   }
@@ -655,30 +700,10 @@ class RedPandaLightClient implements RedPandaClient {
     final ohId = Uint8List.fromList(
       List<int>.generate(20, (_) => random.nextInt(256)),
     );
-    final nonce = Uint8List.fromList(
-      List<int>.generate(16, (_) => random.nextInt(256)),
-    );
 
     final now = DateTime.now();
     final expiresAt = now.add(const Duration(days: 7));
-
-    // Build signing bytes: [CMD_BYTE(150) | oh_id | requested_expires_at(8 BE) | timestamp_ms(8 BE) | nonce]
-    final signingBuffer = BytesBuilder();
-    signingBuffer.addByte(150); // OUTBOUND_REGISTER_OH_REQ
-    signingBuffer.add(ohId);
-    signingBuffer.add(_int64Bytes(expiresAt.millisecondsSinceEpoch));
-    signingBuffer.add(_int64Bytes(now.millisecondsSinceEpoch));
-    signingBuffer.add(nonce);
-
-    final signature = keypair.sign(Uint8List.fromList(signingBuffer.toBytes()));
-
-    final request = RegisterOhRequest()
-      ..ohId = ohId
-      ..ohAuthPublicKey = keypair.publicKeyBytes
-      ..requestedExpiresAt = _toInt64(expiresAt.millisecondsSinceEpoch)
-      ..timestampMs = _toInt64(now.millisecondsSinceEpoch)
-      ..nonce = nonce
-      ..signature = signature;
+    final request = _buildRegisterRequest(ohId, keypair, now, expiresAt);
 
     // Send to best active peer
     final activePeer = _peers.values
@@ -709,6 +734,113 @@ class RedPandaLightClient implements RedPandaClient {
     _startPolling();
 
     return registration;
+  }
+
+  /// Builds a signed RegisterOhRequest. Signing bytes:
+  /// [CMD_BYTE(150) | oh_id | requested_expires_at(8 BE) | timestamp_ms(8 BE) | nonce]
+  RegisterOhRequest _buildRegisterRequest(
+    List<int> ohId,
+    OHKeypair keypair,
+    DateTime now,
+    DateTime expiresAt,
+  ) {
+    final random = Random.secure();
+    final nonce = Uint8List.fromList(
+      List<int>.generate(16, (_) => random.nextInt(256)),
+    );
+
+    final signingBuffer = BytesBuilder();
+    signingBuffer.addByte(150); // OUTBOUND_REGISTER_OH_REQ
+    signingBuffer.add(ohId);
+    signingBuffer.add(_int64Bytes(expiresAt.millisecondsSinceEpoch));
+    signingBuffer.add(_int64Bytes(now.millisecondsSinceEpoch));
+    signingBuffer.add(nonce);
+
+    final signature = keypair.sign(Uint8List.fromList(signingBuffer.toBytes()));
+
+    return RegisterOhRequest()
+      ..ohId = ohId
+      ..ohAuthPublicKey = keypair.publicKeyBytes
+      ..requestedExpiresAt = _toInt64(expiresAt.millisecondsSinceEpoch)
+      ..timestampMs = _toInt64(now.millisecondsSinceEpoch)
+      ..nonce = nonce
+      ..signature = signature;
+  }
+
+  /// Re-registers [oh] with the same id and keypair to extend its TTL.
+  /// On success, updates [OHRegistration.expiresAtMs] and emits an
+  /// [OhMailboxUpdate] so the app layer can persist the new expiry.
+  /// Returns true if the Full Node confirmed the renewal.
+  Future<bool> renewOutboundHandle(OHRegistration oh) async {
+    final activePeer = _peers.values
+        .where((p) => p.isHandshakeVerified)
+        .firstOrNull;
+    if (activePeer == null) {
+      print('RedPandaLightClient: renewOutboundHandle() no active peer');
+      return false;
+    }
+
+    final now = DateTime.now();
+    final expiresAt = now.add(const Duration(days: 7));
+    final request = _buildRegisterRequest(oh.ohId, oh.keypair, now, expiresAt);
+
+    // Register completer for command 151 (OUTBOUND_REGISTER_OH_RES)
+    final completer = Completer<List<int>>();
+    _pendingResponses[151] = completer;
+
+    activePeer.sendCommand(150, Uint8List.fromList(request.writeToBuffer()));
+
+    final List<int> responseBytes;
+    try {
+      responseBytes = await completer.future.timeout(
+        const Duration(seconds: 10),
+      );
+    } on TimeoutException {
+      _pendingResponses.remove(151);
+      print('RedPandaLightClient: renewOutboundHandle() timed out');
+      return false;
+    }
+
+    final response = RegisterOhResponse.fromBuffer(responseBytes);
+    if (response.status != Status.OK) {
+      print(
+        'RedPandaLightClient: renewOutboundHandle() non-OK status: ${response.status}',
+      );
+      return false;
+    }
+
+    oh.expiresAtMs = response.expiresAtMs.toInt();
+    _ohMailboxUpdateController.add(
+      OhMailboxUpdate(
+        ohId: oh.ohId,
+        channelId: oh.channelId,
+        lastCursor: oh.lastCursor,
+        expiresAtMs: oh.expiresAtMs,
+      ),
+    );
+    return true;
+  }
+
+  /// Checks all registered OHs and renews those expiring within
+  /// [renewalThreshold]. Failures are retried on the next cycle.
+  /// Overlapping invocations are skipped.
+  Future<void> checkAndRenewExpiringHandles() async {
+    if (_renewalInProgress) return;
+    _renewalInProgress = true;
+    try {
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      for (final oh in List.of(_registeredOHs)) {
+        if (oh.expiresAtMs - nowMs < renewalThreshold.inMilliseconds) {
+          try {
+            await renewOutboundHandle(oh);
+          } catch (e) {
+            print('RedPandaLightClient: OH renewal error: $e');
+          }
+        }
+      }
+    } finally {
+      _renewalInProgress = false;
+    }
   }
 
   @override
@@ -792,7 +924,15 @@ class RedPandaLightClient implements RedPandaClient {
       return [];
     }
 
+    if (response.mailboxOverflow) {
+      print(
+        'RedPandaLightClient: mailbox overflow detected for OH '
+        '${_hexEncode(oh.ohId)} — older messages may have been lost',
+      );
+    }
+
     // Update cursor for next fetch
+    final previousCursor = oh.lastCursor;
     oh.lastCursor = response.nextCursor.toInt();
 
     // Look up the channel encryption key for this OH
@@ -819,6 +959,7 @@ class RedPandaLightClient implements RedPandaClient {
                 .join(),
             content: content,
             receivedAtMs: item.receivedAtMs.toInt(),
+            channelId: oh.channelId,
           ),
         );
       } catch (e) {
@@ -826,8 +967,96 @@ class RedPandaLightClient implements RedPandaClient {
       }
     }
 
+    // Acknowledge the fetched batch so the Full Node can delete it.
+    // Failures are tolerated: items are re-delivered on the next fetch and
+    // deduplicated by message_id in the app layer.
+    if (response.items.isNotEmpty) {
+      await ackFetch(oh, response.nextCursor.toInt());
+    }
+
+    if (response.items.isNotEmpty ||
+        response.mailboxOverflow ||
+        oh.lastCursor != previousCursor) {
+      _ohMailboxUpdateController.add(
+        OhMailboxUpdate(
+          ohId: oh.ohId,
+          channelId: oh.channelId,
+          lastCursor: oh.lastCursor,
+          expiresAtMs: oh.expiresAtMs,
+          mailboxOverflow: response.mailboxOverflow,
+        ),
+      );
+    }
+
     return messages;
   }
+
+  /// Sends an AckFetchRequest for [oh] confirming receipt of all mail items
+  /// up to and including [ackedSequenceId]; the Full Node deletes them.
+  /// Returns true if the node confirmed the acknowledgement.
+  Future<bool> ackFetch(OHRegistration oh, int ackedSequenceId) async {
+    final activePeer = _peers.values
+        .where((p) => p.isHandshakeVerified)
+        .firstOrNull;
+    if (activePeer == null) {
+      print('RedPandaLightClient: ackFetch() no active peer available');
+      return false;
+    }
+
+    final random = Random.secure();
+    final nonce = Uint8List.fromList(
+      List<int>.generate(16, (_) => random.nextInt(256)),
+    );
+    final now = DateTime.now();
+
+    // Signing bytes: [CMD_BYTE(156) | oh_id | acked_sequence_id(8 BE) | timestamp_ms(8 BE) | nonce]
+    final signingBuffer = BytesBuilder();
+    signingBuffer.addByte(156); // OUTBOUND_ACK_FETCH_REQ
+    signingBuffer.add(oh.ohId);
+    signingBuffer.add(_int64Bytes(ackedSequenceId));
+    signingBuffer.add(_int64Bytes(now.millisecondsSinceEpoch));
+    signingBuffer.add(nonce);
+
+    final signature = oh.keypair.sign(
+      Uint8List.fromList(signingBuffer.toBytes()),
+    );
+
+    final request = AckFetchRequest()
+      ..ohId = oh.ohId
+      ..ackedSequenceId = fixnum.Int64(ackedSequenceId)
+      ..timestampMs = _toInt64(now.millisecondsSinceEpoch)
+      ..nonce = nonce
+      ..signature = signature;
+
+    // Register completer for command 157 (OUTBOUND_ACK_FETCH_RES)
+    final completer = Completer<List<int>>();
+    _pendingResponses[157] = completer;
+
+    activePeer.sendCommand(156, Uint8List.fromList(request.writeToBuffer()));
+
+    final List<int> responseBytes;
+    try {
+      responseBytes = await completer.future.timeout(
+        const Duration(seconds: 10),
+      );
+    } on TimeoutException {
+      _pendingResponses.remove(157);
+      print('RedPandaLightClient: ackFetch() timed out waiting for response');
+      return false;
+    }
+
+    final response = AckFetchResponse.fromBuffer(responseBytes);
+    if (response.status != Status.OK) {
+      print(
+        'RedPandaLightClient: ackFetch() non-OK status: ${response.status}',
+      );
+      return false;
+    }
+    return true;
+  }
+
+  static String _hexEncode(List<int> bytes) =>
+      bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 
   /// Decrypts an encrypted payload: [IV(16)][ciphertext][HMAC-SHA256(32)]
   String _decryptPayload(List<int> payload, List<int> encKey) {
@@ -870,19 +1099,28 @@ class RedPandaLightClient implements RedPandaClient {
   }
 
   void _startPolling() {
-    if (_pollingTimer != null) return;
-    _pollingTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
-      for (final oh in _registeredOHs) {
-        try {
-          final messages = await fetchMessages(oh);
-          for (final msg in messages) {
-            _incomingMessageController.add(msg);
+    _pollingTimer ??= Timer.periodic(const Duration(seconds: 30), (_) async {
+      if (_pollInProgress) return; // previous cycle still running
+      _pollInProgress = true;
+      try {
+        for (final oh in List.of(_registeredOHs)) {
+          try {
+            final messages = await fetchMessages(oh);
+            for (final msg in messages) {
+              _incomingMessageController.add(msg);
+            }
+          } catch (e) {
+            print('RedPandaLightClient: Polling error: $e');
           }
-        } catch (e) {
-          print('RedPandaLightClient: Polling error: $e');
         }
+      } finally {
+        _pollInProgress = false;
       }
     });
+    _renewalTimer ??= Timer.periodic(
+      renewalCheckInterval,
+      (_) => checkAndRenewExpiringHandles(),
+    );
   }
 
   /// Converts an int to 8-byte big-endian representation.

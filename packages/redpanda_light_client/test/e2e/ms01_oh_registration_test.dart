@@ -12,6 +12,7 @@ import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
 import 'redpanda_node_launcher.dart';
+import 'test_helpers.dart';
 
 void main() async {
   final jarAvailable = await RedPandaNodeLauncher.isJarAvailable();
@@ -74,7 +75,9 @@ void main() async {
       () async {
         await client.connect();
 
-        await Future.delayed(const Duration(seconds: 6));
+        // Wait until the handshake is done instead of a fixed delay —
+        // sendMessage requires a verified peer since MS02.
+        expect(await waitForEncryption(client), isTrue);
 
         final oh = await client.registerOutboundHandle();
 

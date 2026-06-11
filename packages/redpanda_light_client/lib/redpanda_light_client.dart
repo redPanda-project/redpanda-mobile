@@ -19,6 +19,7 @@ export 'src/domain/channel.dart';
 export 'src/domain/garlic_message_wrapper.dart';
 export 'src/domain/oh_descriptor.dart';
 export 'src/domain/oh_registration.dart';
+export 'src/domain/oh_mailbox_update.dart';
 export 'src/domain/decrypted_message.dart';
 export 'src/crypto/oh_keypair.dart';
 export 'src/generated/commands.pb.dart';

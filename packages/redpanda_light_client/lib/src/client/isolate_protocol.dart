@@ -30,9 +30,10 @@ class CmdLifecyclePause extends IsolateCommand {}
 class CmdLifecycleResume extends IsolateCommand {}
 
 class CmdSendMessage extends IsolateCommand {
+  final int requestId;
   final String channelId;
   final String content;
-  CmdSendMessage(this.channelId, this.content);
+  CmdSendMessage(this.requestId, this.channelId, this.content);
 }
 
 class CmdRegisterOutboundHandle extends IsolateCommand {
@@ -46,6 +47,25 @@ class CmdAddChannelKeys extends IsolateCommand {
   final List<int> encryptionKey;
   final List<int>? peerOhId;
   CmdAddChannelKeys(this.channelId, this.encryptionKey, {this.peerOhId});
+}
+
+/// Re-activates a persisted OH registration inside the isolate so it gets
+/// polled and auto-renewed again. Carries only isolate-sendable primitives.
+class CmdRestoreOutboundHandle extends IsolateCommand {
+  final List<int> ohId;
+  final List<int> privateKeyBytes;
+  final int expiresAtMs;
+  final String? channelId;
+  final String? serverEndpoint;
+  final int lastCursor;
+  CmdRestoreOutboundHandle({
+    required this.ohId,
+    required this.privateKeyBytes,
+    required this.expiresAtMs,
+    this.channelId,
+    this.serverEndpoint,
+    this.lastCursor = 0,
+  });
 }
 
 // --- Events (Isolate -> Main) ---
@@ -78,8 +98,15 @@ class EventPeerStatsSnapshot extends IsolateEvent {
 }
 
 class EventMessageSent extends IsolateEvent {
+  final int requestId;
   final String messageId;
-  EventMessageSent(this.messageId);
+  EventMessageSent(this.requestId, this.messageId);
+}
+
+class EventMessageSendFailed extends IsolateEvent {
+  final int requestId;
+  final String error;
+  EventMessageSendFailed(this.requestId, this.error);
 }
 
 class EventIncomingMessage extends IsolateEvent {
@@ -111,4 +138,21 @@ class EventOhRegisterFailed extends IsolateEvent {
   final int requestId;
   final String error;
   EventOhRegisterFailed(this.requestId, this.error);
+}
+
+/// OH state change (cursor advanced, renewal, mailbox overflow) forwarded
+/// from the isolate so the main isolate can persist cursor/expiry.
+class EventOhMailboxUpdate extends IsolateEvent {
+  final List<int> ohId;
+  final String? channelId;
+  final int lastCursor;
+  final int expiresAtMs;
+  final bool mailboxOverflow;
+  EventOhMailboxUpdate({
+    required this.ohId,
+    required this.lastCursor,
+    required this.expiresAtMs,
+    this.channelId,
+    this.mailboxOverflow = false,
+  });
 }
