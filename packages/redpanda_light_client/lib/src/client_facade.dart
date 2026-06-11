@@ -20,8 +20,19 @@ abstract class RedPandaClient {
 
   /// Sends a message to a channel identified by [channelId].
   /// The content is encrypted with the channel's encryption key.
-  /// Returns a message ID.
-  Future<String> sendMessage(String channelId, String content);
+  ///
+  /// [messageId] is the stable 16-byte network message id as a hex string. It
+  /// is carried inside the encrypted payload (ChannelMessage.message_id) and is
+  /// what the receiver deduplicates on. Callers MUST pass the same [messageId]
+  /// on every retry of the same logical message so re-sends are deduplicated.
+  /// If omitted, a fresh random id is generated.
+  ///
+  /// Returns the message id (hex) that was actually used.
+  Future<String> sendMessage(
+    String channelId,
+    String content, {
+    String? messageId,
+  });
 
   /// Adds a peer address (host:port) to the connection pool.
   Future<void> addPeer(String address);

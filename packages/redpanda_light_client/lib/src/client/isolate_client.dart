@@ -206,12 +206,16 @@ class RedPandaIsolateClient implements RedPandaClient {
   }
 
   @override
-  Future<String> sendMessage(String channelId, String content) async {
+  Future<String> sendMessage(
+    String channelId,
+    String content, {
+    String? messageId,
+  }) async {
     await _isolateReady.future;
     final requestId = _nextRequestId++;
     final completer = Completer<String>();
     _pendingSends[requestId] = completer;
-    _send(CmdSendMessage(requestId, channelId, content));
+    _send(CmdSendMessage(requestId, channelId, content, messageId: messageId));
     return completer.future.timeout(
       const Duration(seconds: 15),
       onTimeout: () {
@@ -383,6 +387,7 @@ void _isolateEntryPoint(SendPort mainSendPort) {
           final messageId = await client!.sendMessage(
             message.channelId,
             message.content,
+            messageId: message.messageId,
           );
           mainSendPort.send(EventMessageSent(message.requestId, messageId));
         } catch (e) {

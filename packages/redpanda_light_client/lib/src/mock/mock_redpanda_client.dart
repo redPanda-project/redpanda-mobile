@@ -33,10 +33,15 @@ class MockRedPandaClient implements RedPandaClient {
   }
 
   @override
-  Future<String> sendMessage(String channelId, String content) async {
+  Future<String> sendMessage(
+    String channelId,
+    String content, {
+    String? messageId,
+  }) async {
     // Simulate sending
     await Future.delayed(Duration(milliseconds: 500));
-    return "mock-message-id-${DateTime.now().millisecondsSinceEpoch}";
+    return messageId ??
+        "mock-message-id-${DateTime.now().millisecondsSinceEpoch}";
   }
 
   @override

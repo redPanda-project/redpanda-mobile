@@ -73,7 +73,17 @@ class SendRetryQueue {
         if (!isDue(msg, now)) continue;
 
         try {
-          await _client.sendMessage(msg.conversationId, msg.content);
+          // Reuse the stable network message id across attempts so re-sends
+          // deduplicate at the receiver. On the very first attempt the row has
+          // no id yet; sendMessage generates one which we then persist.
+          final usedId = await _client.sendMessage(
+            msg.conversationId,
+            msg.content,
+            messageId: msg.messageId,
+          );
+          if (msg.messageId == null || msg.messageId!.isEmpty) {
+            await _messages.setNetworkMessageId(msg.id, usedId);
+          }
           await _messages.updateMessageStatus(msg.id, MessageStatus.sent);
         } catch (_) {
           await _messages.markRetryAttempt(msg.id);
