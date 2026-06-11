@@ -5,6 +5,7 @@ import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/peer_stats_snapshot.dart';
+import 'package:redpanda_light_client/src/logging/logger.dart';
 
 /// A mock implementation of [RedPandaClient] for testing and UI development.
 class MockRedPandaClient implements RedPandaClient {
@@ -47,7 +48,7 @@ class MockRedPandaClient implements RedPandaClient {
   @override
   Future<void> addPeer(String address) async {
     // Mock implementation - do nothing or log
-    print('MockRedPandaClient: Added peer $address');
+    RpLog.debug('MockRedPandaClient: Added peer $address');
   }
 
   @override

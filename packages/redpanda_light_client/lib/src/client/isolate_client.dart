@@ -14,6 +14,7 @@ import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
 import 'package:redpanda_light_client/src/models/peer_stats_snapshot.dart';
+import 'package:redpanda_light_client/src/logging/logger.dart';
 
 /// A facade that implements [RedPandaClient] but proxies all operations
 /// to a background [Isolate] to prevent UI jank.
@@ -78,7 +79,7 @@ class RedPandaIsolateClient implements RedPandaClient {
         }
       });
     } catch (e) {
-      print('RedPandaIsolateClient: Failed to spawn isolate: $e');
+      RpLog.debug('RedPandaIsolateClient: Failed to spawn isolate: $e');
     }
   }
 
@@ -150,7 +151,7 @@ class RedPandaIsolateClient implements RedPandaClient {
         ),
       );
     } else if (event is EventLog) {
-      print('[Isolate] ${event.message}');
+      RpLog.debug('[Isolate] ${event.message}');
     }
   }
 
@@ -159,7 +160,7 @@ class RedPandaIsolateClient implements RedPandaClient {
       _sendPort!.send(cmd);
     } else {
       // If isolate isn't ready, maybe queue? For now just log.
-      print(
+      RpLog.debug(
         'RedPandaIsolateClient: Warning - Isolate not ready. Dropping command $cmd',
       );
     }
@@ -303,7 +304,7 @@ void _isolateEntryPoint(SendPort mainSendPort) {
 
   receivePort.listen((message) async {
     if (message is CmdInit) {
-      print('RedPandaWorker: Initializing client...');
+      RpLog.debug('RedPandaWorker: Initializing client...');
 
       NodeId nodeId =
           message.nodeId ?? NodeId.fromPublicKey(KeyPair.generate());
@@ -364,9 +365,9 @@ void _isolateEntryPoint(SendPort mainSendPort) {
         }
       });
 
-      print('RedPandaWorker: Client initialized.');
+      RpLog.info('RedPandaWorker: Client initialized.');
     } else if (client == null) {
-      print('RedPandaWorker: Error - Client not initialized yet.');
+      RpLog.info('RedPandaWorker: Error - Client not initialized yet.');
       return;
     }
 
@@ -436,8 +437,8 @@ void _isolateEntryPoint(SendPort mainSendPort) {
         );
       }
     } catch (e, stack) {
-      print('RedPandaWorker: Error handling command $message: $e');
-      print(stack);
+      RpLog.debug('RedPandaWorker: Error handling command $message: $e');
+      RpLog.debug(stack.toString());
     }
   });
 }

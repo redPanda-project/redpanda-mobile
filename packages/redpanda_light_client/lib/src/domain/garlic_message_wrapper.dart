@@ -3,6 +3,7 @@ import 'package:pointycastle/export.dart';
 import 'package:redpanda_light_client/src/generated/commands.pb.dart'; // generated protobuf
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
+import 'package:redpanda_light_client/src/logging/logger.dart';
 
 class GarlicMessageWrapper {
   final GarlicMessage proto;
@@ -94,7 +95,7 @@ class GarlicMessageWrapper {
 
       return signer.verifySignature(data, ecSig);
     } catch (e) {
-      print("Signature verification error: $e");
+      RpLog.debug("Signature verification error: $e");
       return false;
     }
   }

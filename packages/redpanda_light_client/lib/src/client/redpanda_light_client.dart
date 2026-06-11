@@ -9,6 +9,7 @@ import 'package:redpanda_light_client/src/client_facade.dart';
 import 'package:redpanda_light_client/src/crypto/channel_message.dart';
 import 'package:redpanda_light_client/src/crypto/message_crypto_v2.dart';
 import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
+import 'package:redpanda_light_client/src/logging/logger.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
@@ -235,7 +236,7 @@ class RedPandaLightClient implements RedPandaClient {
   @override
   Future<void> connect() async {
     _updateStatus(ConnectionStatus.connecting);
-    print('RedPandaLightClient: Starting connection routine...');
+    RpLog.info('RedPandaLightClient: Starting connection routine...');
 
     _startConnectionRoutine();
   }
@@ -259,14 +260,14 @@ class RedPandaLightClient implements RedPandaClient {
     }
     _lastGlobalConnectionAttempt = DateTime.now();
 
-    print(
+    RpLog.debug(
       'RedPandaLightClient: Running connection check. Known peers: ${_peerRepository.knownAddresses.length}',
     );
 
     // 1. Cleanup disconnected
     _peers.removeWhere((address, peer) {
       if (peer.isDisconnected) {
-        print('RedPandaLightClient: Removing disconnected peer $address');
+        RpLog.debug('RedPandaLightClient: Removing disconnected peer $address');
         return true;
       }
       // Also ping active peers periodically
@@ -289,7 +290,7 @@ class RedPandaLightClient implements RedPandaClient {
 
       // Remove active peers that are worst
       for (var i = maxConnections; i < sortedParams.length; i++) {
-        print(
+        RpLog.debug(
           'RedPandaLightClient: Over capacity. Disconnecting ${sortedParams[i].address}',
         );
         sortedParams[i].disconnect();
@@ -319,7 +320,7 @@ class RedPandaLightClient implements RedPandaClient {
         final victim = candidates.first;
         final age = DateTime.now().difference(victim.connectedSince).inSeconds;
 
-        print(
+        RpLog.debug(
           'RedPandaLightClient: Rotating ONE roaming peer ${victim.address} (Connected ${age}s). Keeping others.',
         );
         _intentionalDisconnects.add(victim.address);
@@ -380,7 +381,9 @@ class RedPandaLightClient implements RedPandaClient {
 
     if (toConnect.isEmpty && _peers.isEmpty) {
       if (_peerRepository.knownAddresses.isNotEmpty && backoffSkipped == 0) {
-        print('RedPandaLightClient: No peers to connect to. Bad Internet?');
+        RpLog.debug(
+          'RedPandaLightClient: No peers to connect to. Bad Internet?',
+        );
         _isBadInternetDetected = true;
       }
       return;
@@ -408,7 +411,7 @@ class RedPandaLightClient implements RedPandaClient {
           },
           onDisconnect: () {
             if (_intentionalDisconnects.contains(address)) {
-              print(
+              RpLog.debug(
                 'RedPandaLightClient: Peer $address disconnected intentionally (Rotation). No failure recorded.',
               );
               _intentionalDisconnects.remove(address);
@@ -419,7 +422,7 @@ class RedPandaLightClient implements RedPandaClient {
             }
           },
           onPeersReceived: (peers) {
-            print(
+            RpLog.debug(
               'RedPandaLightClient: Received ${peers.length} peers from $address',
             );
             _peerRepository.addAll(peers);
@@ -450,7 +453,9 @@ class RedPandaLightClient implements RedPandaClient {
         _peers[address] = peer;
         peer.connect(); // Fire and forget (it is async inside)
       } catch (e) {
-        print('RedPandaLightClient: Failed to initiate peer $address: $e');
+        RpLog.debug(
+          'RedPandaLightClient: Failed to initiate peer $address: $e',
+        );
         _peerRepository.updatePeer(address, isFailure: true);
       }
     }
@@ -681,7 +686,7 @@ class RedPandaLightClient implements RedPandaClient {
     }
 
     final buffer = flaschenpost.writeToBuffer();
-    print(
+    RpLog.debug(
       'RedPandaLightClient: sendMessage() serialized ${buffer.length} bytes for channel $channelId',
     );
     activePeer.sendCommand(141, Uint8List.fromList(buffer));
@@ -708,12 +713,12 @@ class RedPandaLightClient implements RedPandaClient {
 
     if (activePeer != null) {
       final buffer = request.writeToBuffer();
-      print(
+      RpLog.debug(
         'RedPandaLightClient: registerOutboundHandle() serialized ${buffer.length} bytes',
       );
       activePeer.sendCommand(150, Uint8List.fromList(buffer));
     } else {
-      print(
+      RpLog.info(
         'RedPandaLightClient: registerOutboundHandle() no active peer available',
       );
     }
@@ -772,7 +777,7 @@ class RedPandaLightClient implements RedPandaClient {
         .where((p) => p.isHandshakeVerified)
         .firstOrNull;
     if (activePeer == null) {
-      print('RedPandaLightClient: renewOutboundHandle() no active peer');
+      RpLog.info('RedPandaLightClient: renewOutboundHandle() no active peer');
       return false;
     }
 
@@ -793,13 +798,13 @@ class RedPandaLightClient implements RedPandaClient {
       );
     } on TimeoutException {
       _pendingResponses.remove(151);
-      print('RedPandaLightClient: renewOutboundHandle() timed out');
+      RpLog.info('RedPandaLightClient: renewOutboundHandle() timed out');
       return false;
     }
 
     final response = RegisterOhResponse.fromBuffer(responseBytes);
     if (response.status != Status.OK) {
-      print(
+      RpLog.info(
         'RedPandaLightClient: renewOutboundHandle() non-OK status: ${response.status}',
       );
       return false;
@@ -830,7 +835,7 @@ class RedPandaLightClient implements RedPandaClient {
           try {
             await renewOutboundHandle(oh);
           } catch (e) {
-            print('RedPandaLightClient: OH renewal error: $e');
+            RpLog.debug('RedPandaLightClient: OH renewal error: $e');
           }
         }
       }
@@ -879,7 +884,9 @@ class RedPandaLightClient implements RedPandaClient {
         .firstOrNull;
 
     if (activePeer == null) {
-      print('RedPandaLightClient: fetchMessages() no active peer available');
+      RpLog.info(
+        'RedPandaLightClient: fetchMessages() no active peer available',
+      );
       return [];
     }
 
@@ -888,7 +895,7 @@ class RedPandaLightClient implements RedPandaClient {
     _pendingResponses[153] = completer;
 
     final buffer = request.writeToBuffer();
-    print(
+    RpLog.debug(
       'RedPandaLightClient: fetchMessages() serialized ${buffer.length} bytes',
     );
     activePeer.sendCommand(152, Uint8List.fromList(buffer));
@@ -901,7 +908,7 @@ class RedPandaLightClient implements RedPandaClient {
       );
     } on TimeoutException {
       _pendingResponses.remove(153);
-      print(
+      RpLog.info(
         'RedPandaLightClient: fetchMessages() timed out waiting for response',
       );
       return [];
@@ -909,19 +916,19 @@ class RedPandaLightClient implements RedPandaClient {
 
     // Parse FetchResponse protobuf
     final response = FetchResponse.fromBuffer(responseBytes);
-    print(
+    RpLog.debug(
       'RedPandaLightClient: fetchMessages() status=${response.status} items=${response.items.length}',
     );
 
     if (response.status != Status.OK) {
-      print(
+      RpLog.info(
         'RedPandaLightClient: fetchMessages() non-OK status: ${response.status}',
       );
       return [];
     }
 
     if (response.mailboxOverflow) {
-      print(
+      RpLog.debug(
         'RedPandaLightClient: mailbox overflow detected for OH '
         '${_hexEncode(oh.ohId)} — older messages may have been lost',
       );
@@ -937,7 +944,7 @@ class RedPandaLightClient implements RedPandaClient {
         : null;
 
     if (encKey == null) {
-      print(
+      RpLog.info(
         'RedPandaLightClient: fetchMessages() no encryption key for channelId=${oh.channelId}',
       );
       return [];
@@ -962,7 +969,7 @@ class RedPandaLightClient implements RedPandaClient {
           ),
         );
       } catch (e) {
-        print('RedPandaLightClient: failed to decrypt mail item: $e');
+        RpLog.info('RedPandaLightClient: failed to decrypt mail item: $e');
       }
     }
 
@@ -998,7 +1005,7 @@ class RedPandaLightClient implements RedPandaClient {
         .where((p) => p.isHandshakeVerified)
         .firstOrNull;
     if (activePeer == null) {
-      print('RedPandaLightClient: ackFetch() no active peer available');
+      RpLog.info('RedPandaLightClient: ackFetch() no active peer available');
       return false;
     }
 
@@ -1040,13 +1047,15 @@ class RedPandaLightClient implements RedPandaClient {
       );
     } on TimeoutException {
       _pendingResponses.remove(157);
-      print('RedPandaLightClient: ackFetch() timed out waiting for response');
+      RpLog.info(
+        'RedPandaLightClient: ackFetch() timed out waiting for response',
+      );
       return false;
     }
 
     final response = AckFetchResponse.fromBuffer(responseBytes);
     if (response.status != Status.OK) {
-      print(
+      RpLog.info(
         'RedPandaLightClient: ackFetch() non-OK status: ${response.status}',
       );
       return false;
@@ -1081,7 +1090,7 @@ class RedPandaLightClient implements RedPandaClient {
               _incomingMessageController.add(msg);
             }
           } catch (e) {
-            print('RedPandaLightClient: Polling error: $e');
+            RpLog.info('RedPandaLightClient: Polling error: $e');
           }
         }
       } finally {
