@@ -19,7 +19,9 @@ Frontend-Milestones werden **nach dem jeweiligen Backend-Milestone** umgesetzt. 
 |----|-------|--------|----------------------|
 | [MS01](ms01_first_real_message.md) | OH Client & Chat Integration | Done | Backend MS01 Done |
 | [MS02](ms02_reliable_delivery.md) | Retry, Dedup & Polling | Done | Backend MS02 Done |
-| [MS03](ms03_authenticated_encryption.md) | Dart Crypto Migration | Missing | Blocked bis Backend MS03 Done |
+| [MS02b](ms02b_oh_discovery_forwarding.md) | OH Discovery & Forwarding (Client-Anteil) | Missing | Kleiner Frontend-Anteil; QR-Endpoint existiert bereits |
+| [MS03](ms03_authenticated_encryption.md) | Dart Crypto Migration | Partial | Message-Format v2 shipped (mobile PR #14); Primitive-Migration blocked bis Backend MS03 Done |
+| [MS03b](ms03b_forward_secrecy.md) | Forward Secrecy (Ratchet) | Missing | Nach MS03 — Hauptanteil liegt im Client |
 | [MS04](ms04_multi_hop_garlic.md) | Garlic Wrapping & Hop Selection | Missing | Blocked bis Backend MS04 Done |
 | [MS05](ms05_reverse_garlic.md) | RGB Builder & Session Tags | Missing | Blocked bis Backend MS05 Done |
 | [MS06](ms06_two_layer_ack.md) | ACK Handling & Node Scoring | Missing | Blocked bis Backend MS06 Done |
