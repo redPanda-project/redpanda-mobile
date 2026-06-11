@@ -1080,11 +1080,13 @@ class MailItem extends $pb.GeneratedMessage {
     $core.List<$core.int>? messageId,
     $fixnum.Int64? receivedAtMs,
     $core.List<$core.int>? payload,
+    $fixnum.Int64? sequenceId,
   }) {
     final result = create();
     if (messageId != null) result.messageId = messageId;
     if (receivedAtMs != null) result.receivedAtMs = receivedAtMs;
     if (payload != null) result.payload = payload;
+    if (sequenceId != null) result.sequenceId = sequenceId;
     return result;
   }
 
@@ -1104,6 +1106,9 @@ class MailItem extends $pb.GeneratedMessage {
     ..aInt64(2, _omitFieldNames ? '' : 'receivedAtMs')
     ..a<$core.List<$core.int>>(
         3, _omitFieldNames ? '' : 'payload', $pb.PbFieldType.OY)
+    ..a<$fixnum.Int64>(
+        4, _omitFieldNames ? '' : 'sequenceId', $pb.PbFieldType.OU6,
+        defaultOrMaker: $fixnum.Int64.ZERO)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1138,6 +1143,11 @@ class MailItem extends $pb.GeneratedMessage {
   $core.List<$core.int> get payload => $_getN(2);
   @$pb.TagNumber(3)
   set payload($core.List<$core.int> value) => $_setBytes(2, value);
+
+  @$pb.TagNumber(4)
+  $fixnum.Int64 get sequenceId => $_getI64(3);
+  @$pb.TagNumber(4)
+  set sequenceId($fixnum.Int64 value) => $_setInt64(3, value);
 }
 
 // --- FetchResponse ---
@@ -1147,12 +1157,14 @@ class FetchResponse extends $pb.GeneratedMessage {
     $fixnum.Int64? nextCursor,
     $core.Iterable<MailItem>? items,
     $fixnum.Int64? serverTimeMs,
+    $core.bool? mailboxOverflow,
   }) {
     final result = create();
     if (status != null) result.status = status;
     if (nextCursor != null) result.nextCursor = nextCursor;
     if (items != null) result.items.addAll(items);
     if (serverTimeMs != null) result.serverTimeMs = serverTimeMs;
+    if (mailboxOverflow != null) result.mailboxOverflow = mailboxOverflow;
     return result;
   }
 
@@ -1177,6 +1189,7 @@ class FetchResponse extends $pb.GeneratedMessage {
     ..pc<MailItem>(3, _omitFieldNames ? '' : 'items', $pb.PbFieldType.PM,
         subBuilder: MailItem.create)
     ..aInt64(4, _omitFieldNames ? '' : 'serverTimeMs')
+    ..aOB(5, _omitFieldNames ? '' : 'mailboxOverflow')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1215,6 +1228,157 @@ class FetchResponse extends $pb.GeneratedMessage {
   $fixnum.Int64 get serverTimeMs => $_getI64(3);
   @$pb.TagNumber(4)
   set serverTimeMs($fixnum.Int64 value) => $_setInt64(3, value);
+
+  @$pb.TagNumber(5)
+  $core.bool get mailboxOverflow => $_getBF(4);
+  @$pb.TagNumber(5)
+  set mailboxOverflow($core.bool value) => $_setBool(4, value);
+}
+
+// --- AckFetchRequest ---
+class AckFetchRequest extends $pb.GeneratedMessage {
+  factory AckFetchRequest({
+    $core.List<$core.int>? ohId,
+    $fixnum.Int64? ackedSequenceId,
+    $fixnum.Int64? timestampMs,
+    $core.List<$core.int>? nonce,
+    $core.List<$core.int>? signature,
+  }) {
+    final result = create();
+    if (ohId != null) result.ohId = ohId;
+    if (ackedSequenceId != null) result.ackedSequenceId = ackedSequenceId;
+    if (timestampMs != null) result.timestampMs = timestampMs;
+    if (nonce != null) result.nonce = nonce;
+    if (signature != null) result.signature = signature;
+    return result;
+  }
+
+  AckFetchRequest._();
+
+  factory AckFetchRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'AckFetchRequest',
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
+      createEmptyInstance: create)
+    ..a<$core.List<$core.int>>(
+        1, _omitFieldNames ? '' : 'ohId', $pb.PbFieldType.OY)
+    ..a<$fixnum.Int64>(
+        2, _omitFieldNames ? '' : 'ackedSequenceId', $pb.PbFieldType.OU6,
+        defaultOrMaker: $fixnum.Int64.ZERO)
+    ..aInt64(3, _omitFieldNames ? '' : 'timestampMs')
+    ..a<$core.List<$core.int>>(
+        4, _omitFieldNames ? '' : 'nonce', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(
+        5, _omitFieldNames ? '' : 'signature', $pb.PbFieldType.OY)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  AckFetchRequest clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  AckFetchRequest copyWith(void Function(AckFetchRequest) updates) =>
+      super.copyWith((message) => updates(message as AckFetchRequest))
+          as AckFetchRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static AckFetchRequest create() => AckFetchRequest._();
+  @$core.override
+  AckFetchRequest createEmptyInstance() => create();
+  static AckFetchRequest? _defaultInstance;
+  @$core.pragma('dart2js:noInline')
+  static AckFetchRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<AckFetchRequest>(create);
+
+  @$pb.TagNumber(1)
+  $core.List<$core.int> get ohId => $_getN(0);
+  @$pb.TagNumber(1)
+  set ohId($core.List<$core.int> value) => $_setBytes(0, value);
+
+  @$pb.TagNumber(2)
+  $fixnum.Int64 get ackedSequenceId => $_getI64(1);
+  @$pb.TagNumber(2)
+  set ackedSequenceId($fixnum.Int64 value) => $_setInt64(1, value);
+
+  @$pb.TagNumber(3)
+  $fixnum.Int64 get timestampMs => $_getI64(2);
+  @$pb.TagNumber(3)
+  set timestampMs($fixnum.Int64 value) => $_setInt64(2, value);
+
+  @$pb.TagNumber(4)
+  $core.List<$core.int> get nonce => $_getN(3);
+  @$pb.TagNumber(4)
+  set nonce($core.List<$core.int> value) => $_setBytes(3, value);
+
+  @$pb.TagNumber(5)
+  $core.List<$core.int> get signature => $_getN(4);
+  @$pb.TagNumber(5)
+  set signature($core.List<$core.int> value) => $_setBytes(4, value);
+}
+
+// --- AckFetchResponse ---
+class AckFetchResponse extends $pb.GeneratedMessage {
+  factory AckFetchResponse({
+    Status? status,
+    $fixnum.Int64? serverTimeMs,
+  }) {
+    final result = create();
+    if (status != null) result.status = status;
+    if (serverTimeMs != null) result.serverTimeMs = serverTimeMs;
+    return result;
+  }
+
+  AckFetchResponse._();
+
+  factory AckFetchResponse.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'AckFetchResponse',
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
+      createEmptyInstance: create)
+    ..e<Status>(1, _omitFieldNames ? '' : 'status', $pb.PbFieldType.OE,
+        defaultOrMaker: Status.STATUS_UNSPECIFIED,
+        valueOf: Status.valueOf,
+        enumValues: Status.values)
+    ..aInt64(2, _omitFieldNames ? '' : 'serverTimeMs')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  AckFetchResponse clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  AckFetchResponse copyWith(void Function(AckFetchResponse) updates) =>
+      super.copyWith((message) => updates(message as AckFetchResponse))
+          as AckFetchResponse;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static AckFetchResponse create() => AckFetchResponse._();
+  @$core.override
+  AckFetchResponse createEmptyInstance() => create();
+  static AckFetchResponse? _defaultInstance;
+  @$core.pragma('dart2js:noInline')
+  static AckFetchResponse getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<AckFetchResponse>(create);
+
+  @$pb.TagNumber(1)
+  Status get status => $_getN(0);
+  @$pb.TagNumber(1)
+  set status(Status value) => $_setField(1, value);
+
+  @$pb.TagNumber(2)
+  $fixnum.Int64 get serverTimeMs => $_getI64(1);
+  @$pb.TagNumber(2)
+  set serverTimeMs($fixnum.Int64 value) => $_setInt64(1, value);
 }
 
 enum PandaMessage_Content {

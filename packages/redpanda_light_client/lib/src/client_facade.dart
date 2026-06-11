@@ -1,4 +1,5 @@
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
+import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/peer_stats_snapshot.dart';
@@ -35,8 +36,17 @@ abstract class RedPandaClient {
   /// Fetches messages from the given OH mailbox.
   Future<List<DecryptedMessage>> fetchMessages(OHRegistration oh);
 
+  /// Re-activates a previously registered (persisted) Outbound Handle so it
+  /// is polled again and auto-renewed. Does not contact the network.
+  Future<void> restoreOutboundHandle(OHRegistration registration);
+
   /// Stream of incoming messages from background polling.
   Stream<DecryptedMessage> get incomingMessages;
+
+  /// Stream of OH state changes (fetch cursor advanced, registration
+  /// renewed, mailbox overflow detected). The app layer should persist
+  /// [OhMailboxUpdate.lastCursor] and [OhMailboxUpdate.expiresAtMs].
+  Stream<OhMailboxUpdate> get ohMailboxUpdates;
 
   /// Registers channel encryption keys so [sendMessage] can encrypt outgoing
   /// messages for [channelId]. Optionally associates a peer OH ID for routing.

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:redpanda_light_client/src/client_facade.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
+import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/peer_stats_snapshot.dart';
@@ -64,8 +65,16 @@ class MockRedPandaClient implements RedPandaClient {
   }
 
   @override
+  Future<void> restoreOutboundHandle(OHRegistration registration) async {
+    // Mock: no-op
+  }
+
+  @override
   Stream<DecryptedMessage> get incomingMessages =>
       _incomingMessageController.stream;
+
+  @override
+  Stream<OhMailboxUpdate> get ohMailboxUpdates => const Stream.empty();
 
   @override
   void addChannelKeys(

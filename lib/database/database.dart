@@ -31,6 +31,11 @@ class Channels extends Table {
   Set<Column> get primaryKey => {uuid};
 }
 
+@TableIndex(
+  name: 'idx_messages_message_id',
+  columns: {#messageId},
+  unique: true,
+)
 class Messages extends Table {
   IntColumn get id => integer().autoIncrement()();
   TextColumn get conversationId =>
@@ -40,6 +45,15 @@ class Messages extends Table {
   DateTimeColumn get timestamp => dateTime()();
   IntColumn get status => integer()(); // Enum index
   IntColumn get type => integer()(); // Enum index
+
+  // Network-level message id (hex) for deduplication of fetched messages.
+  TextColumn get messageId => text().nullable()();
+
+  // Number of failed send attempts (for retry with exponential backoff).
+  IntColumn get retryCount => integer().withDefault(const Constant(0))();
+
+  // Time of the last send attempt; basis for the backoff calculation.
+  DateTimeColumn get lastRetryAt => dateTime().nullable()();
 }
 
 class Peers extends Table {
@@ -63,14 +77,21 @@ class OutboundHandles extends Table {
   TextColumn get serverEndpoint => text()();
   DateTimeColumn get expiresAt => dateTime()();
   TextColumn get channelId => text().nullable()();
+
+  // Highest acknowledged mailbox sequence id; fetches resume from here
+  // after an app restart so old messages are not fetched again.
+  IntColumn get lastCursor => integer().withDefault(const Constant(0))();
 }
 
 @DriftDatabase(tables: [Users, Channels, Messages, Peers, OutboundHandles])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
+  /// For tests: run against an in-memory executor instead of the device DB.
+  AppDatabase.forTesting(super.executor);
+
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => 7;
 
   @override
   MigrationStrategy get migration {
@@ -107,6 +128,14 @@ class AppDatabase extends _$AppDatabase {
             // Columns might already exist if channels was recreated in step 5
           }
           await m.createTable(outboundHandles);
+        }
+        if (from < 7) {
+          // MS02: dedup, retry tracking and persistent fetch cursor
+          await m.addColumn(messages, messages.messageId);
+          await m.addColumn(messages, messages.retryCount);
+          await m.addColumn(messages, messages.lastRetryAt);
+          await m.addColumn(outboundHandles, outboundHandles.lastCursor);
+          await m.createIndex(idxMessagesMessageId);
         }
       },
     );
