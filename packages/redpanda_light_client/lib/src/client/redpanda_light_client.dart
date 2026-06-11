@@ -553,6 +553,11 @@ class RedPandaLightClient implements RedPandaClient {
   Timer? _pollingTimer;
   Timer? _renewalTimer;
 
+  // Guards against overlapping timer ticks: fetch/renew share
+  // _pendingResponses (keyed by command byte), so cycles must not race.
+  bool _pollInProgress = false;
+  bool _renewalInProgress = false;
+
   /// OHs are renewed when they expire within this window.
   static const Duration renewalThreshold = Duration(days: 1);
 
@@ -818,16 +823,23 @@ class RedPandaLightClient implements RedPandaClient {
 
   /// Checks all registered OHs and renews those expiring within
   /// [renewalThreshold]. Failures are retried on the next cycle.
+  /// Overlapping invocations are skipped.
   Future<void> checkAndRenewExpiringHandles() async {
-    final nowMs = DateTime.now().millisecondsSinceEpoch;
-    for (final oh in List.of(_registeredOHs)) {
-      if (oh.expiresAtMs - nowMs < renewalThreshold.inMilliseconds) {
-        try {
-          await renewOutboundHandle(oh);
-        } catch (e) {
-          print('RedPandaLightClient: OH renewal error: $e');
+    if (_renewalInProgress) return;
+    _renewalInProgress = true;
+    try {
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      for (final oh in List.of(_registeredOHs)) {
+        if (oh.expiresAtMs - nowMs < renewalThreshold.inMilliseconds) {
+          try {
+            await renewOutboundHandle(oh);
+          } catch (e) {
+            print('RedPandaLightClient: OH renewal error: $e');
+          }
         }
       }
+    } finally {
+      _renewalInProgress = false;
     }
   }
 
@@ -1088,15 +1100,21 @@ class RedPandaLightClient implements RedPandaClient {
 
   void _startPolling() {
     _pollingTimer ??= Timer.periodic(const Duration(seconds: 30), (_) async {
-      for (final oh in List.of(_registeredOHs)) {
-        try {
-          final messages = await fetchMessages(oh);
-          for (final msg in messages) {
-            _incomingMessageController.add(msg);
+      if (_pollInProgress) return; // previous cycle still running
+      _pollInProgress = true;
+      try {
+        for (final oh in List.of(_registeredOHs)) {
+          try {
+            final messages = await fetchMessages(oh);
+            for (final msg in messages) {
+              _incomingMessageController.add(msg);
+            }
+          } catch (e) {
+            print('RedPandaLightClient: Polling error: $e');
           }
-        } catch (e) {
-          print('RedPandaLightClient: Polling error: $e');
         }
+      } finally {
+        _pollInProgress = false;
       }
     });
     _renewalTimer ??= Timer.periodic(

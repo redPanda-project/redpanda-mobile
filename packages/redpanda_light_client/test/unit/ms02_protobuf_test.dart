@@ -22,7 +22,9 @@ void main() {
       expect(decoded.signature, equals([1, 2, 3, 4]));
     });
 
-    test('handles large sequence ids (uint64 range)', () {
+    test('handles sequence ids above 2^53 (beyond JS-safe doubles)', () {
+      // 2^53 + 1 cannot be represented exactly as a double — relevant for
+      // web builds where Dart ints are doubles.
       final request = AckFetchRequest()
         ..ackedSequenceId = fixnum.Int64.parseInt('9007199254740993');
 

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:redpanda/database/database.dart';
 import 'package:redpanda/repositories/message_repository.dart';
@@ -21,11 +22,19 @@ class SendRetryQueue {
   static const Duration maxBackoff = Duration(minutes: 30);
 
   Timer? _timer;
+  bool _passInProgress = false;
 
   SendRetryQueue(this._messages, this._client);
 
   void start() {
-    _timer ??= Timer.periodic(checkInterval, (_) => retryPending());
+    _timer ??= Timer.periodic(
+      checkInterval,
+      (_) => unawaited(
+        retryPending().catchError(
+          (Object e) => debugPrint('SendRetryQueue: retry pass failed: $e'),
+        ),
+      ),
+    );
   }
 
   void stop() {
@@ -47,24 +56,31 @@ class SendRetryQueue {
   }
 
   /// Single retry pass over all pending messages. Public for testing;
-  /// normally invoked by the periodic timer.
+  /// normally invoked by the periodic timer. Overlapping passes are
+  /// skipped so slow sends cannot update the same rows out of order.
   Future<void> retryPending() async {
-    final pending = await _messages.getPendingMessages();
-    final now = DateTime.now();
+    if (_passInProgress) return;
+    _passInProgress = true;
+    try {
+      final pending = await _messages.getPendingMessages();
+      final now = DateTime.now();
 
-    for (final msg in pending) {
-      if (msg.retryCount >= maxRetries) {
-        await _messages.updateMessageStatus(msg.id, MessageStatus.failed);
-        continue;
-      }
-      if (!isDue(msg, now)) continue;
+      for (final msg in pending) {
+        if (msg.retryCount >= maxRetries) {
+          await _messages.updateMessageStatus(msg.id, MessageStatus.failed);
+          continue;
+        }
+        if (!isDue(msg, now)) continue;
 
-      try {
-        await _client.sendMessage(msg.conversationId, msg.content);
-        await _messages.updateMessageStatus(msg.id, MessageStatus.sent);
-      } catch (_) {
-        await _messages.markRetryAttempt(msg.id);
+        try {
+          await _client.sendMessage(msg.conversationId, msg.content);
+          await _messages.updateMessageStatus(msg.id, MessageStatus.sent);
+        } catch (_) {
+          await _messages.markRetryAttempt(msg.id);
+        }
       }
+    } finally {
+      _passInProgress = false;
     }
   }
 }

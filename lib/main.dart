@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:redpanda/router.dart';
@@ -27,7 +29,11 @@ class _MyAppState extends ConsumerState<MyApp> {
     // MS02: persist incoming messages/cursors, restore OHs, retry sends
     final syncService = ref.read(messageSyncServiceProvider);
     syncService.start();
-    syncService.restorePersistedState();
+    unawaited(
+      syncService.restorePersistedState().catchError(
+        (Object e) => debugPrint('Failed to restore persisted OH state: $e'),
+      ),
+    );
     ref.read(sendRetryQueueProvider).start();
 
     // Lifecycle listener

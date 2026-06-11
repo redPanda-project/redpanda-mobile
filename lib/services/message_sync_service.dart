@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hex/hex.dart';
 import 'package:redpanda/database/database.dart';
@@ -35,8 +36,26 @@ class MessageSyncService {
   Stream<OhMailboxUpdate> get overflowEvents => _overflowController.stream;
 
   void start() {
-    _messageSub ??= _client.incomingMessages.listen(handleIncomingMessage);
-    _updateSub ??= _client.ohMailboxUpdates.listen(handleMailboxUpdate);
+    // Guard the async handlers: a persistence failure for one event must
+    // not become an unhandled zone error or kill the subscription.
+    _messageSub ??= _client.incomingMessages.listen(
+      (msg) => unawaited(
+        handleIncomingMessage(msg).catchError(
+          (Object e) => debugPrint(
+            'MessageSyncService: failed to persist incoming message: $e',
+          ),
+        ),
+      ),
+    );
+    _updateSub ??= _client.ohMailboxUpdates.listen(
+      (update) => unawaited(
+        handleMailboxUpdate(update).catchError(
+          (Object e) => debugPrint(
+            'MessageSyncService: failed to persist mailbox update: $e',
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> stop() async {

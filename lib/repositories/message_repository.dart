@@ -54,31 +54,36 @@ class MessageRepository {
 
   /// Inserts a fetched message unless one with the same network-level
   /// [messageId] already exists. Returns true if the message was new.
+  ///
+  /// Check and insert run in a transaction so concurrent handlers cannot
+  /// race past the exists-check and misreport an ignored insert as new.
   Future<bool> insertIncomingIfNew({
     required String messageId,
     required String conversationId,
     required String senderId,
     required String content,
     required DateTime timestamp,
-  }) async {
-    final exists = await messageExists(messageId);
-    if (exists) return false;
+  }) {
+    return _db.transaction(() async {
+      final exists = await messageExists(messageId);
+      if (exists) return false;
 
-    await _db
-        .into(_db.messages)
-        .insert(
-          MessagesCompanion.insert(
-            conversationId: conversationId,
-            senderId: senderId,
-            content: content,
-            timestamp: timestamp,
-            status: MessageStatus.received,
-            type: 0,
-            messageId: drift.Value(messageId),
-          ),
-          mode: drift.InsertMode.insertOrIgnore,
-        );
-    return true;
+      await _db
+          .into(_db.messages)
+          .insert(
+            MessagesCompanion.insert(
+              conversationId: conversationId,
+              senderId: senderId,
+              content: content,
+              timestamp: timestamp,
+              status: MessageStatus.received,
+              type: 0,
+              messageId: drift.Value(messageId),
+            ),
+            mode: drift.InsertMode.insertOrIgnore,
+          );
+      return true;
+    });
   }
 
   /// True if a message with the given network-level [messageId] exists.
