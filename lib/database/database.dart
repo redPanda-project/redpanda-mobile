@@ -31,9 +31,14 @@ class Channels extends Table {
   Set<Column> get primaryKey => {uuid};
 }
 
+// Dedup is scoped per conversation: the sender-chosen message_id is only
+// unique within a channel, so the uniqueness constraint spans
+// (conversationId, messageId). Rows with a NULL messageId (locally composed
+// outgoing messages) are exempt — SQLite treats NULLs as distinct in a unique
+// index, so multiple such rows coexist freely.
 @TableIndex(
-  name: 'idx_messages_message_id',
-  columns: {#messageId},
+  name: 'idx_messages_conv_message_id',
+  columns: {#conversationId, #messageId},
   unique: true,
 )
 class Messages extends Table {
@@ -91,7 +96,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 7;
+  int get schemaVersion => 8;
 
   @override
   MigrationStrategy get migration {
@@ -135,7 +140,25 @@ class AppDatabase extends _$AppDatabase {
           await m.addColumn(messages, messages.retryCount);
           await m.addColumn(messages, messages.lastRetryAt);
           await m.addColumn(outboundHandles, outboundHandles.lastCursor);
-          await m.createIndex(idxMessagesMessageId);
+          // The global-unique message-id index from MS02 (idx_messages_message_id)
+          // is replaced in v8 below by a per-conversation composite index, so
+          // for fresh installs that started at v7 we still create the old one
+          // here and drop it in the v8 step to keep the path uniform.
+          await m.database.customStatement(
+            'CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_message_id '
+            'ON messages (message_id)',
+          );
+        }
+        if (from < 8) {
+          // MS03/C1: scope dedup per conversation. Drop the global unique index
+          // on message_id and replace it with a composite unique index on
+          // (conversation_id, message_id) so the same sender message id can
+          // recur across different channels and an empty/null id never
+          // black-holes a channel.
+          await m.database.customStatement(
+            'DROP INDEX IF EXISTS idx_messages_message_id',
+          );
+          await m.createIndex(idxMessagesConvMessageId);
         }
       },
     );

@@ -2369,9 +2369,9 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $OutboundHandlesTable outboundHandles = $OutboundHandlesTable(
     this,
   );
-  late final Index idxMessagesMessageId = Index(
-    'idx_messages_message_id',
-    'CREATE UNIQUE INDEX idx_messages_message_id ON messages (message_id)',
+  late final Index idxMessagesConvMessageId = Index(
+    'idx_messages_conv_message_id',
+    'CREATE UNIQUE INDEX idx_messages_conv_message_id ON messages (conversation_id, message_id)',
   );
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
@@ -2383,7 +2383,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     messages,
     peers,
     outboundHandles,
-    idxMessagesMessageId,
+    idxMessagesConvMessageId,
   ];
 }
 

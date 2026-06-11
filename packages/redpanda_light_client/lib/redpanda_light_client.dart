@@ -22,4 +22,6 @@ export 'src/domain/oh_registration.dart';
 export 'src/domain/oh_mailbox_update.dart';
 export 'src/domain/decrypted_message.dart';
 export 'src/crypto/oh_keypair.dart';
+export 'src/crypto/channel_message.dart';
+export 'src/crypto/message_crypto_v2.dart';
 export 'src/generated/commands.pb.dart';

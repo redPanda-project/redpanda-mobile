@@ -43,11 +43,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
 
     // Send via network. On failure the message stays pending and the
-    // SendRetryQueue re-sends it with backoff.
+    // SendRetryQueue re-sends it with backoff, reusing the same network
+    // message id so retries deduplicate at the receiver.
     try {
-      await ref
+      final usedId = await ref
           .read(redPandaClientProvider)
           .sendMessage(widget.peerUuid, content);
+      await messages.setNetworkMessageId(rowId, usedId);
       await messages.updateMessageStatus(rowId, MessageStatus.sent);
     } catch (_) {
       await messages.markRetryAttempt(rowId);

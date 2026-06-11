@@ -30,6 +30,7 @@ void main() {
     String content = 'msg',
     int retryCount = 0,
     DateTime? lastRetryAt,
+    String? messageId,
   }) async {
     return db
         .into(db.messages)
@@ -43,6 +44,7 @@ void main() {
             type: 0,
             retryCount: drift.Value(retryCount),
             lastRetryAt: drift.Value(lastRetryAt),
+            messageId: drift.Value(messageId),
           ),
         );
   }
@@ -105,6 +107,32 @@ void main() {
 
       expect(client.sentMessages, hasLength(1));
       expect((await messageById(id)).status, equals(MessageStatus.sent));
+    });
+
+    test('first send persists the network message id on the row', () async {
+      final id = await insertPending(content: 'first send');
+
+      await queue.retryPending();
+
+      // The fake mints "fake-1" when no id is supplied; it must be stored.
+      expect(client.sentMessages.single.messageId, isNull);
+      expect((await messageById(id)).messageId, equals('fake-1'));
+    });
+
+    test('retry reuses the same network message id across attempts', () async {
+      // A pending message that already carries a stable network id (e.g. a
+      // previous attempt assigned it). Every retry must pass that exact id.
+      final id = await insertPending(
+        content: 'stable',
+        messageId: 'stable-net-id',
+      );
+
+      await queue.retryPending();
+
+      expect(client.sentMessages, hasLength(1));
+      expect(client.sentMessages.single.messageId, equals('stable-net-id'));
+      // The id is unchanged after the send.
+      expect((await messageById(id)).messageId, equals('stable-net-id'));
     });
 
     test('does not touch sent or failed messages', () async {

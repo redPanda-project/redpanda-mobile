@@ -11,16 +11,26 @@ class FakeRedPandaClient implements RedPandaClient {
   /// When set, [sendMessage] throws this error instead of succeeding.
   Object? sendError;
 
-  final List<({String channelId, String content})> sentMessages = [];
+  final List<({String channelId, String content, String? messageId})>
+  sentMessages = [];
   final List<OHRegistration> restoredHandles = [];
   final Map<String, List<int>> channelKeys = {};
 
   @override
-  Future<String> sendMessage(String channelId, String content) async {
+  Future<String> sendMessage(
+    String channelId,
+    String content, {
+    String? messageId,
+  }) async {
     final error = sendError;
     if (error != null) throw error;
-    sentMessages.add((channelId: channelId, content: content));
-    return 'fake-${sentMessages.length}';
+    sentMessages.add((
+      channelId: channelId,
+      content: content,
+      messageId: messageId,
+    ));
+    // Echo a caller-supplied id (retry path); otherwise mint a fresh one.
+    return messageId ?? 'fake-${sentMessages.length}';
   }
 
   @override

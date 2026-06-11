@@ -33,7 +33,16 @@ class CmdSendMessage extends IsolateCommand {
   final int requestId;
   final String channelId;
   final String content;
-  CmdSendMessage(this.requestId, this.channelId, this.content);
+
+  /// Stable hex message id reused across retries; null to let the network
+  /// layer generate a fresh one.
+  final String? messageId;
+  CmdSendMessage(
+    this.requestId,
+    this.channelId,
+    this.content, {
+    this.messageId,
+  });
 }
 
 class CmdRegisterOutboundHandle extends IsolateCommand {

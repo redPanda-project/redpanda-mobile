@@ -52,8 +52,15 @@ class MessageRepository {
         );
   }
 
-  /// Inserts a fetched message unless one with the same network-level
-  /// [messageId] already exists. Returns true if the message was new.
+  /// Inserts a fetched message unless one with the same sender [messageId]
+  /// already exists **in the same [conversationId]**. Returns true if the
+  /// message was stored.
+  ///
+  /// Dedup is scoped per conversation: the sender chooses the 16-byte
+  /// message_id, which is only unique within a channel. An empty [messageId]
+  /// is treated as never-seen and always inserted, so a malformed item (one
+  /// whose decrypted message id is empty) can never black-hole the channel by
+  /// matching every later message.
   ///
   /// Check and insert run in a transaction so concurrent handlers cannot
   /// race past the exists-check and misreport an ignored insert as new.
@@ -65,8 +72,13 @@ class MessageRepository {
     required DateTime timestamp,
   }) {
     return _db.transaction(() async {
-      final exists = await messageExists(messageId);
-      if (exists) return false;
+      if (messageId.isNotEmpty) {
+        final exists = await messageExists(
+          messageId,
+          conversationId: conversationId,
+        );
+        if (exists) return false;
+      }
 
       await _db
           .into(_db.messages)
@@ -78,7 +90,9 @@ class MessageRepository {
               timestamp: timestamp,
               status: MessageStatus.received,
               type: 0,
-              messageId: drift.Value(messageId),
+              // Store NULL (not empty string) for empty ids so the unique
+              // index never groups malformed items together.
+              messageId: drift.Value(messageId.isEmpty ? null : messageId),
             ),
             mode: drift.InsertMode.insertOrIgnore,
           );
@@ -86,11 +100,18 @@ class MessageRepository {
     });
   }
 
-  /// True if a message with the given network-level [messageId] exists.
-  Future<bool> messageExists(String messageId) async {
+  /// True if a message with the given sender [messageId] already exists in
+  /// [conversationId]. An empty [messageId] is never considered to exist.
+  Future<bool> messageExists(String messageId, {String? conversationId}) async {
+    if (messageId.isEmpty) return false;
     final row =
         await (_db.select(_db.messages)
-              ..where((t) => t.messageId.equals(messageId))
+              ..where(
+                (t) => conversationId == null
+                    ? t.messageId.equals(messageId)
+                    : t.messageId.equals(messageId) &
+                          t.conversationId.equals(conversationId),
+              )
               ..limit(1))
             .getSingleOrNull();
     return row != null;
@@ -101,6 +122,15 @@ class MessageRepository {
     return (_db.select(
       _db.messages,
     )..where((t) => t.status.equals(MessageStatus.pending))).get();
+  }
+
+  /// Persists the stable network-level message id assigned to an outgoing
+  /// message on its first send attempt, so retries reuse the same id (the
+  /// receiver deduplicates on it). No-op if already set, to keep the id stable.
+  Future<void> setNetworkMessageId(int id, String messageId) async {
+    await (_db.update(_db.messages)
+          ..where((t) => t.id.equals(id) & t.messageId.isNull()))
+        .write(MessagesCompanion(messageId: drift.Value(messageId)));
   }
 
   Future<void> updateMessageStatus(int id, int status) async {

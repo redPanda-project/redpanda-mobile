@@ -124,7 +124,7 @@ void main() {
     });
 
     test(
-      'unique index rejects duplicate message ids at the DB level',
+      'unique index rejects duplicate (conversation, message id) at DB level',
       () async {
         await repo.insertIncomingIfNew(
           messageId: 'dup',
@@ -135,7 +135,7 @@ void main() {
         );
 
         // Bypasses the repository check; insertOrIgnore + unique index must
-        // still prevent a second row.
+        // still prevent a second row in the same conversation.
         await repo.insertIncomingIfNew(
           messageId: 'dup',
           conversationId: 'channel-1',
@@ -163,6 +163,105 @@ void main() {
 
       final all = await db.select(db.messages).get();
       expect(all, hasLength(2));
+    });
+
+    // --- C1 contract: receiver must keep EVERY message after the first ---
+
+    test('two DIFFERENT messages both persist (regression for C1)', () async {
+      final a = await repo.insertIncomingIfNew(
+        messageId: 'id-aaa',
+        conversationId: 'channel-1',
+        senderId: 'channel-1',
+        content: 'first message',
+        timestamp: DateTime(2026, 6, 11, 10),
+      );
+      final b = await repo.insertIncomingIfNew(
+        messageId: 'id-bbb',
+        conversationId: 'channel-1',
+        senderId: 'channel-1',
+        content: 'second message',
+        timestamp: DateTime(2026, 6, 11, 11),
+      );
+
+      expect(a, isTrue);
+      expect(b, isTrue);
+      final all = await db.select(db.messages).get();
+      expect(all, hasLength(2));
+      expect(
+        all.map((m) => m.content),
+        containsAll(['first message', 'second message']),
+      );
+    });
+
+    test('the same message delivered twice is stored once', () async {
+      final first = await repo.insertIncomingIfNew(
+        messageId: 'same-id',
+        conversationId: 'channel-1',
+        senderId: 'channel-1',
+        content: 'hello',
+        timestamp: DateTime(2026, 6, 11),
+      );
+      final again = await repo.insertIncomingIfNew(
+        messageId: 'same-id',
+        conversationId: 'channel-1',
+        senderId: 'channel-1',
+        content: 'hello',
+        timestamp: DateTime(2026, 6, 11),
+      );
+
+      expect(first, isTrue);
+      expect(again, isFalse);
+      expect(await db.select(db.messages).get(), hasLength(1));
+    });
+
+    test(
+      'same message id in two channels both persist (per-conversation scope)',
+      () async {
+        final a = await repo.insertIncomingIfNew(
+          messageId: 'shared-id',
+          conversationId: 'channel-1',
+          senderId: 'channel-1',
+          content: 'in c1',
+          timestamp: DateTime(2026, 6, 11),
+        );
+        final b = await repo.insertIncomingIfNew(
+          messageId: 'shared-id',
+          conversationId: 'channel-2',
+          senderId: 'channel-2',
+          content: 'in c2',
+          timestamp: DateTime(2026, 6, 11),
+        );
+
+        expect(a, isTrue);
+        expect(b, isTrue);
+        expect(await db.select(db.messages).get(), hasLength(2));
+      },
+    );
+
+    test('empty message ids never black-hole a channel', () async {
+      // A malformed item whose decrypted id is empty must always insert,
+      // never match a previous empty-id item.
+      final a = await repo.insertIncomingIfNew(
+        messageId: '',
+        conversationId: 'channel-1',
+        senderId: 'channel-1',
+        content: 'first malformed',
+        timestamp: DateTime(2026, 6, 11, 10),
+      );
+      final b = await repo.insertIncomingIfNew(
+        messageId: '',
+        conversationId: 'channel-1',
+        senderId: 'channel-1',
+        content: 'second malformed',
+        timestamp: DateTime(2026, 6, 11, 11),
+      );
+
+      expect(a, isTrue);
+      expect(b, isTrue);
+      final all = await db.select(db.messages).get();
+      expect(all, hasLength(2));
+      // Empty ids are stored as NULL so the unique index does not group them.
+      expect(all.every((m) => m.messageId == null), isTrue);
     });
   });
 }

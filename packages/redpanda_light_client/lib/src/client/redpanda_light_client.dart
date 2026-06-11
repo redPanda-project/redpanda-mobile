@@ -1,13 +1,13 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:fixnum/fixnum.dart' as fixnum;
-import 'package:pointycastle/export.dart' as pc;
 
 import 'package:redpanda_light_client/src/client_facade.dart';
+import 'package:redpanda_light_client/src/crypto/channel_message.dart';
+import 'package:redpanda_light_client/src/crypto/message_crypto_v2.dart';
 import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
@@ -624,10 +624,25 @@ class RedPandaLightClient implements RedPandaClient {
   }
 
   @override
-  Future<String> sendMessage(String channelId, String content) async {
-    final random = Random.secure();
-    final messageId =
-        '${DateTime.now().millisecondsSinceEpoch}-${random.nextInt(999999)}';
+  Future<String> sendMessage(
+    String channelId,
+    String content, {
+    String? messageId,
+  }) async {
+    // Resolve a stable 16-byte message id. Callers (e.g. the retry queue) pass
+    // the same id on every attempt so re-sends deduplicate at the receiver via
+    // the ChannelMessage.message_id carried inside the encrypted payload. A
+    // fresh random IV per attempt is fine — the inner id is the dedup key.
+    final Uint8List messageIdBytes;
+    if (messageId != null && messageId.isNotEmpty) {
+      messageIdBytes = Uint8List.fromList(_hexDecode(messageId));
+    } else {
+      final random = Random.secure();
+      messageIdBytes = Uint8List.fromList(
+        List<int>.generate(16, (_) => random.nextInt(256)),
+      );
+    }
+    final messageIdHex = _hexEncode(messageIdBytes);
 
     final encKey = _channelEncryptionKeys[channelId];
     if (encKey == null) {
@@ -639,42 +654,23 @@ class RedPandaLightClient implements RedPandaClient {
       );
     }
 
-    // 1. Generate random IV (16 bytes)
-    final iv = Uint8List.fromList(
-      List<int>.generate(16, (_) => random.nextInt(256)),
+    // Build the inner ChannelMessage (message_id + timestamp + content) and
+    // encrypt it into a message-format-v2 payload (HKDF key separation,
+    // version byte, MAC over version||IV||ciphertext).
+    final channelMessage = ChannelMessage(
+      messageId: messageIdBytes,
+      timestampMs: DateTime.now().millisecondsSinceEpoch,
+      content: content,
     );
+    final payload = MessageCryptoV2.encrypt(channelMessage, encKey);
 
-    // 2. Encrypt with AES-256-CTR
-    final plaintext = Uint8List.fromList(utf8.encode(content));
-    final cipher = pc.CTRStreamCipher(pc.AESEngine());
-    cipher.init(
-      true,
-      pc.ParametersWithIV(pc.KeyParameter(Uint8List.fromList(encKey)), iv),
-    );
-    final ciphertext = cipher.process(plaintext);
-
-    // 3. Compute HMAC-SHA256 over [IV || ciphertext] for authenticated encryption
-    final macInput = Uint8List(iv.length + ciphertext.length);
-    macInput.setRange(0, iv.length, iv);
-    macInput.setRange(iv.length, macInput.length, ciphertext);
-
-    final hmac = pc.HMac(pc.SHA256Digest(), 64)
-      ..init(pc.KeyParameter(Uint8List.fromList(encKey)));
-    final mac = hmac.process(macInput);
-
-    // 4. Build payload: [IV (16 bytes)][ciphertext][HMAC-SHA256 (32 bytes)]
-    final payload = Uint8List(iv.length + ciphertext.length + mac.length);
-    payload.setRange(0, iv.length, iv);
-    payload.setRange(iv.length, iv.length + ciphertext.length, ciphertext);
-    payload.setRange(iv.length + ciphertext.length, payload.length, mac);
-
-    // 5. Build FlaschenpostPut with target OH mailbox id for direct routing
+    // Build FlaschenpostPut with target OH mailbox id for direct routing.
     final peerOhId = _channelPeerOhIds[channelId];
     final flaschenpost = FlaschenpostPut()
       ..content = payload
       ..ohId = peerOhId ?? Uint8List(0);
 
-    // 6. Send to a connected peer (best available)
+    // Send to a connected peer (best available).
     final activePeer = _peers.values
         .where((p) => p.isHandshakeVerified)
         .firstOrNull;
@@ -690,7 +686,7 @@ class RedPandaLightClient implements RedPandaClient {
     );
     activePeer.sendCommand(141, Uint8List.fromList(buffer));
 
-    return messageId;
+    return messageIdHex;
   }
 
   @override
@@ -947,18 +943,21 @@ class RedPandaLightClient implements RedPandaClient {
       return [];
     }
 
-    // Decrypt each MailItem
+    // Decrypt each MailItem. The dedup id and sender timestamp come from the
+    // decrypted ChannelMessage (sender-chosen), NOT from the server's
+    // MailItem.message_id — the reference node never sets that field.
+    // A per-item failure is logged and skipped so one bad item cannot abort
+    // the whole batch.
     final messages = <DecryptedMessage>[];
     for (final item in response.items) {
       try {
-        final content = _decryptPayload(item.payload, encKey);
+        final channelMessage = MessageCryptoV2.decrypt(item.payload, encKey);
         messages.add(
           DecryptedMessage(
-            id: item.messageId
-                .map((b) => b.toRadixString(16).padLeft(2, '0'))
-                .join(),
-            content: content,
+            id: _hexEncode(channelMessage.messageId),
+            content: channelMessage.content,
             receivedAtMs: item.receivedAtMs.toInt(),
+            senderTimestampMs: channelMessage.timestampMs,
             channelId: oh.channelId,
           ),
         );
@@ -1058,44 +1057,16 @@ class RedPandaLightClient implements RedPandaClient {
   static String _hexEncode(List<int> bytes) =>
       bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 
-  /// Decrypts an encrypted payload: [IV(16)][ciphertext][HMAC-SHA256(32)]
-  String _decryptPayload(List<int> payload, List<int> encKey) {
-    if (payload.length < 49) {
-      throw ArgumentError('Payload too short: ${payload.length} bytes');
+  /// Decodes a hex string into bytes.
+  static List<int> _hexDecode(String hex) {
+    if (hex.length.isOdd) {
+      throw FormatException('odd-length hex string: ${hex.length}');
     }
-
-    final iv = Uint8List.fromList(payload.sublist(0, 16));
-    final ciphertext = Uint8List.fromList(
-      payload.sublist(16, payload.length - 32),
-    );
-    final mac = Uint8List.fromList(payload.sublist(payload.length - 32));
-
-    // Verify HMAC-SHA256 over [IV || ciphertext]
-    final macInput = Uint8List(iv.length + ciphertext.length);
-    macInput.setRange(0, iv.length, iv);
-    macInput.setRange(iv.length, macInput.length, ciphertext);
-
-    final hmac = pc.HMac(pc.SHA256Digest(), 64)
-      ..init(pc.KeyParameter(Uint8List.fromList(encKey)));
-    final expectedMac = hmac.process(macInput);
-
-    bool macValid = mac.length == expectedMac.length;
-    for (int i = 0; macValid && i < mac.length; i++) {
-      macValid = mac[i] == expectedMac[i];
+    final out = List<int>.filled(hex.length ~/ 2, 0);
+    for (var i = 0; i < out.length; i++) {
+      out[i] = int.parse(hex.substring(i * 2, i * 2 + 2), radix: 16);
     }
-    if (!macValid) {
-      throw StateError('HMAC verification failed');
-    }
-
-    // AES-256-CTR decrypt
-    final cipher = pc.CTRStreamCipher(pc.AESEngine());
-    cipher.init(
-      false,
-      pc.ParametersWithIV(pc.KeyParameter(Uint8List.fromList(encKey)), iv),
-    );
-    final plaintext = cipher.process(ciphertext);
-
-    return utf8.decode(plaintext);
+    return out;
   }
 
   void _startPolling() {
