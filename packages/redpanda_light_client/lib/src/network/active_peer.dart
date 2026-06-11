@@ -9,6 +9,7 @@ import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
 import 'package:redpanda_light_client/src/generated/commands.pb.dart';
+import 'package:redpanda_light_client/src/logging/logger.dart';
 
 /// Factory for creating sockets (allows mocking).
 typedef SocketFactory = Future<Socket> Function(String host, int port);
@@ -100,27 +101,27 @@ class ActivePeer {
       final host = parts[0];
       final port = int.parse(parts[1]);
 
-      print('ActivePeer($address): Connecting...');
+      RpLog.debug('ActivePeer($address): Connecting...');
       final socket = await socketFactory(host, port);
       socket.setOption(SocketOption.tcpNoDelay, true);
       _socket = socket;
 
-      print('ActivePeer($address): TCP Connected. Sending Handshake...');
+      RpLog.debug('ActivePeer($address): TCP Connected. Sending Handshake...');
       _sendHandshake();
 
       _socket!.listen(
         _handleSocketData,
         onError: (e) {
-          print('ActivePeer($address) socket error: $e');
+          RpLog.debug('ActivePeer($address) socket error: $e');
           _shutdown();
         },
         onDone: () {
-          print('ActivePeer($address) socket closed');
+          RpLog.debug('ActivePeer($address) socket closed');
           _shutdown();
         },
       );
     } catch (e) {
-      print('ActivePeer($address) connection failed: $e');
+      RpLog.debug('ActivePeer($address) connection failed: $e');
       _shutdown();
     }
   }
@@ -150,7 +151,9 @@ class ActivePeer {
     buffer.add(portData.buffer.asUint8List());
 
     _socket!.add(buffer.toBytes());
-    print('ActivePeer($address): Handshake sent (${buffer.length} bytes)');
+    RpLog.debug(
+      'ActivePeer($address): Handshake sent (${buffer.length} bytes)',
+    );
   }
 
   void _handleSocketData(Uint8List data) {
@@ -185,11 +188,11 @@ class ActivePeer {
           final command = _buffer[0];
 
           if (command == _cmdRequestPublicKey) {
-            print('ActivePeer($address): Received requestPublicKey');
+            RpLog.debug('ActivePeer($address): Received requestPublicKey');
             _buffer.removeAt(0);
             _sendPublicKey();
           } else if (command == _cmdActivateEncryption) {
-            print('ActivePeer($address): Received activateEncryption');
+            RpLog.debug('ActivePeer($address): Received activateEncryption');
             if (_buffer.length < 1 + 8) {
               break;
             }
@@ -206,7 +209,7 @@ class ActivePeer {
               Uint8List.fromList(randomFromThem),
             );
           } else if (command == _cmdSendPublicKey) {
-            print('ActivePeer($address): Received sendPublicKey');
+            RpLog.debug('ActivePeer($address): Received sendPublicKey');
             if (_buffer.length < 1 + 65) {
               break;
             }
@@ -216,13 +219,13 @@ class ActivePeer {
 
             _parsePeerPublicKey(keyBytes);
           } else if (command == _cmdPing) {
-            print(
+            RpLog.debug(
               'ActivePeer($address): Received ping (Encrypted). Sending pong...',
             );
             _buffer.removeAt(0);
             _sendPong();
           } else if (command == _cmdPong) {
-            print('ActivePeer($address): Received pong (Encrypted).');
+            RpLog.debug('ActivePeer($address): Received pong (Encrypted).');
             if (_pingStopwatch != null) {
               _pingStopwatch!.stop();
               final latency = _pingStopwatch!.elapsedMilliseconds;
@@ -231,14 +234,14 @@ class ActivePeer {
             }
             _buffer.removeAt(0);
           } else if (command == _cmdRequestPeerList) {
-            print('ActivePeer($address): Received requestPeerList');
+            RpLog.debug('ActivePeer($address): Received requestPeerList');
             _buffer.removeAt(0);
             if (onPeerListRequested != null) {
               final peers = onPeerListRequested!();
               sendPeerList(peers);
             }
           } else if (command == _cmdSendPeerList) {
-            print('ActivePeer($address): Received sendPeerList');
+            RpLog.debug('ActivePeer($address): Received sendPeerList');
             if (_buffer.length < 1 + 4) {
               break; // wait for length
             }
@@ -303,7 +306,7 @@ class ActivePeer {
             _buffer.removeRange(0, length);
             onCommandResponse?.call(command, payload);
           } else {
-            print(
+            RpLog.debug(
               'ActivePeer($address): Unknown command byte: $command. Discarding.',
             );
             _buffer.removeAt(0);
@@ -311,8 +314,8 @@ class ActivePeer {
         }
       }
     } catch (e, stack) {
-      print('ActivePeer($address): Error processing buffer: $e');
-      print(stack);
+      RpLog.debug('ActivePeer($address): Error processing buffer: $e');
+      RpLog.debug(stack.toString());
       _shutdown();
     } finally {
       _isProcessingBuffer = false;
@@ -323,24 +326,24 @@ class ActivePeer {
     final magicBytes = _buffer.sublist(0, 4);
     final magicVal = String.fromCharCodes(magicBytes);
     if (magicVal != _magic) {
-      print('ActivePeer($address): Invalid magic. Disconnecting.');
+      RpLog.debug('ActivePeer($address): Invalid magic. Disconnecting.');
       _shutdown();
       return;
     }
 
-    print('ActivePeer($address): Handshake Verified.');
+    RpLog.debug('ActivePeer($address): Handshake Verified.');
     _handshakeVerified = true;
     onStatusChange(ConnectionStatus.connected); // Notify manager
     onHandshakeComplete?.call();
 
     _buffer.removeRange(0, _handshakeLength);
 
-    print('ActivePeer($address): Requesting Peer Public Key...');
+    RpLog.debug('ActivePeer($address): Requesting Peer Public Key...');
     _socket!.add([_cmdRequestPublicKey]);
   }
 
   void _sendPublicKey() {
-    print('ActivePeer($address): Sending Public Key...');
+    RpLog.debug('ActivePeer($address): Sending Public Key...');
     final buffer = BytesBuilder();
     buffer.addByte(_cmdSendPublicKey);
     buffer.add(selfKeys.publicKeyBytes);
@@ -354,7 +357,7 @@ class ActivePeer {
     final curve = ecParams.curve;
     final point = curve.decodePoint(keyBytes);
     _peerPublicKey = ECPublicKey(point, ecParams);
-    print('ActivePeer($address): Peer Public Key Parsed.');
+    RpLog.debug('ActivePeer($address): Peer Public Key Parsed.');
 
     final nodeId = NodeId.fromPublicKeyBytes(Uint8List.fromList(keyBytes));
     onNodeIdDiscovered?.call(nodeId.toHex());
@@ -364,7 +367,7 @@ class ActivePeer {
     }
 
     if (_pendingRandomFromThem != null) {
-      print(
+      RpLog.debug(
         'ActivePeer($address): Found pending encryption request. Finalizing now.',
       );
       _finalizeEncryption(_pendingRandomFromThem!);
@@ -374,7 +377,7 @@ class ActivePeer {
 
   Future<void> _initiateEncryptionHandshake() async {
     if (_randomFromUs != null) return; // Already initiated
-    print('ActivePeer($address): Initiating Encryption Handshake...');
+    RpLog.debug('ActivePeer($address): Initiating Encryption Handshake...');
     _randomFromUs = _encryptionManager.generateRandomFromUs();
     await Future.delayed(
       const Duration(milliseconds: 100),
@@ -383,7 +386,7 @@ class ActivePeer {
     buffer.addByte(_cmdActivateEncryption);
     buffer.add(_randomFromUs!);
     _sendData(buffer.toBytes(), forceUnencrypted: true);
-    print('ActivePeer($address): Sent activateEncryption request.');
+    RpLog.debug('ActivePeer($address): Sent activateEncryption request.');
   }
 
   Future<void> _handlePeerEncryptionRandom(Uint8List randomFromThem) async {
@@ -397,20 +400,20 @@ class ActivePeer {
   void _finalizeEncryption(Uint8List randomFromThem) {
     try {
       if (_peerPublicKey == null) {
-        print(
+        RpLog.debug(
           'ActivePeer($address): Peer Public Key missing. Deferring encryption finalization.',
         );
         _pendingRandomFromThem = randomFromThem;
         return;
       }
       if (selfKeys.privateKey == null || _randomFromUs == null) {
-        print(
+        RpLog.debug(
           'ActivePeer($address): Cannot activate encryption, missing self state.',
         );
         return;
       }
 
-      print('ActivePeer($address): Finalizing Encryption...');
+      RpLog.debug('ActivePeer($address): Finalizing Encryption...');
       _encryptionManager.deriveAndInitialize(
         selfKeys: selfKeys.asAsymmetricKeyPair(),
         peerPublicKey: _peerPublicKey!,
@@ -418,12 +421,12 @@ class ActivePeer {
         randomFromThem: randomFromThem,
       );
 
-      print('ActivePeer($address): Encryption Active!');
-      print('ActivePeer($address): Sending Initial ping (Encrypted)...');
+      RpLog.debug('ActivePeer($address): Encryption Active!');
+      RpLog.debug('ActivePeer($address): Sending Initial ping (Encrypted)...');
       _sendData([_cmdPing]);
 
       // Auto-bootstrap: Request Peer List
-      print('ActivePeer($address): Requesting Peer List (Encrypted)...');
+      RpLog.debug('ActivePeer($address): Requesting Peer List (Encrypted)...');
       requestPeerList();
 
       if (_buffer.isNotEmpty) {
@@ -431,17 +434,17 @@ class ActivePeer {
         _buffer.clear();
         final decrypted = _encryptionManager.decrypt(remaining);
         _buffer.addAll(decrypted);
-        print('ActivePeer($address): Decrypted residual bytes.');
+        RpLog.debug('ActivePeer($address): Decrypted residual bytes.');
       }
     } catch (e, stack) {
-      print('ActivePeer($address): Error activating encryption: $e');
-      print(stack);
+      RpLog.debug('ActivePeer($address): Error activating encryption: $e');
+      RpLog.debug(stack.toString());
       _shutdown();
     }
   }
 
   void _sendPong() {
-    print('ActivePeer($address): Sending pong...');
+    RpLog.debug('ActivePeer($address): Sending pong...');
     _sendData([_cmdPong]);
     _pongSent = true;
   }
@@ -449,7 +452,7 @@ class ActivePeer {
   /// Sends a ping to measure latency.
   void ping() {
     if (_pingStopwatch != null) return; // Already pinging
-    print('ActivePeer($address): Sending Ping (Latency Check)...');
+    RpLog.debug('ActivePeer($address): Sending Ping (Latency Check)...');
     _pingStopwatch = Stopwatch()..start();
     _sendData([_cmdPing]);
   }
@@ -461,7 +464,7 @@ class ActivePeer {
       // Exponential moving average (weight new value by 30%)
       averageLatencyMs = (averageLatencyMs * 0.7 + latency * 0.3).round();
     }
-    print(
+    RpLog.debug(
       'ActivePeer($address): Latency updated to ${averageLatencyMs}ms (current: ${latency}ms)',
     );
     onLatencyUpdate?.call(averageLatencyMs);
@@ -494,7 +497,7 @@ class ActivePeer {
   }
 
   void sendPeerList(List<String> peers) {
-    print('ActivePeer($address): Sending Peer List (${peers.length})...');
+    RpLog.debug('ActivePeer($address): Sending Peer List (${peers.length})...');
     final msg = SendPeerList();
     for (final p in peers) {
       try {
@@ -507,7 +510,7 @@ class ActivePeer {
           );
         }
       } catch (e) {
-        print('ActivePeer($address): Error parsing peer for send: $p');
+        RpLog.debug('ActivePeer($address): Error parsing peer for send: $p');
       }
     }
     final protoBytes = msg.writeToBuffer();
@@ -535,7 +538,7 @@ class ActivePeer {
       }
       onPeersReceived?.call(peers);
     } catch (e) {
-      print('ActivePeer($address): Failed to parse peer list: $e');
+      RpLog.debug('ActivePeer($address): Failed to parse peer list: $e');
     }
   }
 }
