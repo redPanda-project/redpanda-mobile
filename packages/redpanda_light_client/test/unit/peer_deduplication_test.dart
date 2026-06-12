@@ -71,7 +71,7 @@ void main() {
 
     // Test: Adding duplicate IP (localhost vs 127.0.0.1) should not trigger new connection
     test('Does not connect to same peer twice via alias (localhost/127.0.0.1)', () async {
-      final keys = KeyPair.generate();
+      final keys = await KeyPair.generate();
       client = RedPandaLightClient(
         selfNodeId: NodeId.fromPublicKey(keys),
         selfKeys: keys,

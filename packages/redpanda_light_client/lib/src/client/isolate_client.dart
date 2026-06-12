@@ -318,18 +318,8 @@ void _isolateEntryPoint(SendPort mainSendPort) {
     if (message is CmdInit) {
       RpLog.debug('RedPandaWorker: Initializing client...');
 
-      NodeId nodeId =
-          message.nodeId ?? NodeId.fromPublicKey(KeyPair.generate());
-      KeyPair keyPair = message.keyPair ?? KeyPair.generate();
-
-      // Ensure specific keys match if one provided (edge case, not expected)
-      if (message.nodeId == null || message.keyPair == null) {
-        keyPair = message.keyPair ?? KeyPair.generate();
-        nodeId = message.nodeId ?? NodeId.fromPublicKey(keyPair);
-      } else {
-        keyPair = message.keyPair!;
-        nodeId = message.nodeId!;
-      }
+      final KeyPair keyPair = message.keyPair ?? await KeyPair.generate();
+      final NodeId nodeId = message.nodeId ?? NodeId.fromPublicKey(keyPair);
 
       client = RedPandaLightClient(
         selfNodeId: nodeId,

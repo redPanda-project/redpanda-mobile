@@ -20,7 +20,7 @@ void main() {
   late NodeId selfNodeId;
   late KeyPair selfKeys;
 
-  setUp(() {
+  setUp(() async {
     registerFallbackValue(SocketOption.tcpNoDelay);
     registerFallbackValue(Uint8List(0)); // Just in case
 
@@ -45,7 +45,7 @@ void main() {
     when(() => mockSocket.destroy()).thenReturn(null);
 
     // Use the KeyPair.generate() factory which creates a valid dummy pair
-    selfKeys = KeyPair.generate();
+    selfKeys = await KeyPair.generate();
     selfNodeId = NodeId(Uint8List(20)); // Dummy NodeId
   });
 
@@ -120,6 +120,13 @@ void main() {
   });
 
   test('ActivePeer sends REQUEST_PEERLIST command', () async {
+    // Collect writes as they happen so the test can wait deterministically
+    // for the async tx chain instead of using a fixed delay.
+    final sent = <List<int>>[];
+    when(() => mockSocket.add(any())).thenAnswer((invocation) {
+      sent.add(List<int>.from(invocation.positionalArguments[0] as List<int>));
+    });
+
     activePeer = ActivePeer(
       address: 'localhost:1234',
       selfNodeId: selfNodeId,
@@ -136,25 +143,15 @@ void main() {
     // We can just call the method directly
     activePeer.requestPeerList();
 
-    // Capture what was sent to socket
-    // verify(() => mockSocket.add(any())).called(greaterThan(0));
-    // But we need to inspect arguments.
-
-    final captured = verify(() => mockSocket.add(captureAny())).captured;
-    // captured might contain connection setup, handshake etc?
-    // We expect [7] (REQUEST_PEERLIST)
-
-    // Find the one that is [7]
-    bool foundStart = false;
-    for (final c in captured) {
-      if (c is List<int> || c is Uint8List) {
-        final list = c as List<int>;
-        if (list.length == 1 && list[0] == 7) {
-          foundStart = true;
-          break;
-        }
-      }
+    // Sends go through the async tx chain — poll until the REQUEST_PEERLIST
+    // byte shows up (deterministic, no fixed delay).
+    bool foundRequest() =>
+        sent.any((c) => c.length == 1 && c[0] == 7); // REQUEST_PEERLIST
+    final deadline = DateTime.now().add(const Duration(seconds: 5));
+    while (!foundRequest()) {
+      if (DateTime.now().isAfter(deadline)) break;
+      await Future.delayed(const Duration(milliseconds: 5));
     }
-    expect(foundStart, isTrue, reason: "Should send REQUEST_PEERLIST (7)");
+    expect(foundRequest(), isTrue, reason: "Should send REQUEST_PEERLIST (7)");
   });
 }

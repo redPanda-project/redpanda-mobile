@@ -44,7 +44,7 @@ void main() {
 
     setUp(() async {
       nodeId = NodeId(Uint8List.fromList(List.filled(20, 1)));
-      keyPair = KeyPair.generate();
+      keyPair = await KeyPair.generate();
       connectionAttempts = 0;
     });
 

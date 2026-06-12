@@ -2,9 +2,8 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:pointycastle/ecc/api.dart'; // Needed for ECPublicKey field
-
-import 'package:redpanda_light_client/src/security/encryption_manager.dart';
+import 'package:redpanda_light_client/src/crypto/crypto_utils.dart';
+import 'package:redpanda_light_client/src/security/gcm_framed_codec.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
@@ -15,9 +14,13 @@ import 'package:redpanda_light_client/src/logging/logger.dart';
 typedef SocketFactory = Future<Socket> Function(String host, int port);
 
 /// Represents a single active connection attempt or established connection.
+///
+/// Speaks protocol v23 (MS03): 30-byte magic handshake, 64-byte
+/// Ed25519/X25519 public-key exchange, ephemeral X25519 key agreement and
+/// framed AES-256-GCM transport encryption ([GcmFramedCodec]).
 class ActivePeer {
   static const String _magic = "k3gV";
-  static const int _protocolVersion = 22;
+  static const int _protocolVersion = 23;
   static const int _handshakeLength = 30;
 
   // Commands
@@ -64,21 +67,32 @@ class ActivePeer {
   bool _handshakeVerified = false;
   Future<void>? _handshakeInitiationFuture;
 
-  final EncryptionManager _encryptionManager = EncryptionManager();
+  /// Active transport encryption (set after the v23 key exchange).
+  GcmFramedCodec? _codec;
+
+  /// Serializes inbound decryption + processing (frame counters and the
+  /// parse buffer must be handled strictly in arrival order).
+  Future<void> _rxChain = Future.value();
+
+  /// Serializes outbound encryption + socket writes (frame counter order).
+  Future<void> _txChain = Future.value();
 
   // Stats
   final DateTime connectedSince = DateTime.now();
   int averageLatencyMs = 9999;
   Stopwatch? _pingStopwatch;
 
-  bool get isEncryptionActive => _encryptionManager.isEncryptionActive;
+  bool get isEncryptionActive => _codec != null;
   bool get isPongSent => _pongSent;
   bool get isHandshakeVerified => _handshakeVerified;
   bool get isDisconnected => _socket == null && _isDisconnecting;
   bool _isDisconnecting = false; // Flag if we are logically disconnected
 
-  ECPublicKey? _peerPublicKey;
-  Uint8List? _randomFromUs;
+  /// The peer's 64-byte public export `[32 verifyKey][32 encPubKey]`.
+  Uint8List? _peerPublicExport;
+
+  /// Our ephemeral X25519 keypair for this connection's key exchange.
+  X25519KeyPairBytes? _ephemeralFromUs;
   bool _pongSent = false;
   bool _isProcessingBuffer = false;
 
@@ -158,16 +172,29 @@ class ActivePeer {
   }
 
   void _handleSocketData(Uint8List data) {
-    var processData = data;
-    if (_encryptionManager.isEncryptionActive) {
-      processData = _encryptionManager.decrypt(data);
-    }
-    _buffer.addAll(processData);
-    // print('ActivePeer($address) received: ${data.length} bytes. Buffer: ${_buffer.length}');
+    // Chain inbound chunks so async GCM frame decryption keeps the receive
+    // counter and the parse buffer in strict arrival order.
+    _rxChain = _rxChain
+        .then((_) async {
+          var processData = data;
+          final codec = _codec;
+          if (codec != null) {
+            // Returns only the plaintext of complete frames; partial frames
+            // stay buffered inside the codec.
+            processData = await codec.decrypt(data);
+          }
+          _buffer.addAll(processData);
 
-    if (!_isProcessingBuffer) {
-      _processBuffer();
-    }
+          if (!_isProcessingBuffer) {
+            await _processBuffer();
+          }
+        })
+        .catchError((Object e) {
+          // Auth/framing failures must drop the connection (never deliver
+          // silently corrupted plaintext).
+          RpLog.debug('ActivePeer($address): inbound processing failed: $e');
+          _shutdown();
+        });
   }
 
   Future<void> _processBuffer() async {
@@ -194,7 +221,8 @@ class ActivePeer {
             _sendPublicKey();
           } else if (command == _cmdActivateEncryption) {
             RpLog.debug('ActivePeer($address): Received activateEncryption');
-            if (_buffer.length < 1 + 8) {
+            // v23: payload is the peer's 32-byte ephemeral X25519 key.
+            if (_buffer.length < 1 + 32) {
               break;
             }
 
@@ -203,22 +231,23 @@ class ActivePeer {
             }
 
             _buffer.removeAt(0);
-            final randomFromThem = _buffer.sublist(0, 8);
-            _buffer.removeRange(0, 8);
+            final ephemeralFromThem = _buffer.sublist(0, 32);
+            _buffer.removeRange(0, 32);
 
-            await _handlePeerEncryptionRandom(
-              Uint8List.fromList(randomFromThem),
+            await _handlePeerEphemeralKey(
+              Uint8List.fromList(ephemeralFromThem),
             );
           } else if (command == _cmdSendPublicKey) {
             RpLog.debug('ActivePeer($address): Received sendPublicKey');
-            if (_buffer.length < 1 + 65) {
+            // v23: 64-byte export [32 verifyKey][32 encryptionPubKey].
+            if (_buffer.length < 1 + KeyPair.publicKeyLength) {
               break;
             }
             _buffer.removeAt(0);
-            final keyBytes = _buffer.sublist(0, 65);
-            _buffer.removeRange(0, 65);
+            final keyBytes = _buffer.sublist(0, KeyPair.publicKeyLength);
+            _buffer.removeRange(0, KeyPair.publicKeyLength);
 
-            _parsePeerPublicKey(keyBytes);
+            await _parsePeerPublicKey(keyBytes);
           } else if (command == _cmdPing) {
             RpLog.debug(
               'ActivePeer($address): Received ping (Encrypted). Sending pong...',
@@ -349,66 +378,68 @@ class ActivePeer {
     final buffer = BytesBuilder();
     buffer.addByte(_cmdSendPublicKey);
     buffer.add(selfKeys.publicKeyBytes);
-    _sendData(buffer.toBytes());
+    // Part of the plaintext handshake: must never be encrypted, even if the
+    // codec got activated while this write was still queued on the tx chain.
+    _sendData(buffer.toBytes(), forceUnencrypted: true);
   }
 
-  Uint8List? _pendingRandomFromThem;
+  Uint8List? _pendingEphemeralFromThem;
 
-  void _parsePeerPublicKey(List<int> keyBytes) {
-    final ecParams = ECDomainParameters('brainpoolp256r1');
-    final curve = ecParams.curve;
-    final point = curve.decodePoint(keyBytes);
-    _peerPublicKey = ECPublicKey(point, ecParams);
+  Future<void> _parsePeerPublicKey(List<int> keyBytes) async {
+    _peerPublicExport = Uint8List.fromList(keyBytes);
     RpLog.debug('ActivePeer($address): Peer Public Key Parsed.');
 
+    // KademliaId = SHA256(verifyKey)[0..20] (master spec Decision 2).
     final nodeId = NodeId.fromPublicKeyBytes(Uint8List.fromList(keyBytes));
     onNodeIdDiscovered?.call(nodeId.toHex());
 
-    if (_randomFromUs == null) {
+    if (_ephemeralFromUs == null) {
       _handshakeInitiationFuture = _initiateEncryptionHandshake();
     }
 
-    if (_pendingRandomFromThem != null) {
+    if (_pendingEphemeralFromThem != null) {
       RpLog.debug(
         'ActivePeer($address): Found pending encryption request. Finalizing now.',
       );
-      _finalizeEncryption(_pendingRandomFromThem!);
-      _pendingRandomFromThem = null;
+      final pending = _pendingEphemeralFromThem!;
+      _pendingEphemeralFromThem = null;
+      await _finalizeEncryption(pending);
     }
   }
 
   Future<void> _initiateEncryptionHandshake() async {
-    if (_randomFromUs != null) return; // Already initiated
+    if (_ephemeralFromUs != null) return; // Already initiated
     RpLog.debug('ActivePeer($address): Initiating Encryption Handshake...');
-    _randomFromUs = _encryptionManager.generateRandomFromUs();
-    await Future.delayed(
-      const Duration(milliseconds: 100),
-    ); // Buffer anti-glitch
+    _ephemeralFromUs = await CryptoUtils.generateEncryptionKeypair();
+    // Small delay so this command does not coalesce into the same TCP
+    // segment as the previous one (the node parses one handshake command
+    // per read).
+    await Future.delayed(const Duration(milliseconds: 100));
     final buffer = BytesBuilder();
     buffer.addByte(_cmdActivateEncryption);
-    buffer.add(_randomFromUs!);
+    buffer.add(_ephemeralFromUs!.publicKey);
     _sendData(buffer.toBytes(), forceUnencrypted: true);
     RpLog.debug('ActivePeer($address): Sent activateEncryption request.');
   }
 
-  Future<void> _handlePeerEncryptionRandom(Uint8List randomFromThem) async {
-    if (_randomFromUs == null) {
+  Future<void> _handlePeerEphemeralKey(Uint8List ephemeralFromThem) async {
+    if (_ephemeralFromUs == null) {
       _handshakeInitiationFuture = _initiateEncryptionHandshake();
       await _handshakeInitiationFuture;
     }
-    _finalizeEncryption(randomFromThem);
+    await _finalizeEncryption(ephemeralFromThem);
   }
 
-  void _finalizeEncryption(Uint8List randomFromThem) {
+  Future<void> _finalizeEncryption(Uint8List ephemeralFromThem) async {
     try {
-      if (_peerPublicKey == null) {
+      if (_peerPublicExport == null) {
         RpLog.debug(
           'ActivePeer($address): Peer Public Key missing. Deferring encryption finalization.',
         );
-        _pendingRandomFromThem = randomFromThem;
+        _pendingEphemeralFromThem = ephemeralFromThem;
         return;
       }
-      if (selfKeys.privateKey == null || _randomFromUs == null) {
+      if (_ephemeralFromUs == null) {
         RpLog.debug(
           'ActivePeer($address): Cannot activate encryption, missing self state.',
         );
@@ -416,14 +447,21 @@ class ActivePeer {
       }
 
       RpLog.debug('ActivePeer($address): Finalizing Encryption...');
-      _encryptionManager.deriveAndInitialize(
-        selfKeys: selfKeys.asAsymmetricKeyPair(),
-        peerPublicKey: _peerPublicKey!,
-        randomFromUs: _randomFromUs!,
-        randomFromThem: randomFromThem,
+      // shared = X25519(our ephemeral, their ephemeral); per-direction keys
+      // via HKDF with the sorted verify keys as salt. We initiated the TCP
+      // connection, so we are the "client" of the v23 key schedule.
+      final shared = await CryptoUtils.x25519(
+        _ephemeralFromUs!.privateKey,
+        ephemeralFromThem,
+      );
+      _codec = await GcmFramedCodec.deriveForInitiator(
+        sharedSecret: shared,
+        ourVerifyKey: selfKeys.verifyKeyBytes,
+        theirVerifyKey: _peerPublicExport!.sublist(0, 32),
       );
 
       RpLog.debug('ActivePeer($address): Encryption Active!');
+      // The server requires the first encrypted client command to be PING.
       RpLog.debug('ActivePeer($address): Sending Initial ping (Encrypted)...');
       _sendData([_cmdPing]);
 
@@ -432,9 +470,11 @@ class ActivePeer {
       requestPeerList();
 
       if (_buffer.isNotEmpty) {
+        // Bytes after ACTIVATE_ENCRYPTION in the same segment are already
+        // GCM frames — run them through the codec.
         final remaining = Uint8List.fromList(_buffer);
         _buffer.clear();
-        final decrypted = _encryptionManager.decrypt(remaining);
+        final decrypted = await _codec!.decrypt(remaining);
         _buffer.addAll(decrypted);
         RpLog.debug('ActivePeer($address): Decrypted residual bytes.');
       }
@@ -474,13 +514,25 @@ class ActivePeer {
 
   void _sendData(List<int> data, {bool forceUnencrypted = false}) {
     if (_socket == null) return;
-    Uint8List output;
-    if (_encryptionManager.isEncryptionActive && !forceUnencrypted) {
-      output = _encryptionManager.encrypt(Uint8List.fromList(data));
-    } else {
-      output = Uint8List.fromList(data);
-    }
-    _socket!.add(output);
+    // Chain writes so async GCM frame encryption keeps the send counter and
+    // the byte order on the socket consistent.
+    _txChain = _txChain
+        .then((_) async {
+          final socket = _socket;
+          if (socket == null) return;
+          Uint8List output;
+          final codec = _codec;
+          if (codec != null && !forceUnencrypted) {
+            output = await codec.encrypt(data);
+          } else {
+            output = Uint8List.fromList(data);
+          }
+          socket.add(output);
+        })
+        .catchError((Object e) {
+          RpLog.debug('ActivePeer($address): outbound processing failed: $e');
+          _shutdown();
+        });
   }
 
   void requestPeerList() {

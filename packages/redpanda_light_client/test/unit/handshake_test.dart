@@ -16,7 +16,7 @@ void main() {
   late NodeId selfNodeId;
   late KeyPair selfKeys;
 
-  setUp(() {
+  setUp(() async {
     registerFallbackValue(SocketOption.tcpNoDelay);
     registerFallbackValue(Uint8List(0));
 
@@ -41,7 +41,7 @@ void main() {
     when(() => mockSocket.add(any())).thenReturn(null);
     when(() => mockSocket.destroy()).thenReturn(null);
 
-    selfKeys = KeyPair.generate();
+    selfKeys = await KeyPair.generate();
     selfNodeId = NodeId(Uint8List(20));
   });
 

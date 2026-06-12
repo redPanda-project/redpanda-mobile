@@ -1,12 +1,16 @@
 import 'dart:typed_data';
 import 'package:bs58/bs58.dart';
+import 'package:crypto/crypto.dart';
 import 'package:equatable/equatable.dart';
 import 'package:hex/hex.dart';
-import 'package:pointycastle/export.dart';
+import 'package:redpanda_light_client/src/crypto/crypto_utils.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 
-/// Represents a 256-bit identifier used in the RedPanda Kademlia DHT.
-/// KademliaId in Java implementation.
+/// A 160-bit identifier used in the RedPanda Kademlia DHT.
+/// KademliaId in the Java implementation.
+///
+/// Since MS03 the id is derived from the **32-byte Ed25519 verify key**
+/// (master spec Decision 2): the first 20 bytes of `SHA-256(verifyKey)`.
 class NodeId extends Equatable {
   static const int length = 20; // 160 bits = 20 bytes (Kademlia standard)
   final Uint8List bytes;
@@ -18,27 +22,31 @@ class NodeId extends Equatable {
   }
 
   factory NodeId.random() {
-    // Basic random implementation (not secure, but fine for ID gen)
-    // For crypto keys we will use SecureRandom
-    final secureRandom = SecureRandom("Fortuna")
-      ..seed(KeyParameter(Uint8List.fromList(List.generate(32, (i) => i))));
-
-    return NodeId(secureRandom.nextBytes(length));
+    return NodeId(CryptoUtils.randomBytes(length));
   }
 
+  /// Derives the id from our own identity keypair.
   factory NodeId.fromPublicKey(KeyPair keys) {
-    final pubKeyBytes = keys.publicKeyBytes;
-    final digest = SHA256Digest();
-    // KademliaId is computed from SINGLE SHA-256 of the uncompressed public key (65 bytes)
-    final hash = digest.process(pubKeyBytes);
-
-    return NodeId(hash.sublist(0, length));
+    return NodeId.fromVerifyKey(keys.verifyKeyBytes);
   }
 
-  factory NodeId.fromPublicKeyBytes(Uint8List pubKeyBytes) {
-    final digest = SHA256Digest();
-    final hash = digest.process(pubKeyBytes);
-    return NodeId(hash.sublist(0, length));
+  /// Derives the id from a 32-byte Ed25519 verify key.
+  factory NodeId.fromVerifyKey(List<int> verifyKey) {
+    final hash = sha256.convert(verifyKey).bytes;
+    return NodeId(Uint8List.fromList(hash.sublist(0, length)));
+  }
+
+  /// Derives the id from a 64-byte public export
+  /// `[32 verifyKey][32 encryptionPubKey]` — only the verify key is hashed.
+  factory NodeId.fromPublicKeyBytes(Uint8List publicExport) {
+    if (publicExport.length != KeyPair.publicKeyLength) {
+      throw ArgumentError.value(
+        publicExport.length,
+        'publicExport',
+        'expected ${KeyPair.publicKeyLength}-byte public export',
+      );
+    }
+    return NodeId.fromVerifyKey(publicExport.sublist(0, 32));
   }
 
   String toHex() => HEX.encode(bytes);
@@ -50,6 +58,4 @@ class NodeId extends Equatable {
 
   @override
   String toString() => toHex();
-
-  // TODO: Add distance calculation (XOR) if needed for routing logic
 }

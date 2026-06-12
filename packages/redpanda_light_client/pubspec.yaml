@@ -9,9 +9,6 @@ environment:
 # Add regular dependencies here.
 dependencies:
   cryptography: ^2.7.0
-  # pointycastle only remains for the legacy v22 transport (brainpool ECDH +
-  # AES-CTR); it is removed together with the v22 path in the handshake-v23 PR.
-  pointycastle: ^4.0.0
   collection: ^1.19.1
   equatable: ^2.0.7
   hex: ^0.2.0

@@ -14,8 +14,8 @@ void main() {
   group('MS01 AK1 / MS02: sendMessage() reports delivery failures', () {
     late RedPandaLightClient client;
 
-    setUp(() {
-      final keys = KeyPair.generate();
+    setUp(() async {
+      final keys = await KeyPair.generate();
       client = RedPandaLightClient(
         selfNodeId: NodeId.fromPublicKey(keys),
         selfKeys: keys,
