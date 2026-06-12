@@ -101,7 +101,7 @@ void main() async {
     );
 
     test(
-      'Alice creates channel v2 with Bobs OH descriptor and sends message',
+      'Alice creates channel v3 with Bobs OH descriptor and sends message',
       () async {
         // Connect sequentially to avoid race on single-node
         await alice.connect();
@@ -124,9 +124,9 @@ void main() async {
         final channel = await Channel.generate('Alice-Bob Chat');
         final channelWithOH = channel.copyWith(peerOhDescriptor: bobDescriptor);
 
-        // Verify the QR JSON is v2
+        // Verify the QR JSON is v3
         final qrJson = channelWithOH.toJson();
-        expect(qrJson.contains('"v":2'), isTrue);
+        expect(qrJson.contains('"v":3'), isTrue);
         expect(qrJson.contains('"oh"'), isTrue);
 
         // Reconstruct from QR
