@@ -67,7 +67,7 @@ void main() async {
         );
 
         // 2. Create shared channel
-        final sharedChannel = Channel.generate('Alice-Bob E2E');
+        final sharedChannel = await Channel.generate('Alice-Bob E2E');
 
         // 3. Bob registers OH with channelId
         final bobOH = await bob.registerOutboundHandle(

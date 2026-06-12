@@ -60,8 +60,7 @@ void main() async {
         // Register outbound handle
         final oh = await client.registerOutboundHandle();
         expect(oh.ohId.length, 20);
-        expect(oh.keypair.publicKeyBytes.length, 65);
-        expect(oh.keypair.publicKeyBytes[0], 0x04); // Uncompressed EC point
+        expect(oh.keypair.publicKeyBytes.length, 32); // Ed25519 verify key
 
         // Fetch messages (empty since no backend OH support yet)
         final messages = await client.fetchMessages(oh);
@@ -89,13 +88,13 @@ void main() async {
         );
 
         // Create v2 channel
-        final channel = Channel.generate(
+        final channel = (await Channel.generate(
           'My Channel',
-        ).copyWith(peerOhDescriptor: descriptor);
+        )).copyWith(peerOhDescriptor: descriptor);
 
         // Serialize for QR code
         final qr = channel.toJson();
-        expect(qr.contains('"v":2'), isTrue);
+        expect(qr.contains('"v":3'), isTrue);
 
         // Deserialize
         final restored = Channel.fromJson(qr);
@@ -128,13 +127,13 @@ void main() async {
 
         // Test signing
         final data = Uint8List.fromList(List.generate(64, (i) => i));
-        final sig = oh.keypair.sign(data);
-        expect(sig.isNotEmpty, isTrue);
-        expect(oh.keypair.verify(data, sig), isTrue);
+        final sig = await oh.keypair.sign(data);
+        expect(sig.length, 64);
+        expect(await oh.keypair.verify(data, sig), isTrue);
 
         // Tamper check
         final tampered = Uint8List.fromList(List.generate(64, (i) => 255 - i));
-        expect(oh.keypair.verify(tampered, sig), isFalse);
+        expect(await oh.keypair.verify(tampered, sig), isFalse);
       },
       skip: jarAvailable ? null : 'RedPanda JAR not found',
     );

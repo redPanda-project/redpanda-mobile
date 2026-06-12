@@ -8,7 +8,7 @@ import 'package:fixnum/fixnum.dart' as fixnum;
 
 import 'package:redpanda_light_client/src/client_facade.dart';
 import 'package:redpanda_light_client/src/crypto/channel_message.dart';
-import 'package:redpanda_light_client/src/crypto/message_crypto_v2.dart';
+import 'package:redpanda_light_client/src/crypto/message_crypto_v3.dart';
 import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
 import 'package:redpanda_light_client/src/logging/logger.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
@@ -694,7 +694,11 @@ class RedPandaLightClient implements RedPandaClient {
       timestampMs: DateTime.now().millisecondsSinceEpoch,
       content: content,
     );
-    final payload = MessageCryptoV2.encrypt(channelMessage, encKey);
+    final payload = await MessageCryptoV3.encrypt(
+      channelMessage,
+      encKey,
+      channelId,
+    );
 
     // Build FlaschenpostPut with target OH mailbox id for direct routing.
     // want_response (MS02b) opts into a FlaschenpostPutResponse (command 158)
@@ -754,7 +758,7 @@ class RedPandaLightClient implements RedPandaClient {
 
   @override
   Future<OHRegistration> registerOutboundHandle({String? channelId}) async {
-    final keypair = OHKeypair.generate();
+    final keypair = await OHKeypair.generate();
     final random = Random.secure();
     final ohId = Uint8List.fromList(
       List<int>.generate(20, (_) => random.nextInt(256)),
@@ -762,7 +766,7 @@ class RedPandaLightClient implements RedPandaClient {
 
     final now = DateTime.now();
     final expiresAt = now.add(const Duration(days: 7));
-    final request = _buildRegisterRequest(ohId, keypair, now, expiresAt);
+    final request = await _buildRegisterRequest(ohId, keypair, now, expiresAt);
 
     // Send to best active peer
     final activePeer = _peers.values
@@ -835,14 +839,15 @@ class RedPandaLightClient implements RedPandaClient {
     return registration;
   }
 
-  /// Builds a signed RegisterOhRequest. Signing bytes:
-  /// [CMD_BYTE(150) | oh_id | requested_expires_at(8 BE) | timestamp_ms(8 BE) | nonce]
-  RegisterOhRequest _buildRegisterRequest(
+  /// Builds a signed RegisterOhRequest. Signing bytes (v2, Ed25519):
+  /// [0x02 | CMD_BYTE(150) | oh_id | requested_expires_at(8 BE) | timestamp_ms(8 BE) | nonce]
+  /// (the 0x02 version prefix is added by [OHKeypair.sign]).
+  Future<RegisterOhRequest> _buildRegisterRequest(
     List<int> ohId,
     OHKeypair keypair,
     DateTime now,
     DateTime expiresAt,
-  ) {
+  ) async {
     final random = Random.secure();
     final nonce = Uint8List.fromList(
       List<int>.generate(16, (_) => random.nextInt(256)),
@@ -855,7 +860,9 @@ class RedPandaLightClient implements RedPandaClient {
     signingBuffer.add(_int64Bytes(now.millisecondsSinceEpoch));
     signingBuffer.add(nonce);
 
-    final signature = keypair.sign(Uint8List.fromList(signingBuffer.toBytes()));
+    final signature = await keypair.sign(
+      Uint8List.fromList(signingBuffer.toBytes()),
+    );
 
     return RegisterOhRequest()
       ..ohId = ohId
@@ -881,7 +888,12 @@ class RedPandaLightClient implements RedPandaClient {
 
     final now = DateTime.now();
     final expiresAt = now.add(const Duration(days: 7));
-    final request = _buildRegisterRequest(oh.ohId, oh.keypair, now, expiresAt);
+    final request = await _buildRegisterRequest(
+      oh.ohId,
+      oh.keypair,
+      now,
+      expiresAt,
+    );
 
     // Await the RegisterOhResponse (151); FIFO-matched so a concurrent
     // registration cannot clobber this renewal's completer.
@@ -956,7 +968,8 @@ class RedPandaLightClient implements RedPandaClient {
     );
     final now = DateTime.now();
 
-    // Build signing bytes: [CMD_BYTE(152) | oh_id | timestamp_ms(8 BE) | nonce | limit(4 BE) | cursor(8 BE)]
+    // Build signing bytes (v2 Ed25519, 0x02 prefix added by OHKeypair.sign):
+    // [CMD_BYTE(152) | oh_id | timestamp_ms(8 BE) | nonce | limit(4 BE) | cursor(8 BE)]
     final signingBuffer = BytesBuilder();
     signingBuffer.addByte(152); // OUTBOUND_FETCH_REQ
     signingBuffer.add(oh.ohId);
@@ -967,7 +980,7 @@ class RedPandaLightClient implements RedPandaClient {
     signingBuffer.add(limitData.buffer.asUint8List());
     signingBuffer.add(_int64Bytes(oh.lastCursor));
 
-    final signature = oh.keypair.sign(
+    final signature = await oh.keypair.sign(
       Uint8List.fromList(signingBuffer.toBytes()),
     );
 
@@ -1062,7 +1075,11 @@ class RedPandaLightClient implements RedPandaClient {
     final messages = <DecryptedMessage>[];
     for (final item in response.items) {
       try {
-        final channelMessage = MessageCryptoV2.decrypt(item.payload, encKey);
+        final channelMessage = await MessageCryptoV3.decrypt(
+          item.payload,
+          encKey,
+          oh.channelId!,
+        );
         messages.add(
           DecryptedMessage(
             id: _hexEncode(channelMessage.messageId),
@@ -1119,7 +1136,8 @@ class RedPandaLightClient implements RedPandaClient {
     );
     final now = DateTime.now();
 
-    // Signing bytes: [CMD_BYTE(156) | oh_id | acked_sequence_id(8 BE) | timestamp_ms(8 BE) | nonce]
+    // Signing bytes (v2 Ed25519, 0x02 prefix added by OHKeypair.sign):
+    // [CMD_BYTE(156) | oh_id | acked_sequence_id(8 BE) | timestamp_ms(8 BE) | nonce]
     final signingBuffer = BytesBuilder();
     signingBuffer.addByte(156); // OUTBOUND_ACK_FETCH_REQ
     signingBuffer.add(oh.ohId);
@@ -1127,7 +1145,7 @@ class RedPandaLightClient implements RedPandaClient {
     signingBuffer.add(_int64Bytes(now.millisecondsSinceEpoch));
     signingBuffer.add(nonce);
 
-    final signature = oh.keypair.sign(
+    final signature = await oh.keypair.sign(
       Uint8List.fromList(signingBuffer.toBytes()),
     );
 

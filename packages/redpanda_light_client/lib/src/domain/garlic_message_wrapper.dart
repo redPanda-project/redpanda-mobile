@@ -1,312 +1,166 @@
 import 'dart:typed_data';
-import 'package:pointycastle/export.dart';
-import 'package:redpanda_light_client/src/generated/commands.pb.dart'; // generated protobuf
-import 'package:redpanda_light_client/src/models/key_pair.dart';
+
+import 'package:redpanda_light_client/src/crypto/crypto_utils.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
-import 'package:redpanda_light_client/src/logging/logger.dart';
 
+/// Garlic message v2 (MS03): AES-256-GCM + ephemeral X25519 + HKDF-SHA256.
+///
+/// Wire format (identical to the backend `GarlicMessage`):
+///
+/// ```
+/// [1  version/GMType = 0x02]
+/// [4  totalLen (bytes after this field), big-endian]
+/// [20 destination KademliaId]
+/// [12 nonce (random)]
+/// [32 ephemeral X25519 public key]
+/// [4  ciphertextLen, big-endian]
+/// [N  ciphertext + 16-byte GCM tag]
+/// ```
+///
+/// Key derivation: `key = HKDF-SHA256(ikm = X25519(ephemeralPriv,
+/// targetEncPub), salt = ephemeralPub, info = "garlic-v2")`. The AAD is the
+/// 20-byte destination KademliaId, binding the ciphertext to its intended
+/// recipient. There is no separate signature — the GCM tag authenticates the
+/// message; tampered bytes fail with [GcmAuthenticationException].
 class GarlicMessageWrapper {
-  final GarlicMessage proto;
+  GarlicMessageWrapper._();
 
-  GarlicMessageWrapper(this.proto);
+  /// The GMType byte doubles as the format version (Garlic v2). The v1
+  /// format (brainpool ECDH + AES-CTR + ECDSA) is no longer supported.
+  static const int version = 0x02;
 
-  /// Creates a new GarlicMessage by encrypting the payload for the target.
-  ///
-  /// [type] - GMType ID.
-  /// [destination] - The KademliaId of the destination.
-  /// [targetPublicKey] - The public key of the destination peer (required for encryption).
-  /// [payload] - The content to encrypt (e.g. serialized nested messages).
-  static Future<GarlicMessageWrapper> create({
-    required int type,
-    required NodeId destination, // Using NodeId for KademliaId
-    required List<int> targetPublicKey,
+  static const String hkdfInfo = 'garlic-v2';
+
+  static const int _destinationLength = 20;
+  static const int _headerLength =
+      1 + // version
+      4 + // totalLen
+      _destinationLength +
+      CryptoUtils.gcmNonceLength +
+      CryptoUtils.keyLength + // ephemeral public key
+      4; // ciphertextLen
+
+  /// Encrypts [payload] for the node owning [targetEncryptionPublicKey]
+  /// (32-byte X25519 key), addressed to [destination].
+  static Future<Uint8List> wrap({
+    required NodeId destination,
+    required List<int> targetEncryptionPublicKey,
     required List<int> payload,
   }) async {
-    // 1. Generate Ephemeral KeyPair for this message (EncryptionNodeId)
-    final encryptionKeyPair = KeyPair.generate();
-
-    // 2. Generate Random IV (16 bytes)
-    final iv = _generateRandomBytes(16);
-
-    // 3. Perform ECDH (Our Private + Their Public) -> Shared Secret
-    final sharedSecret = _calculateSharedSecret(
-      encryptionKeyPair,
-      Uint8List.fromList(targetPublicKey),
+    final ephemeral = await CryptoUtils.generateEncryptionKeypair();
+    final shared = await CryptoUtils.x25519(
+      ephemeral.privateKey,
+      targetEncryptionPublicKey,
+    );
+    final key = await CryptoUtils.hkdfSha256(
+      shared,
+      ephemeral.publicKey,
+      hkdfInfo,
+      CryptoUtils.aesKeyLength,
     );
 
-    // 4. Encrypt Payload (AES/CTR/NoPadding)
-    final encryptedPayload = _encrypt(
-      Uint8List.fromList(payload),
-      sharedSecret,
-      iv,
+    final nonce = CryptoUtils.randomBytes(CryptoUtils.gcmNonceLength);
+    final ciphertext = await CryptoUtils.aesGcmEncrypt(
+      key,
+      nonce,
+      payload,
+      destination.bytes,
     );
 
-    // 5. Sign the Encrypted Payload (Sign with Ephemeral Private Key)
-    // Note: Java implementation signs the *encrypted* bytes.
-    final signature = _sign(encryptedPayload, encryptionKeyPair);
-
-    // 6. Build Protobuf
-    final proto = GarlicMessage()
-      ..type = type
-      ..destination = (KademliaIdProto()..keyBytes = destination.bytes)
-      ..iv = iv
-      ..senderPublicKey = encryptionKeyPair.publicKeyBytes
-      ..encryptedPayload = encryptedPayload
-      ..signature = signature;
-
-    return GarlicMessageWrapper(proto);
+    final totalLength = _headerLength - 1 - 4 + ciphertext.length;
+    final out = BytesBuilder();
+    out.addByte(version);
+    out.add(_uint32be(totalLength));
+    out.add(destination.bytes);
+    out.add(nonce);
+    out.add(ephemeral.publicKey);
+    out.add(_uint32be(ciphertext.length));
+    out.add(ciphertext);
+    return out.toBytes();
   }
 
-  /// Decrypts the payload of this GarlicMessage using the recipient's private key.
-  List<int> decrypt(KeyPair recipientKeyPair) {
-    // 1. Verify Signature (Optional but recommended)
-    if (!_verifySignature()) {
-      throw Exception('GarlicMessage signature verification failed.');
+  /// Parses and decrypts a Garlic v2 message with our X25519
+  /// [encryptionPrivateKey]. Returns the decrypted payload.
+  ///
+  /// Throws [FormatException] on malformed bytes or an unsupported version
+  /// and [GcmAuthenticationException] when the GCM tag does not verify
+  /// (tampered message, wrong recipient key or wrong destination AAD).
+  static Future<Uint8List> unwrap({
+    required List<int> garlicBytes,
+    required List<int> encryptionPrivateKey,
+  }) async {
+    final data = Uint8List.fromList(garlicBytes);
+    if (data.length < _headerLength + CryptoUtils.gcmTagLength) {
+      throw FormatException('garlic message too short: ${data.length} bytes');
     }
+    final view = ByteData.sublistView(data);
 
-    // 2. Perform ECDH (Our Private + Their Public from message) -> Shared Secret
-    final senderPubBytes = Uint8List.fromList(proto.senderPublicKey);
-    final sharedSecret = _calculateSharedSecret(
-      recipientKeyPair,
-      senderPubBytes,
-    );
-
-    // 3. Decrypt
-    final iv = Uint8List.fromList(proto.iv);
-    final encryptedData = Uint8List.fromList(proto.encryptedPayload);
-
-    return _decrypt(encryptedData, sharedSecret, iv);
-  }
-
-  bool _verifySignature() {
-    final signatureBytes = Uint8List.fromList(proto.signature);
-    final data = Uint8List.fromList(proto.encryptedPayload);
-    final pubKeyBytes = Uint8List.fromList(proto.senderPublicKey);
-
-    try {
-      final ecParams = ECDomainParameters('brainpoolp256r1');
-      final q = ecParams.curve.decodePoint(pubKeyBytes);
-      final publicKey = ECPublicKey(q, ecParams);
-
-      final signer = Signer('SHA-256/ECDSA');
-      signer.init(false, PublicKeyParameter(publicKey));
-
-      final ecSig = _decodeSignature(signatureBytes);
-
-      return signer.verifySignature(data, ecSig);
-    } catch (e) {
-      RpLog.debug("Signature verification error: $e");
-      return false;
-    }
-  }
-
-  // --- Helpers ---
-
-  static Uint8List _generateRandomBytes(int length) {
-    final random = FortunaRandom();
-    final seed = Uint8List.fromList(
-      List.generate(32, (i) => i),
-    ); // TODO: Secure seed
-    // Note: In real app use proper platform entropy.
-    random.seed(KeyParameter(seed));
-    return random.nextBytes(length);
-  }
-
-  static Uint8List _calculateSharedSecret(
-    KeyPair selfKeyPair,
-    Uint8List peerPublicKeyBytes,
-  ) {
-    final ecParams = ECDomainParameters('brainpoolp256r1');
-    final q = ecParams.curve.decodePoint(peerPublicKeyBytes);
-    final peerKey = ECPublicKey(q, ecParams);
-
-    final agreement = ECDHBasicAgreement();
-    agreement.init(selfKeyPair.privateKey!);
-
-    final sharedSecretBigInt = agreement.calculateAgreement(peerKey);
-    return _bigIntToBytes(sharedSecretBigInt, 32); // 32 bytes for 256-bit curve
-  }
-
-  static Uint8List _encrypt(Uint8List data, Uint8List key, Uint8List iv) {
-    final cipher = CTRStreamCipher(AESEngine());
-    cipher.init(true, ParametersWithIV(KeyParameter(key), iv));
-    return cipher.process(data);
-  }
-
-  static Uint8List _decrypt(Uint8List data, Uint8List key, Uint8List iv) {
-    final cipher = CTRStreamCipher(AESEngine());
-    cipher.init(false, ParametersWithIV(KeyParameter(key), iv));
-    return cipher.process(data);
-  }
-
-  static Uint8List _bigIntToBytes(BigInt number, int length) {
-    var bytes = number.toRadixString(16).padLeft(length * 2, '0');
-    var list = Uint8List(length);
-    for (var i = 0; i < length; i++) {
-      list[i] = int.parse(bytes.substring(i * 2, i * 2 + 2), radix: 16);
-    }
-    return list;
-  }
-
-  static Uint8List _sign(Uint8List data, KeyPair keyPair) {
-    final signer = Signer('SHA-256/ECDSA');
-    final random = FortunaRandom();
-    random.seed(KeyParameter(_generateRandomBytes(32)));
-    signer.init(
-      true,
-      ParametersWithRandom(PrivateKeyParameter(keyPair.privateKey!), random),
-    );
-    final sig = signer.generateSignature(data) as ECSignature;
-    return _encodeSignature(sig);
-  }
-
-  static Uint8List _encodeSignature(ECSignature sig) {
-    final r = _derEncodeInteger(sig.r);
-    final s = _derEncodeInteger(sig.s);
-
-    final sequence = BytesBuilder();
-    sequence.addByte(0x30); // SEQUENCE
-
-    // Calculate total length of r and s DER encodings
-    final totalLength = r.length + s.length;
-    if (totalLength < 128) {
-      sequence.addByte(totalLength); // Short form length
-    } else {
-      // Long form length (not typically needed for ECDSA signatures, but good practice)
-      final lengthBytes = _bigIntToBytes(
-        BigInt.from(totalLength),
-        (totalLength.bitLength + 7) >> 3,
-      );
-      sequence.addByte(0x80 | lengthBytes.length);
-      sequence.add(lengthBytes);
-    }
-
-    sequence.add(r);
-    sequence.add(s);
-    return sequence.toBytes();
-  }
-
-  static ECSignature _decodeSignature(Uint8List bytes) {
-    // Minimal DER decoder
     var offset = 0;
-    if (bytes[offset++] != 0x30) {
-      throw Exception('Invalid signature: expected SEQUENCE');
-    }
-
-    var lenByte = bytes[offset++];
-    int totalLen;
-    if (lenByte & 0x80 != 0) {
-      // Long form length
-      final numLenBytes = lenByte & 0x7F;
-      if (numLenBytes == 0 || numLenBytes > 4) {
-        throw Exception(
-          'Invalid signature: unsupported length encoding',
-        ); // Max 4 bytes for length
-      }
-      totalLen = 0;
-      for (var i = 0; i < numLenBytes; i++) {
-        totalLen = (totalLen << 8) | bytes[offset++];
-      }
-    } else {
-      // Short form length
-      totalLen = lenByte;
-    }
-
-    // Ensure the parsed length matches the remaining bytes
-    if (totalLen != bytes.length - offset) {
-      throw Exception('Invalid signature: length mismatch');
-    }
-
-    final r = _derDecodeInteger(bytes, offset);
-    offset += (bytes[offset + 1] + 2); // tag + len + value
-
-    final s = _derDecodeInteger(bytes, offset);
-
-    return ECSignature(r, s);
-  }
-
-  static Uint8List _derEncodeInteger(BigInt n) {
-    var bytes = _bigIntToBytes(n, (n.bitLength + 7) >> 3);
-
-    // Remove leading zeros, unless the number is 0 itself
-    var firstNonZero = 0;
-    while (firstNonZero < bytes.length - 1 && bytes[firstNonZero] == 0) {
-      firstNonZero++;
-    }
-    bytes = bytes.sublist(firstNonZero);
-
-    // If first bit is 1, prepend 0x00 to make it positive in two's complement
-    if (bytes.isNotEmpty && (bytes[0] & 0x80) != 0) {
-      final tmp = Uint8List(bytes.length + 1);
-      tmp[0] = 0x00;
-      tmp.setRange(1, tmp.length, bytes);
-      bytes = tmp;
-    } else if (bytes.isEmpty) {
-      bytes = Uint8List.fromList([0]); // Represent 0 as a single 0x00 byte
-    }
-
-    final builder = BytesBuilder();
-    builder.addByte(0x02); // INTEGER
-
-    // Add length byte
-    if (bytes.length < 128) {
-      builder.addByte(bytes.length);
-    } else {
-      // Long form length
-      final lengthBytes = _bigIntToBytes(
-        BigInt.from(bytes.length),
-        (bytes.length.bitLength + 7) >> 3,
+    final versionByte = data[offset];
+    offset += 1;
+    if (versionByte != version) {
+      throw FormatException(
+        'unsupported garlic message version: '
+        '0x${versionByte.toRadixString(16)}',
       );
-      builder.addByte(0x80 | lengthBytes.length);
-      builder.add(lengthBytes);
     }
 
-    builder.add(bytes);
-    return builder.toBytes();
+    final totalLength = view.getUint32(offset);
+    offset += 4;
+    if (totalLength != data.length - offset) {
+      throw FormatException(
+        'garlic message length mismatch: header says $totalLength, '
+        'got ${data.length - offset}',
+      );
+    }
+
+    final destination = Uint8List.sublistView(
+      data,
+      offset,
+      offset + _destinationLength,
+    );
+    offset += _destinationLength;
+
+    final nonce = Uint8List.sublistView(
+      data,
+      offset,
+      offset + CryptoUtils.gcmNonceLength,
+    );
+    offset += CryptoUtils.gcmNonceLength;
+
+    final ephemeralPublicKey = Uint8List.sublistView(
+      data,
+      offset,
+      offset + CryptoUtils.keyLength,
+    );
+    offset += CryptoUtils.keyLength;
+
+    final ciphertextLength = view.getUint32(offset);
+    offset += 4;
+    if (ciphertextLength < CryptoUtils.gcmTagLength ||
+        ciphertextLength != data.length - offset) {
+      throw FormatException(
+        'invalid garlic message ciphertext length: $ciphertextLength',
+      );
+    }
+    final ciphertext = Uint8List.sublistView(data, offset);
+
+    final shared = await CryptoUtils.x25519(
+      encryptionPrivateKey,
+      ephemeralPublicKey,
+    );
+    final key = await CryptoUtils.hkdfSha256(
+      shared,
+      ephemeralPublicKey,
+      hkdfInfo,
+      CryptoUtils.aesKeyLength,
+    );
+
+    return CryptoUtils.aesGcmDecrypt(key, nonce, ciphertext, destination);
   }
 
-  static BigInt _derDecodeInteger(Uint8List bytes, int offset) {
-    if (bytes[offset++] != 0x02) {
-      throw Exception('Invalid signature: expected INTEGER');
-    }
-
-    var lenByte = bytes[offset++];
-    int len;
-    if (lenByte & 0x80 != 0) {
-      // Long form length
-      final numLenBytes = lenByte & 0x7F;
-      if (numLenBytes == 0 || numLenBytes > 4) {
-        throw Exception('Invalid signature: unsupported length encoding');
-      }
-      len = 0;
-      for (var i = 0; i < numLenBytes; i++) {
-        len = (len << 8) | bytes[offset++];
-      }
-    } else {
-      // Short form length
-      len = lenByte;
-    }
-
-    var valConfig = bytes.sublist(offset, offset + len);
-
-    // Handle potential leading zero for positive numbers (DER canonical form)
-    if (valConfig.length > 1 &&
-        valConfig[0] == 0x00 &&
-        (valConfig[1] & 0x80) == 0) {
-      valConfig = valConfig.sublist(1);
-    } else if (valConfig.length == 1 && valConfig[0] == 0x00) {
-      // Special case for BigInt.zero
-      return BigInt.zero;
-    }
-
-    return _bytesToBigInt(valConfig);
-  }
-
-  static BigInt _bytesToBigInt(Uint8List bytes) {
-    var result = BigInt.zero;
-    for (final byte in bytes) {
-      result = (result << 8) | BigInt.from(byte);
-    }
-    return result;
+  static Uint8List _uint32be(int value) {
+    final data = ByteData(4)..setUint32(0, value);
+    return data.buffer.asUint8List();
   }
 }

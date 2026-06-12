@@ -73,7 +73,7 @@ void main() async {
     test(
       'fetched messages are acked and deleted on the node; cursor advances',
       () async {
-        final sharedChannel = Channel.generate('MS02 AckFetch');
+        final sharedChannel = await Channel.generate('MS02 AckFetch');
         final bobOH = await setupExchange(sharedChannel);
 
         final updates = <OhMailboxUpdate>[];
@@ -119,7 +119,7 @@ void main() async {
     test(
       'Bob receives BOTH of two messages Alice sends (C1 contract)',
       () async {
-        final sharedChannel = Channel.generate('MS03 Two Messages');
+        final sharedChannel = await Channel.generate('MS03 Two Messages');
         final bobOH = await setupExchange(sharedChannel);
 
         // Alice sends two distinct messages. Each gets its own stable inner
@@ -157,7 +157,7 @@ void main() async {
     test(
       'a re-sent message (same id) is deduplicated to one delivery',
       () async {
-        final sharedChannel = Channel.generate('MS03 Resend Dedup');
+        final sharedChannel = await Channel.generate('MS03 Resend Dedup');
         final bobOH = await setupExchange(sharedChannel);
 
         // Simulate a retry: send the SAME logical message id twice with fresh
@@ -188,7 +188,7 @@ void main() async {
     test(
       'renewOutboundHandle extends the TTL and emits a mailbox update',
       () async {
-        final sharedChannel = Channel.generate('MS02 Renewal');
+        final sharedChannel = await Channel.generate('MS02 Renewal');
         final bobOH = await setupExchange(sharedChannel);
 
         final updateFuture = bob.ohMailboxUpdates.first;

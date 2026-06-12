@@ -33,7 +33,7 @@ void main() {
       expect(registration, isA<OHRegistration>());
       expect(registration.ohId.length, 20);
       expect(registration.keypair, isA<OHKeypair>());
-      expect(registration.keypair.publicKeyBytes.length, 65);
+      expect(registration.keypair.publicKeyBytes.length, 32);
       expect(registration.expiresAtMs, greaterThan(0));
     });
 
@@ -60,15 +60,16 @@ void main() {
       final registration = await client.registerOutboundHandle();
 
       final testData = Uint8List.fromList([1, 2, 3, 4, 5]);
-      final signature = registration.keypair.sign(testData);
+      final signature = await registration.keypair.sign(testData);
 
-      expect(registration.keypair.verify(testData, signature), isTrue);
+      expect(signature.length, 64);
+      expect(await registration.keypair.verify(testData, signature), isTrue);
     });
   });
 
   group('MS01 AK2: RegisterOhRequest protobuf', () {
-    test('RegisterOhRequest serializes and deserializes correctly', () {
-      final keypair = OHKeypair.generate();
+    test('RegisterOhRequest serializes and deserializes correctly', () async {
+      final keypair = await OHKeypair.generate();
       final ohId = Uint8List.fromList(List.generate(20, (i) => i));
 
       final request = RegisterOhRequest()
@@ -124,7 +125,7 @@ void main() {
     });
 
     test('fetchMessages returns empty list when no backend', () async {
-      final keypair = OHKeypair.generate();
+      final keypair = await OHKeypair.generate();
       final oh = OHRegistration(
         ohId: List.generate(20, (i) => i),
         keypair: keypair,

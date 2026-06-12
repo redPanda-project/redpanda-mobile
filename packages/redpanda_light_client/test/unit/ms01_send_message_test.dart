@@ -4,7 +4,8 @@ import 'package:test/test.dart';
 
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/crypto/channel_message.dart';
-import 'package:redpanda_light_client/src/crypto/message_crypto_v2.dart';
+import 'package:redpanda_light_client/src/crypto/crypto_utils.dart';
+import 'package:redpanda_light_client/src/crypto/message_crypto_v3.dart';
 import 'package:redpanda_light_client/src/domain/channel.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
@@ -27,7 +28,7 @@ void main() {
     });
 
     test('sendMessage without channel keys throws StateError', () async {
-      final channel = Channel.generate('Test');
+      final channel = await Channel.generate('Test');
 
       // MS02: failures must surface so the retry queue can re-send later.
       expect(
@@ -45,7 +46,7 @@ void main() {
     test(
       'sendMessage with keys but no connected peer throws StateError',
       () async {
-        final channel = Channel.generate('Test');
+        final channel = await Channel.generate('Test');
         client.addChannelKeys(channel.id, channel.encryptionKey);
 
         expect(
@@ -62,9 +63,9 @@ void main() {
     );
   });
 
-  group('MS03 message-format-v2: encrypt → decrypt roundtrip', () {
-    test('roundtrip via MessageCryptoV2 recovers content and id', () {
-      final channel = Channel.generate('Test');
+  group('MS03 message-format-v3: encrypt → decrypt roundtrip', () {
+    test('roundtrip via MessageCryptoV3 recovers content and id', () async {
+      final channel = await Channel.generate('Test');
       final encKey = channel.encryptionKey;
 
       final msg = ChannelMessage(
@@ -73,40 +74,45 @@ void main() {
         content: 'Hello, Bob! This is a secret message. 🎉 Ünïcödé',
       );
 
-      final payload = MessageCryptoV2.encrypt(msg, encKey);
-      expect(payload[0], equals(MessageCryptoV2.version));
+      final payload = await MessageCryptoV3.encrypt(msg, encKey, channel.id);
+      expect(payload[0], equals(MessageCryptoV3.version));
 
-      final decoded = MessageCryptoV2.decrypt(payload, encKey);
+      final decoded = await MessageCryptoV3.decrypt(
+        payload,
+        encKey,
+        channel.id,
+      );
       expect(decoded.content, equals(msg.content));
       expect(decoded.messageId, equals(msg.messageId));
       expect(decoded.timestampMs, equals(msg.timestampMs));
     });
 
-    test('tampered payload is rejected', () {
+    test('tampered payload is rejected', () async {
       final encKey = Uint8List.fromList(List.generate(32, (i) => i));
       final msg = ChannelMessage(
         messageId: Uint8List(16),
         timestampMs: 1,
         content: 'Secret',
       );
-      final payload = MessageCryptoV2.encrypt(msg, encKey);
-      payload[1 + 16 + 1] ^= 0xFF; // flip a ciphertext byte
+      final payload = await MessageCryptoV3.encrypt(msg, encKey, 'chan');
+      payload[1 + 12 + 1] ^= 0xFF; // flip a ciphertext byte
       expect(
-        () => MessageCryptoV2.decrypt(payload, encKey),
-        throwsA(isA<StateError>()),
+        () => MessageCryptoV3.decrypt(payload, encKey, 'chan'),
+        throwsA(isA<GcmAuthenticationException>()),
       );
     });
 
-    test('empty content roundtrips', () {
+    test('empty content roundtrips', () async {
       final encKey = Uint8List.fromList(List.generate(32, (i) => i));
       final msg = ChannelMessage(
         messageId: Uint8List(16),
         timestampMs: 1,
         content: '',
       );
-      final decoded = MessageCryptoV2.decrypt(
-        MessageCryptoV2.encrypt(msg, encKey),
+      final decoded = await MessageCryptoV3.decrypt(
+        await MessageCryptoV3.encrypt(msg, encKey, 'chan'),
         encKey,
+        'chan',
       );
       expect(decoded.content, equals(''));
     });

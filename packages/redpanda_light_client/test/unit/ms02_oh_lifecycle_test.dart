@@ -6,14 +6,14 @@ import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
 
-OHRegistration _registration({
+Future<OHRegistration> _registration({
   List<int>? ohId,
   int? expiresAtMs,
   int lastCursor = 0,
-}) {
+}) async {
   return OHRegistration(
     ohId: ohId ?? List.generate(20, (i) => i),
-    keypair: OHKeypair.generate(),
+    keypair: await OHKeypair.generate(),
     expiresAtMs:
         expiresAtMs ??
         DateTime.now().add(const Duration(days: 7)).millisecondsSinceEpoch,
@@ -41,7 +41,7 @@ void main() {
     });
 
     test('adds the persisted registration for polling', () async {
-      final oh = _registration(lastCursor: 99);
+      final oh = await _registration(lastCursor: 99);
       await client.restoreOutboundHandle(oh);
 
       expect(client.registeredOutboundHandles, hasLength(1));
@@ -50,18 +50,18 @@ void main() {
 
     test('ignores a duplicate restore of the same OH id', () async {
       final ohId = List.generate(20, (i) => 7);
-      await client.restoreOutboundHandle(_registration(ohId: ohId));
-      await client.restoreOutboundHandle(_registration(ohId: ohId));
+      await client.restoreOutboundHandle(await _registration(ohId: ohId));
+      await client.restoreOutboundHandle(await _registration(ohId: ohId));
 
       expect(client.registeredOutboundHandles, hasLength(1));
     });
 
     test('keeps distinct OH ids separate', () async {
       await client.restoreOutboundHandle(
-        _registration(ohId: List.generate(20, (i) => 1)),
+        await _registration(ohId: List.generate(20, (i) => 1)),
       );
       await client.restoreOutboundHandle(
-        _registration(ohId: List.generate(20, (i) => 2)),
+        await _registration(ohId: List.generate(20, (i) => 2)),
       );
 
       expect(client.registeredOutboundHandles, hasLength(2));
@@ -85,14 +85,14 @@ void main() {
     });
 
     test('ackFetch returns false when no peer is connected', () async {
-      final result = await client.ackFetch(_registration(), 5);
+      final result = await client.ackFetch(await _registration(), 5);
       expect(result, isFalse);
     });
 
     test(
       'renewOutboundHandle returns false when no peer is connected',
       () async {
-        final oh = _registration();
+        final oh = await _registration();
         final before = oh.expiresAtMs;
 
         final result = await client.renewOutboundHandle(oh);
@@ -106,7 +106,7 @@ void main() {
       'checkAndRenewExpiringHandles tolerates failures and keeps expiry',
       () async {
         // Expires within the renewal threshold (1 day) → renewal attempted.
-        final expiring = _registration(
+        final expiring = await _registration(
           expiresAtMs: DateTime.now()
               .add(const Duration(hours: 2))
               .millisecondsSinceEpoch,

@@ -111,15 +111,19 @@ class RedPandaIsolateClient implements RedPandaClient {
       final completer = _pendingOhRegistrations.remove(event.requestId);
       if (completer != null && !completer.isCompleted) {
         try {
+          // Completing with a future is fine: errors from the async keypair
+          // restore propagate into the completer's future.
           completer.complete(
-            OHRegistration(
-              ohId: event.ohId,
-              keypair: OHKeypair.fromPrivateKeyBytes(
-                Uint8List.fromList(event.privateKeyBytes),
+            OHKeypair.fromPrivateKeyBytes(
+              Uint8List.fromList(event.privateKeyBytes),
+            ).then(
+              (keypair) => OHRegistration(
+                ohId: event.ohId,
+                keypair: keypair,
+                expiresAtMs: event.expiresAtMs,
+                channelId: event.channelId,
+                serverEndpoint: event.serverEndpoint,
               ),
-              expiresAtMs: event.expiresAtMs,
-              channelId: event.channelId,
-              serverEndpoint: event.serverEndpoint,
             ),
           );
         } catch (e) {
@@ -450,7 +454,7 @@ void _isolateEntryPoint(SendPort mainSendPort) {
         await client!.restoreOutboundHandle(
           OHRegistration(
             ohId: message.ohId,
-            keypair: OHKeypair.fromPrivateKeyBytes(
+            keypair: await OHKeypair.fromPrivateKeyBytes(
               Uint8List.fromList(message.privateKeyBytes),
             ),
             expiresAtMs: message.expiresAtMs,

@@ -234,7 +234,7 @@ void main() {
       addTearDown(client.disconnect);
       await respondToDeposit(socket, Status.OK);
 
-      final channel = Channel.generate('Test');
+      final channel = await Channel.generate('Test');
       client.addChannelKeys(channel.id, channel.encryptionKey);
 
       final messageId = await client.sendMessage(channel.id, 'Hello');
@@ -246,7 +246,7 @@ void main() {
       addTearDown(client.disconnect);
       await respondToDeposit(socket, Status.QUOTA_EXCEEDED);
 
-      final channel = Channel.generate('Test');
+      final channel = await Channel.generate('Test');
       client.addChannelKeys(channel.id, channel.encryptionKey);
 
       await expectLater(
@@ -266,7 +266,7 @@ void main() {
       addTearDown(client.disconnect);
       await respondToDeposit(socket, Status.BAD_REQUEST);
 
-      final channel = Channel.generate('Test');
+      final channel = await Channel.generate('Test');
       client.addChannelKeys(channel.id, channel.encryptionKey);
 
       await expectLater(
@@ -288,7 +288,7 @@ void main() {
       addTearDown(client.disconnect);
       // The node never answers — pre-MS02b behavior must be preserved.
 
-      final channel = Channel.generate('Test');
+      final channel = await Channel.generate('Test');
       client.addChannelKeys(channel.id, channel.encryptionKey);
 
       final messageId = await client.sendMessage(channel.id, 'Hello');
@@ -302,7 +302,7 @@ void main() {
       );
       addTearDown(client.disconnect);
 
-      final channel = Channel.generate('Test');
+      final channel = await Channel.generate('Test');
       client.addChannelKeys(channel.id, channel.encryptionKey);
 
       // First deposit: the node answers QUOTA_EXCEEDED, but only after the

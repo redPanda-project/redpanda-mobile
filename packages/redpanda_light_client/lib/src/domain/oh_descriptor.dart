@@ -8,7 +8,7 @@ import 'package:hex/hex.dart';
 /// Contains the information needed for a peer to send messages to this OH:
 /// - [serverEndpoint]: host:port of the OH-hosting Full Node
 /// - [handleId]: 20-byte unique identifier for the mailbox
-/// - [authPublicKey]: 65-byte uncompressed EC public key (brainpoolp256r1)
+/// - [authPublicKey]: 32-byte Ed25519 verify key (MS03)
 class OHDescriptor extends Equatable {
   final String serverEndpoint;
   final List<int> handleId;
@@ -42,9 +42,9 @@ class OHDescriptor extends Equatable {
       );
     }
     final authPublicKey = HEX.decode(map['pk'] as String);
-    if (authPublicKey.length != 65) {
+    if (authPublicKey.length != 32) {
       throw FormatException(
-        'Invalid OHDescriptor.authPublicKey length: expected 65 bytes, got ${authPublicKey.length}',
+        'Invalid OHDescriptor.authPublicKey length: expected 32 bytes, got ${authPublicKey.length}',
       );
     }
     return OHDescriptor(

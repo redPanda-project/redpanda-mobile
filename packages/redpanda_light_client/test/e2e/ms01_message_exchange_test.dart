@@ -83,11 +83,17 @@ void main() async {
         // Both should have valid keypairs
         final testData = Uint8List.fromList([1, 2, 3]);
         expect(
-          aliceOH.keypair.verify(testData, aliceOH.keypair.sign(testData)),
+          await aliceOH.keypair.verify(
+            testData,
+            await aliceOH.keypair.sign(testData),
+          ),
           isTrue,
         );
         expect(
-          bobOH.keypair.verify(testData, bobOH.keypair.sign(testData)),
+          await bobOH.keypair.verify(
+            testData,
+            await bobOH.keypair.sign(testData),
+          ),
           isTrue,
         );
       },
@@ -115,7 +121,7 @@ void main() async {
         );
 
         // Alice creates a channel and attaches Bob's OH descriptor
-        final channel = Channel.generate('Alice-Bob Chat');
+        final channel = await Channel.generate('Alice-Bob Chat');
         final channelWithOH = channel.copyWith(peerOhDescriptor: bobDescriptor);
 
         // Verify the QR JSON is v2
@@ -162,7 +168,7 @@ void main() async {
         final bobOH = await bob.registerOutboundHandle();
 
         // 2. Bob creates channel + shares via QR (simulated)
-        final sharedChannel = Channel.generate('Shared Channel');
+        final sharedChannel = await Channel.generate('Shared Channel');
         final bobDescriptor = OHDescriptor(
           serverEndpoint: '127.0.0.1:$nodePort',
           handleId: bobOH.ohId,
