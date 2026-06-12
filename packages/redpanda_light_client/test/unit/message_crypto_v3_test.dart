@@ -8,7 +8,8 @@ import 'package:redpanda_light_client/src/crypto/message_crypto_v3.dart';
 
 void main() {
   final key = Uint8List.fromList(List<int>.generate(32, (i) => i));
-  const channelId = 'aabbccdd00112233aabbccdd00112233'
+  const channelId =
+      'aabbccdd00112233aabbccdd00112233'
       'aabbccdd00112233aabbccdd00112233';
 
   ChannelMessage sampleMessage({String content = 'Hello, Bob! 🎉 Ünïcödé'}) {
@@ -88,8 +89,7 @@ void main() {
       expect(decoded.content, equals(msg.content));
     });
 
-    test('same message encrypts to different payloads (fresh nonce)',
-        () async {
+    test('same message encrypts to different payloads (fresh nonce)', () async {
       final msg = sampleMessage();
       final a = await MessageCryptoV3.encrypt(msg, key, channelId);
       final b = await MessageCryptoV3.encrypt(msg, key, channelId);

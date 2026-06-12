@@ -101,8 +101,7 @@ class CryptoUtils {
     List<int> message,
     List<int> signature,
   ) async {
-    if (publicKey.length != keyLength ||
-        signature.length != signatureLength) {
+    if (publicKey.length != keyLength || signature.length != signatureLength) {
       return false;
     }
     try {

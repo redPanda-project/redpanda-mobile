@@ -4,8 +4,7 @@ import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
 
 void main() {
   group('Channel v3 (MS03 key model)', () {
-    test('generate creates Ed25519 auth keypair and 32-byte enc key',
-        () async {
+    test('generate creates Ed25519 auth keypair and 32-byte enc key', () async {
       final channel = await Channel.generate('Test Channel');
 
       expect(channel.label, 'Test Channel');
@@ -40,34 +39,36 @@ void main() {
       expect(reconstructed.id, original.id);
     });
 
-    test('serializes v3 channel with OH descriptor (32-byte Ed25519 pk)',
-        () async {
-      final ohDescriptor = OHDescriptor(
-        serverEndpoint: '192.168.1.100:59558',
-        handleId: List.generate(20, (i) => i),
-        authPublicKey: List.generate(32, (i) => i),
-      );
+    test(
+      'serializes v3 channel with OH descriptor (32-byte Ed25519 pk)',
+      () async {
+        final ohDescriptor = OHDescriptor(
+          serverEndpoint: '192.168.1.100:59558',
+          handleId: List.generate(20, (i) => i),
+          authPublicKey: List.generate(32, (i) => i),
+        );
 
-      final original = (await Channel.generate(
-        'With OH',
-      )).copyWith(peerOhDescriptor: ohDescriptor);
+        final original = (await Channel.generate(
+          'With OH',
+        )).copyWith(peerOhDescriptor: ohDescriptor);
 
-      final json = original.toJson();
-      expect(json.contains('"v":3'), true);
-      expect(json.contains('"oh"'), true);
+        final json = original.toJson();
+        expect(json.contains('"v":3'), true);
+        expect(json.contains('"oh"'), true);
 
-      final reconstructed = Channel.fromJson(json);
-      expect(reconstructed.peerOhDescriptor, isNotNull);
-      expect(
-        reconstructed.peerOhDescriptor!.serverEndpoint,
-        ohDescriptor.serverEndpoint,
-      );
-      expect(reconstructed.peerOhDescriptor!.handleId, ohDescriptor.handleId);
-      expect(
-        reconstructed.peerOhDescriptor!.authPublicKey,
-        ohDescriptor.authPublicKey,
-      );
-    });
+        final reconstructed = Channel.fromJson(json);
+        expect(reconstructed.peerOhDescriptor, isNotNull);
+        expect(
+          reconstructed.peerOhDescriptor!.serverEndpoint,
+          ohDescriptor.serverEndpoint,
+        );
+        expect(reconstructed.peerOhDescriptor!.handleId, ohDescriptor.handleId);
+        expect(
+          reconstructed.peerOhDescriptor!.authPublicKey,
+          ohDescriptor.authPublicKey,
+        );
+      },
+    );
 
     test('rejects legacy v1/v2 QR codes', () {
       const v1 = '{"l":"Old","k_enc":"00","k_auth":"00","v":1}';
@@ -80,10 +81,7 @@ void main() {
 
     test('rejects v3 codes with wrong key lengths', () {
       const shortEnc = '{"l":"Bad","k_enc":"0011","k_auth_pub":"00","v":3}';
-      expect(
-        () => Channel.fromJson(shortEnc),
-        throwsA(isA<FormatException>()),
-      );
+      expect(() => Channel.fromJson(shortEnc), throwsA(isA<FormatException>()));
     });
 
     test('channel id = SHA256(encryptionKey || authPublicKey)', () {

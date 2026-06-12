@@ -128,13 +128,15 @@ void main() {
       expect(CryptoUtils.constantTimeEquals([1, 2], [1, 2, 3]), false);
     });
 
-    test('compareUnsigned sorts byte-wise like Java Arrays.compareUnsigned',
-        () {
-      expect(CryptoUtils.compareUnsigned([0x00], [0xff]), lessThan(0));
-      expect(CryptoUtils.compareUnsigned([0xff], [0x00]), greaterThan(0));
-      expect(CryptoUtils.compareUnsigned([1, 2], [1, 2]), 0);
-      expect(CryptoUtils.compareUnsigned([1], [1, 0]), lessThan(0));
-    });
+    test(
+      'compareUnsigned sorts byte-wise like Java Arrays.compareUnsigned',
+      () {
+        expect(CryptoUtils.compareUnsigned([0x00], [0xff]), lessThan(0));
+        expect(CryptoUtils.compareUnsigned([0xff], [0x00]), greaterThan(0));
+        expect(CryptoUtils.compareUnsigned([1, 2], [1, 2]), 0);
+        expect(CryptoUtils.compareUnsigned([1], [1, 0]), lessThan(0));
+      },
+    );
 
     test('randomBytes returns requested length and varies', () {
       final a = CryptoUtils.randomBytes(32);

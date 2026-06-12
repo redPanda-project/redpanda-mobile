@@ -16,8 +16,13 @@ class Users extends Table {
 class Channels extends Table {
   TextColumn get uuid => text()(); // The Channel ID (Hash of keys)
   TextColumn get label => text()();
-  TextColumn get encryptionKey => text()(); // HEX encoded
-  TextColumn get authenticationKey => text()(); // HEX encoded
+  TextColumn get encryptionKey => text()(); // HEX encoded, 32 bytes
+
+  // Ed25519 channel auth keypair (MS03). The private seed exists only on
+  // the device that generated the channel; peers joining via QR code hold
+  // only the public key.
+  TextColumn get authPrivateKey => text().nullable()(); // HEX encoded
+  TextColumn get authPublicKey => text()(); // HEX encoded, 32 bytes
 
   // OH Descriptor of the peer (for sending messages to them)
   TextColumn get peerOhEndpoint => text().nullable()();
@@ -96,7 +101,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 8;
+  int get schemaVersion => 9;
 
   @override
   MigrationStrategy get migration {
@@ -158,6 +163,32 @@ class AppDatabase extends _$AppDatabase {
           await m.database.customStatement(
             'DROP INDEX IF EXISTS idx_messages_message_id',
           );
+          await m.createIndex(idxMessagesConvMessageId);
+        }
+        // The `to >= 9` guard keeps the per-step migration tests (which
+        // simulate intermediate upgrades like 6 → 7) meaningful; in
+        // production `to` is always the current schemaVersion.
+        if (from < 9 && to >= 9) {
+          // MS03: breaking crypto migration (Ed25519/X25519/AES-GCM, channel
+          // key model v3). Old channels (shared-secret K_auth, old channel-id
+          // scheme), their messages and the brainpool OH keypairs are
+          // incompatible with the new protocol — destructive recreation
+          // (testnet, spec section 7). Both peers re-create channels via a
+          // fresh v3 QR code.
+          for (final table in <TableInfo>[
+            messages,
+            channels,
+            outboundHandles,
+          ]) {
+            try {
+              await m.deleteTable(table.actualTableName);
+            } catch (_) {
+              // table might not exist on odd upgrade paths
+            }
+          }
+          await m.createTable(channels);
+          await m.createTable(messages);
+          await m.createTable(outboundHandles);
           await m.createIndex(idxMessagesConvMessageId);
         }
       },

@@ -31,28 +31,35 @@ void main() {
       expect(isValid, true);
     });
 
-    test('signature covers the versioned bytes [0x02 | signingBytes]', () async {
-      final keypair = await OHKeypair.generate();
-      final data = Uint8List.fromList([10, 20, 30]);
+    test(
+      'signature covers the versioned bytes [0x02 | signingBytes]',
+      () async {
+        final keypair = await OHKeypair.generate();
+        final data = Uint8List.fromList([10, 20, 30]);
 
-      final signature = await keypair.sign(data);
+        final signature = await keypair.sign(data);
 
-      // The raw Ed25519 signature verifies over [0x02 | data] ...
-      final versioned = Uint8List.fromList([
-        OHKeypair.signingVersion,
-        ...data,
-      ]);
-      expect(
-        await CryptoUtils.verify(keypair.publicKeyBytes, versioned, signature),
-        true,
-      );
-      // ... and NOT over the unversioned data (a v1-style signature check
-      // must fail).
-      expect(
-        await CryptoUtils.verify(keypair.publicKeyBytes, data, signature),
-        false,
-      );
-    });
+        // The raw Ed25519 signature verifies over [0x02 | data] ...
+        final versioned = Uint8List.fromList([
+          OHKeypair.signingVersion,
+          ...data,
+        ]);
+        expect(
+          await CryptoUtils.verify(
+            keypair.publicKeyBytes,
+            versioned,
+            signature,
+          ),
+          true,
+        );
+        // ... and NOT over the unversioned data (a v1-style signature check
+        // must fail).
+        expect(
+          await CryptoUtils.verify(keypair.publicKeyBytes, data, signature),
+          false,
+        );
+      },
+    );
 
     test('should export 32-byte seed and restore the same keypair', () async {
       final original = await OHKeypair.generate();

@@ -7,7 +7,7 @@ import 'package:redpanda/database/database.dart';
 import '../helpers/test_database.dart';
 
 void main() {
-  group('AppDatabase schema v8 (MS03)', () {
+  group('AppDatabase schema v9 (MS03)', () {
     late AppDatabase db;
 
     setUp(() {
@@ -18,8 +18,8 @@ void main() {
       await db.close();
     });
 
-    test('schema version is 8', () {
-      expect(db.schemaVersion, equals(8));
+    test('schema version is 9', () {
+      expect(db.schemaVersion, equals(9));
     });
 
     test('dedup is scoped per conversation: same id in two channels', () async {
@@ -199,6 +199,54 @@ void main() {
 
       final rows = await legacy.select(legacy.messages).get();
       expect(rows, hasLength(2));
+
+      await legacy.close();
+    });
+
+    test('v8 → v9 migration recreates channel/message/OH tables (MS03)', () async {
+      // Reshape a fresh database into the v8 layout: shared-secret K_auth
+      // column instead of the Ed25519 keypair columns.
+      final legacy = createTestDatabase();
+      await legacy.customStatement(
+        'ALTER TABLE channels DROP COLUMN auth_private_key;',
+      );
+      await legacy.customStatement(
+        'ALTER TABLE channels DROP COLUMN auth_public_key;',
+      );
+      await legacy.customStatement(
+        "ALTER TABLE channels ADD COLUMN authentication_key TEXT NOT NULL "
+        "DEFAULT '';",
+      );
+      await legacy.customStatement(
+        "INSERT INTO channels (uuid, label, encryption_key, authentication_key) "
+        "VALUES ('old-id', 'Old Channel', '00', 'ff');",
+      );
+      await legacy.customStatement(
+        "INSERT INTO messages (conversation_id, sender_id, content, timestamp, status, type) "
+        "VALUES ('old-id', 'me', 'old msg', 0, 0, 0);",
+      );
+
+      await legacy.migration.onUpgrade(legacy.createMigrator(), 8, 9);
+
+      // Old incompatible data is gone (destructive recreation, spec §7) ...
+      expect(await legacy.select(legacy.channels).get(), isEmpty);
+      expect(await legacy.select(legacy.messages).get(), isEmpty);
+      expect(await legacy.select(legacy.outboundHandles).get(), isEmpty);
+
+      // ... and the new v3 key model columns are in place.
+      await legacy
+          .into(legacy.channels)
+          .insert(
+            ChannelsCompanion.insert(
+              uuid: 'new-id',
+              label: 'New Channel',
+              encryptionKey: 'aa' * 32,
+              authPublicKey: 'bb' * 32,
+            ),
+          );
+      final channel = await legacy.select(legacy.channels).getSingle();
+      expect(channel.authPublicKey, equals('bb' * 32));
+      expect(channel.authPrivateKey, isNull);
 
       await legacy.close();
     });

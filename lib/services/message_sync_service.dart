@@ -112,7 +112,7 @@ class MessageSyncService {
     final handles = await _outboundHandles.getAllValid();
     for (final handle in handles) {
       await _client.restoreOutboundHandle(
-        _outboundHandles.toRegistration(handle),
+        await _outboundHandles.toRegistration(handle),
       );
     }
   }

@@ -22,7 +22,12 @@ class DriftChannelRepository implements ChannelRepository {
       uuid: channel.id,
       label: channel.label,
       encryptionKey: HEX.encode(channel.encryptionKey),
-      authenticationKey: HEX.encode(channel.authenticationKey),
+      authPrivateKey: drift.Value(
+        channel.authPrivateKey != null
+            ? HEX.encode(channel.authPrivateKey!)
+            : null,
+      ),
+      authPublicKey: HEX.encode(channel.authPublicKey),
       peerOhEndpoint: drift.Value(channel.peerOhDescriptor?.serverEndpoint),
       peerOhId: drift.Value(
         channel.peerOhDescriptor != null
@@ -70,7 +75,10 @@ class DriftChannelRepository implements ChannelRepository {
     return Channel(
       label: data.label,
       encryptionKey: HEX.decode(data.encryptionKey),
-      authenticationKey: HEX.decode(data.authenticationKey),
+      authPrivateKey: data.authPrivateKey != null
+          ? HEX.decode(data.authPrivateKey!)
+          : null,
+      authPublicKey: HEX.decode(data.authPublicKey),
       peerOhDescriptor: ohDescriptor,
     );
   }

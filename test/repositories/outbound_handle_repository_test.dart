@@ -14,7 +14,7 @@ class _RegisteringFakeClient extends FakeRedPandaClient {
   Future<OHRegistration> registerOutboundHandle({String? channelId}) async {
     return OHRegistration(
       ohId: List.generate(20, (i) => i),
-      keypair: OHKeypair.generate(),
+      keypair: await OHKeypair.generate(),
       expiresAtMs: DateTime.now()
           .add(const Duration(days: 7))
           .millisecondsSinceEpoch,
@@ -37,10 +37,13 @@ void main() {
     await db.close();
   });
 
-  OHRegistration registration({String? channelId, int lastCursor = 0}) {
+  Future<OHRegistration> registration({
+    String? channelId,
+    int lastCursor = 0,
+  }) async {
     return OHRegistration(
       ohId: List.generate(20, (i) => 9),
-      keypair: OHKeypair.generate(),
+      keypair: await OHKeypair.generate(),
       expiresAtMs: DateTime.now()
           .add(const Duration(days: 7))
           .millisecondsSinceEpoch,
@@ -52,7 +55,7 @@ void main() {
 
   group('persistence round-trip', () {
     test('save and getByChannelId', () async {
-      await repo.save(registration(channelId: 'channel-1'));
+      await repo.save(await registration(channelId: 'channel-1'));
 
       final row = await repo.getByChannelId('channel-1');
       expect(row, isNotNull);
@@ -61,7 +64,7 @@ void main() {
     });
 
     test('updateCursor and updateExpiry persist new values', () async {
-      final reg = registration(channelId: 'channel-1');
+      final reg = await registration(channelId: 'channel-1');
       await repo.save(reg);
       final ohIdHex = HEX.encode(reg.ohId);
       final newExpiry = DateTime.now().add(const Duration(days: 14));
@@ -78,12 +81,12 @@ void main() {
     });
 
     test('toRegistration restores keypair, cursor and channel', () async {
-      final reg = registration(channelId: 'channel-1', lastCursor: 0);
+      final reg = await registration(channelId: 'channel-1', lastCursor: 0);
       await repo.save(reg);
       await repo.updateCursor(HEX.encode(reg.ohId), 7);
 
       final row = await repo.getByChannelId('channel-1');
-      final restored = repo.toRegistration(row!);
+      final restored = await repo.toRegistration(row!);
 
       expect(restored.ohId, equals(reg.ohId));
       expect(
@@ -96,12 +99,12 @@ void main() {
     });
 
     test('getAllValid excludes expired handles', () async {
-      final expired = registration(channelId: 'old');
+      final expired = await registration(channelId: 'old');
       expired.expiresAtMs = DateTime.now()
           .subtract(const Duration(days: 1))
           .millisecondsSinceEpoch;
       await repo.save(expired);
-      await repo.save(registration(channelId: 'fresh'));
+      await repo.save(await registration(channelId: 'fresh'));
 
       final valid = await repo.getAllValid();
       expect(valid, hasLength(1));
@@ -111,7 +114,7 @@ void main() {
 
   group('ensureOwnDescriptor', () {
     test('returns persisted descriptor when a valid OH exists', () async {
-      final reg = registration(channelId: 'channel-1');
+      final reg = await registration(channelId: 'channel-1');
       await repo.save(reg);
       final client = _RegisteringFakeClient();
 

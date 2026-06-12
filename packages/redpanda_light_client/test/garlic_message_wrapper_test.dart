@@ -71,8 +71,7 @@ void main() {
       );
     });
 
-    test('a tampered destination fails authentication (AAD binding)',
-        () async {
+    test('a tampered destination fails authentication (AAD binding)', () async {
       final bytes = await GarlicMessageWrapper.wrap(
         destination: destination,
         targetEncryptionPublicKey: recipientKeys.publicKey,

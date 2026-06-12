@@ -33,7 +33,7 @@ void main() {
             uuid: channelUuid,
             label: 'Test Channel',
             encryptionKey: HEX.encode(List.generate(32, (i) => i)),
-            authenticationKey: HEX.encode(List.generate(32, (i) => i + 1)),
+            authPublicKey: HEX.encode(List.generate(32, (i) => i + 1)),
           ),
         );
   });
