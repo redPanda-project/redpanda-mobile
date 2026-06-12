@@ -1413,6 +1413,15 @@ class RedPandaLightClient implements RedPandaClient {
   List<PeerStats> getDebugPeerStats() {
     return _peerRepository.getBestPeers(100);
   }
+
+  /// Asks every encrypted connection for a fresh peer list. Peers are
+  /// normally requested once per connection; this speeds up garlic hop
+  /// candidate discovery (MS04) when the network is still settling.
+  void requestPeerLists() {
+    for (final peer in _peers.values.where((p) => p.isEncryptionActive)) {
+      peer.requestPeerList();
+    }
+  }
 }
 
 /// FIFO matcher for response commands that can have several requests in
