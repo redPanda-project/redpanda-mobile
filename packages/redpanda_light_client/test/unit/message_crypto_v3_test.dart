@@ -55,11 +55,30 @@ void main() {
       expect(bytes[8], equals(0x01));
     });
 
+    test('reply_path (MS05, field 5) roundtrips and stays absent when '
+        'unset', () {
+      final rgbBytes = Uint8List.fromList(List<int>.generate(40, (i) => i));
+      final withPath = ChannelMessage(
+        messageId: Uint8List.fromList([1, 2, 3]),
+        timestampMs: 1,
+        content: 'x',
+        replyPath: rgbBytes,
+      );
+      final encoded = withPath.encode();
+      // After id (5), timestamp (2) and content (3): field 5 tag 0x2A.
+      expect(encoded[10], equals(0x2A));
+      final decoded = ChannelMessage.decode(encoded);
+      expect(decoded.replyPath, equals(rgbBytes));
+
+      expect(ChannelMessage.decode(sampleMessage().encode()).replyPath, isNull);
+    });
+
     test('skips unknown fields (forward compatibility)', () {
       final msg = sampleMessage();
       final encoded = msg.encode();
-      // Append an unknown field #5, varint wire type: tag (5<<3|0)=0x28, val 7.
-      final withUnknown = Uint8List.fromList([...encoded, 0x28, 0x07]);
+      // Append an unknown field #6, varint wire type: tag (6<<3|0)=0x30, val 7
+      // (field #5 became reply_path in MS05).
+      final withUnknown = Uint8List.fromList([...encoded, 0x30, 0x07]);
       final decoded = ChannelMessage.decode(withUnknown);
       expect(decoded.content, equals(msg.content));
       expect(decoded.messageId, equals(msg.messageId));

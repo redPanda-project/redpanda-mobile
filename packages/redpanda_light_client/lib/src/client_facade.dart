@@ -1,5 +1,6 @@
 import 'package:redpanda_light_client/src/crypto/ratchet.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
+import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
@@ -75,6 +76,11 @@ abstract class RedPandaClient {
   /// previously persisted ratchet (see [ratchetStateUpdates]); it is ignored
   /// when the client already holds a live session for [channelId], because
   /// the in-memory state is always the most advanced.
+  ///
+  /// MS05: [sessionTags] (tag hex → createdAtMs) and [pendingRgbHex] restore
+  /// the persisted reverse-garlic session state (see [garlicSessionUpdates]);
+  /// like [ratchetState], they are applied only on the first registration of
+  /// [channelId] — live state always wins.
   void addChannelKeys(
     String channelId,
     List<int> encryptionKey, {
@@ -82,6 +88,8 @@ abstract class RedPandaClient {
     String? peerOhEndpoint,
     required bool isChannelCreator,
     String? ratchetState,
+    Map<String, int>? sessionTags,
+    String? pendingRgbHex,
   });
 
   /// Ratchet state changes (MS03b). Emitted after every encrypt/decrypt that
@@ -90,4 +98,10 @@ abstract class RedPandaClient {
   /// state never travels in the QR code or any off-device backup) and feed
   /// it back via [addChannelKeys] after a restart.
   Stream<RatchetStateUpdate> get ratchetStateUpdates;
+
+  /// Reverse-garlic session state changes (MS05): outstanding session tags
+  /// and the pending RGB per channel. The app layer must persist these
+  /// on-device and feed them back via [addChannelKeys] after a restart — a
+  /// lost session tag silently discards the matching reply (single-use).
+  Stream<GarlicSessionUpdate> get garlicSessionUpdates;
 }

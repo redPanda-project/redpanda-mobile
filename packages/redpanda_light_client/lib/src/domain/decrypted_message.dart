@@ -17,11 +17,16 @@ class DecryptedMessage {
   /// was fetched from). Null if the OH has no channel association.
   final String? channelId;
 
+  /// MS05: true when this message arrived as a reverse-garlic reply and was
+  /// correlated (and consumed) via its session tag.
+  final bool viaSessionTag;
+
   const DecryptedMessage({
     required this.id,
     required this.content,
     required this.receivedAtMs,
     this.senderTimestampMs = 0,
     this.channelId,
+    this.viaSessionTag = false,
   });
 }

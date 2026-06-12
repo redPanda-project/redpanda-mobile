@@ -9,6 +9,7 @@ import 'package:redpanda_light_client/src/client_facade.dart';
 import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
 import 'package:redpanda_light_client/src/crypto/ratchet.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
+import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/domain/send_exceptions.dart';
@@ -45,6 +46,9 @@ class RedPandaIsolateClient implements RedPandaClient {
 
   final _ratchetStateController =
       StreamController<RatchetStateUpdate>.broadcast();
+
+  final _garlicSessionController =
+      StreamController<GarlicSessionUpdate>.broadcast();
 
   // Pending OH registrations awaiting their isolate response, by requestId.
   final Map<int, Completer<OHRegistration>> _pendingOhRegistrations = {};
@@ -171,6 +175,14 @@ class RedPandaIsolateClient implements RedPandaClient {
         RatchetStateUpdate(
           channelId: event.channelId,
           stateJson: event.stateJson,
+        ),
+      );
+    } else if (event is EventGarlicSessionUpdate) {
+      _garlicSessionController.add(
+        GarlicSessionUpdate(
+          channelId: event.channelId,
+          sessionTags: event.sessionTags,
+          pendingRgbHex: event.pendingRgbHex,
         ),
       );
     } else if (event is EventLog) {
@@ -307,6 +319,8 @@ class RedPandaIsolateClient implements RedPandaClient {
     String? peerOhEndpoint,
     required bool isChannelCreator,
     String? ratchetState,
+    Map<String, int>? sessionTags,
+    String? pendingRgbHex,
   }) {
     _send(
       CmdAddChannelKeys(
@@ -316,6 +330,8 @@ class RedPandaIsolateClient implements RedPandaClient {
         peerOhEndpoint: peerOhEndpoint,
         isChannelCreator: isChannelCreator,
         ratchetState: ratchetState,
+        sessionTags: sessionTags,
+        pendingRgbHex: pendingRgbHex,
       ),
     );
   }
@@ -323,6 +339,10 @@ class RedPandaIsolateClient implements RedPandaClient {
   @override
   Stream<RatchetStateUpdate> get ratchetStateUpdates =>
       _ratchetStateController.stream;
+
+  @override
+  Stream<GarlicSessionUpdate> get garlicSessionUpdates =>
+      _garlicSessionController.stream;
 
   // Lifecycle hooks proxied
   void onPause() {
@@ -374,6 +394,17 @@ void _isolateEntryPoint(SendPort mainSendPort) {
           EventRatchetStateUpdate(
             channelId: update.channelId,
             stateJson: update.stateJson,
+          ),
+        );
+      });
+
+      // Forward reverse-garlic session state (MS05) for on-device persistence
+      client!.garlicSessionUpdates.listen((update) {
+        mainSendPort.send(
+          EventGarlicSessionUpdate(
+            channelId: update.channelId,
+            sessionTags: update.sessionTags,
+            pendingRgbHex: update.pendingRgbHex,
           ),
         );
       });
@@ -479,6 +510,8 @@ void _isolateEntryPoint(SendPort mainSendPort) {
           peerOhEndpoint: message.peerOhEndpoint,
           isChannelCreator: message.isChannelCreator,
           ratchetState: message.ratchetState,
+          sessionTags: message.sessionTags,
+          pendingRgbHex: message.pendingRgbHex,
         );
       } else if (message is CmdRestoreOutboundHandle) {
         await client!.restoreOutboundHandle(
