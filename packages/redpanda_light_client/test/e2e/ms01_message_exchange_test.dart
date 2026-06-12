@@ -143,6 +143,7 @@ void main() async {
           channelWithOH.id,
           channelWithOH.encryptionKey,
           peerOhId: bobOH.ohId,
+          isChannelCreator: true,
         );
 
         final messageId = await alice.sendMessage(
@@ -188,6 +189,7 @@ void main() async {
           aliceChannel.id,
           aliceChannel.encryptionKey,
           peerOhId: aliceChannel.peerOhDescriptor!.handleId,
+          isChannelCreator: false,
         );
 
         // 5. Alice sends encrypted message

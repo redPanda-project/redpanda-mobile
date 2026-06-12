@@ -235,7 +235,11 @@ void main() {
       await respondToDeposit(socket, Status.OK);
 
       final channel = await Channel.generate('Test');
-      client.addChannelKeys(channel.id, channel.encryptionKey);
+      client.addChannelKeys(
+        channel.id,
+        channel.encryptionKey,
+        isChannelCreator: true,
+      );
 
       final messageId = await client.sendMessage(channel.id, 'Hello');
       expect(messageId, hasLength(32)); // 16 bytes hex-encoded
@@ -247,7 +251,11 @@ void main() {
       await respondToDeposit(socket, Status.QUOTA_EXCEEDED);
 
       final channel = await Channel.generate('Test');
-      client.addChannelKeys(channel.id, channel.encryptionKey);
+      client.addChannelKeys(
+        channel.id,
+        channel.encryptionKey,
+        isChannelCreator: true,
+      );
 
       await expectLater(
         client.sendMessage(channel.id, 'Hello'),
@@ -267,7 +275,11 @@ void main() {
       await respondToDeposit(socket, Status.BAD_REQUEST);
 
       final channel = await Channel.generate('Test');
-      client.addChannelKeys(channel.id, channel.encryptionKey);
+      client.addChannelKeys(
+        channel.id,
+        channel.encryptionKey,
+        isChannelCreator: true,
+      );
 
       await expectLater(
         client.sendMessage(channel.id, 'Hello'),
@@ -289,7 +301,11 @@ void main() {
       // The node never answers — pre-MS02b behavior must be preserved.
 
       final channel = await Channel.generate('Test');
-      client.addChannelKeys(channel.id, channel.encryptionKey);
+      client.addChannelKeys(
+        channel.id,
+        channel.encryptionKey,
+        isChannelCreator: true,
+      );
 
       final messageId = await client.sendMessage(channel.id, 'Hello');
       expect(messageId, hasLength(32));
@@ -303,7 +319,11 @@ void main() {
       addTearDown(client.disconnect);
 
       final channel = await Channel.generate('Test');
-      client.addChannelKeys(channel.id, channel.encryptionKey);
+      client.addChannelKeys(
+        channel.id,
+        channel.encryptionKey,
+        isChannelCreator: true,
+      );
 
       // First deposit: the node answers QUOTA_EXCEEDED, but only after the
       // client already gave up waiting.

@@ -110,6 +110,7 @@ void main() async {
           channel.id,
           channel.encryptionKey,
           peerOhId: oh.ohId,
+          isChannelCreator: true,
         );
         final msgId = await client.sendMessage(channel.id, 'Test message');
         expect(msgId, isNotEmpty);

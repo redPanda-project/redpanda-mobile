@@ -7,6 +7,7 @@ import 'package:redpanda_light_client/src/client/isolate_protocol.dart';
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/client_facade.dart';
 import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
+import 'package:redpanda_light_client/src/crypto/ratchet.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
@@ -41,6 +42,9 @@ class RedPandaIsolateClient implements RedPandaClient {
 
   final _ohMailboxUpdateController =
       StreamController<OhMailboxUpdate>.broadcast();
+
+  final _ratchetStateController =
+      StreamController<RatchetStateUpdate>.broadcast();
 
   // Pending OH registrations awaiting their isolate response, by requestId.
   final Map<int, Completer<OHRegistration>> _pendingOhRegistrations = {};
@@ -160,6 +164,13 @@ class RedPandaIsolateClient implements RedPandaClient {
           lastCursor: event.lastCursor,
           expiresAtMs: event.expiresAtMs,
           mailboxOverflow: event.mailboxOverflow,
+        ),
+      );
+    } else if (event is EventRatchetStateUpdate) {
+      _ratchetStateController.add(
+        RatchetStateUpdate(
+          channelId: event.channelId,
+          stateJson: event.stateJson,
         ),
       );
     } else if (event is EventLog) {
@@ -293,9 +304,23 @@ class RedPandaIsolateClient implements RedPandaClient {
     String channelId,
     List<int> encryptionKey, {
     List<int>? peerOhId,
+    required bool isChannelCreator,
+    String? ratchetState,
   }) {
-    _send(CmdAddChannelKeys(channelId, encryptionKey, peerOhId: peerOhId));
+    _send(
+      CmdAddChannelKeys(
+        channelId,
+        encryptionKey,
+        peerOhId: peerOhId,
+        isChannelCreator: isChannelCreator,
+        ratchetState: ratchetState,
+      ),
+    );
   }
+
+  @override
+  Stream<RatchetStateUpdate> get ratchetStateUpdates =>
+      _ratchetStateController.stream;
 
   // Lifecycle hooks proxied
   void onPause() {
@@ -339,6 +364,16 @@ void _isolateEntryPoint(SendPort mainSendPort) {
       // Forward incoming messages to main isolate
       client!.incomingMessages.listen((msg) {
         mainSendPort.send(EventIncomingMessage(msg));
+      });
+
+      // Forward advanced ratchet state (MS03b) for on-device persistence
+      client!.ratchetStateUpdates.listen((update) {
+        mainSendPort.send(
+          EventRatchetStateUpdate(
+            channelId: update.channelId,
+            stateJson: update.stateJson,
+          ),
+        );
       });
 
       // Forward OH mailbox updates (cursor/expiry/overflow) to main isolate
@@ -439,6 +474,8 @@ void _isolateEntryPoint(SendPort mainSendPort) {
           message.channelId,
           message.encryptionKey,
           peerOhId: message.peerOhId,
+          isChannelCreator: message.isChannelCreator,
+          ratchetState: message.ratchetState,
         );
       } else if (message is CmdRestoreOutboundHandle) {
         await client!.restoreOutboundHandle(

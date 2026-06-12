@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hex/hex.dart';
@@ -24,6 +25,11 @@ class MessageSyncService {
   final _overflowController = StreamController<OhMailboxUpdate>.broadcast();
   StreamSubscription<DecryptedMessage>? _messageSub;
   StreamSubscription<OhMailboxUpdate>? _updateSub;
+  StreamSubscription<RatchetStateUpdate>? _ratchetSub;
+
+  /// Serializes ratchet-state DB writes so they are applied in emission
+  /// order — a slow earlier write must not overwrite a newer state.
+  Future<void> _ratchetPersistPending = Future.value();
 
   MessageSyncService(
     this._client,
@@ -56,13 +62,24 @@ class MessageSyncService {
         ),
       ),
     );
+    _ratchetSub ??= _client.ratchetStateUpdates.listen((update) {
+      _ratchetPersistPending = _ratchetPersistPending
+          .then((_) => handleRatchetStateUpdate(update))
+          .catchError(
+            (Object e) => debugPrint(
+              'MessageSyncService: failed to persist ratchet state: $e',
+            ),
+          );
+    });
   }
 
   Future<void> stop() async {
     await _messageSub?.cancel();
     await _updateSub?.cancel();
+    await _ratchetSub?.cancel();
     _messageSub = null;
     _updateSub = null;
+    _ratchetSub = null;
   }
 
   /// Persists a fetched message unless it was already stored (dedup via
@@ -95,6 +112,15 @@ class MessageSyncService {
     }
   }
 
+  /// Persists advanced ratchet state (MS03b) so the channel ratchet
+  /// survives app restarts. On-device only — `ratchetState` never travels
+  /// in the QR code or any off-device backup.
+  Future<void> handleRatchetStateUpdate(RatchetStateUpdate update) async {
+    await (_db.update(_db.channels)
+          ..where((c) => c.uuid.equals(update.channelId)))
+        .write(ChannelsCompanion(ratchetState: Value(update.stateJson)));
+  }
+
   /// Restores channel keys and persisted OH registrations into the network
   /// client so polling resumes from the persisted cursor after a restart.
   Future<void> restorePersistedState() async {
@@ -106,6 +132,10 @@ class MessageSyncService {
         peerOhId: channel.peerOhId != null
             ? HEX.decode(channel.peerOhId!)
             : null,
+        // The creator is the device holding the channel auth private key;
+        // a device that joined via QR code holds only the public key.
+        isChannelCreator: channel.authPrivateKey != null,
+        ratchetState: channel.ratchetState,
       );
     }
 

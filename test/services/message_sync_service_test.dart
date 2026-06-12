@@ -45,7 +45,11 @@ void main() {
         );
   }
 
-  Future<void> insertChannel(String uuid) async {
+  Future<void> insertChannel(
+    String uuid, {
+    String? authPrivateKey,
+    String? ratchetState,
+  }) async {
     await db
         .into(db.channels)
         .insert(
@@ -53,7 +57,9 @@ void main() {
             uuid: uuid,
             label: 'Test',
             encryptionKey: HEX.encode(List.generate(32, (i) => i)),
+            authPrivateKey: drift.Value(authPrivateKey),
             authPublicKey: HEX.encode(List.generate(32, (i) => i + 1)),
+            ratchetState: drift.Value(ratchetState),
           ),
         );
   }
@@ -171,6 +177,28 @@ void main() {
       expect(HEX.encode(client.restoredHandles.single.ohId), equals(ohIdHex));
     });
 
+    test(
+      'passes the creator role and persisted ratchet state (MS03b)',
+      () async {
+        await insertChannel(
+          'created-here',
+          authPrivateKey: HEX.encode(List.generate(32, (i) => i + 2)),
+          ratchetState: '{"v":1,"fake":"state"}',
+        );
+        await insertChannel('joined-via-qr');
+
+        await service.restorePersistedState();
+
+        expect(client.channelCreatorRoles['created-here'], isTrue);
+        expect(client.channelCreatorRoles['joined-via-qr'], isFalse);
+        expect(
+          client.restoredRatchetStates['created-here'],
+          equals('{"v":1,"fake":"state"}'),
+        );
+        expect(client.restoredRatchetStates, isNot(contains('joined-via-qr')));
+      },
+    );
+
     test('skips expired OHs', () async {
       await db
           .into(db.outboundHandles)
@@ -215,6 +243,22 @@ void main() {
       expect(await db.select(db.messages).get(), hasLength(1));
       final handle = await db.select(db.outboundHandles).getSingle();
       expect(handle.lastCursor, equals(7));
+    });
+
+    test('persists advanced ratchet state per channel (MS03b)', () async {
+      await insertChannel('channel-1');
+      service.start();
+
+      client.ratchetStateController.add(
+        const RatchetStateUpdate(
+          channelId: 'channel-1',
+          stateJson: '{"v":1,"advanced":true}',
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      final channel = await db.select(db.channels).getSingle();
+      expect(channel.ratchetState, equals('{"v":1,"advanced":true}'));
     });
   });
 }

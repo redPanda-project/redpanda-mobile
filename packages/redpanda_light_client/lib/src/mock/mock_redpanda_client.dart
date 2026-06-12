@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:redpanda_light_client/src/client_facade.dart';
+import 'package:redpanda_light_client/src/crypto/ratchet.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
@@ -87,7 +88,12 @@ class MockRedPandaClient implements RedPandaClient {
     String channelId,
     List<int> encryptionKey, {
     List<int>? peerOhId,
+    required bool isChannelCreator,
+    String? ratchetState,
   }) {
     // Mock: no-op
   }
+
+  @override
+  Stream<RatchetStateUpdate> get ratchetStateUpdates => const Stream.empty();
 }

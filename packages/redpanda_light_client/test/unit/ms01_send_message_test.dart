@@ -47,7 +47,11 @@ void main() {
       'sendMessage with keys but no connected peer throws StateError',
       () async {
         final channel = await Channel.generate('Test');
-        client.addChannelKeys(channel.id, channel.encryptionKey);
+        client.addChannelKeys(
+          channel.id,
+          channel.encryptionKey,
+          isChannelCreator: true,
+        );
 
         expect(
           () => client.sendMessage(channel.id, 'Hello'),

@@ -1,3 +1,4 @@
+import 'package:redpanda_light_client/src/crypto/ratchet.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
@@ -61,9 +62,27 @@ abstract class RedPandaClient {
 
   /// Registers channel encryption keys so [sendMessage] can encrypt outgoing
   /// messages for [channelId]. Optionally associates a peer OH ID for routing.
+  ///
+  /// MS03b: the channel ratchet is initialized from these keys.
+  /// [isChannelCreator] must reflect the true role — `true` only on the
+  /// device that generated the channel (it holds the channel auth private
+  /// key), `false` on a device that joined via QR code; with mismatched
+  /// roles the two ratchets cannot line up. [ratchetState] restores a
+  /// previously persisted ratchet (see [ratchetStateUpdates]); it is ignored
+  /// when the client already holds a live session for [channelId], because
+  /// the in-memory state is always the most advanced.
   void addChannelKeys(
     String channelId,
     List<int> encryptionKey, {
     List<int>? peerOhId,
+    required bool isChannelCreator,
+    String? ratchetState,
   });
+
+  /// Ratchet state changes (MS03b). Emitted after every encrypt/decrypt that
+  /// advanced a channel ratchet; the app layer must persist
+  /// [RatchetStateUpdate.stateJson] on-device (and only on-device — ratchet
+  /// state never travels in the QR code or any off-device backup) and feed
+  /// it back via [addChannelKeys] after a restart.
+  Stream<RatchetStateUpdate> get ratchetStateUpdates;
 }
