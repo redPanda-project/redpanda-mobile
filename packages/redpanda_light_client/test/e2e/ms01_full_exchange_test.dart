@@ -31,6 +31,11 @@ void main() async {
         selfNodeId: NodeId.fromPublicKey(aliceKeys),
         selfKeys: aliceKeys,
         seeds: ['127.0.0.1:$nodePort'],
+        // This test exercises the DIRECT deposit path. Without the pin the
+        // client may garlic-route over public peers learned from the node's
+        // known-nodes list (MS04) and the message never reaches the local
+        // mailbox. The garlic path is covered by ms04_multi_hop_garlic_test.
+        hopCandidateFilter: (_) => false,
       );
 
       final bobKeys = await KeyPair.generate();
