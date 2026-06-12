@@ -9,9 +9,13 @@ abstract class PeerRepository {
   Future<void> save();
 
   /// Updates or adds a peer stat.
+  ///
+  /// [encryptionPublicKey] is the node's 32-byte X25519 key (hex), learned
+  /// from the peer exchange (MS04) — required for garlic hop selection.
   void updatePeer(
     String address, {
     String? nodeId,
+    String? encryptionPublicKey,
     int? latencyMs,
     bool? isSuccess,
     bool? isFailure,
@@ -44,6 +48,7 @@ class InMemoryPeerRepository implements PeerRepository {
   void updatePeer(
     String address, {
     String? nodeId,
+    String? encryptionPublicKey,
     int? latencyMs,
     bool? isSuccess,
     bool? isFailure,
@@ -55,6 +60,10 @@ class InMemoryPeerRepository implements PeerRepository {
 
     if (nodeId != null) {
       stats.nodeId = nodeId;
+    }
+
+    if (encryptionPublicKey != null) {
+      stats.encryptionPublicKey = encryptionPublicKey;
     }
 
     if (latencyMs != null) {

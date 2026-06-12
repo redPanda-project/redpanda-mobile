@@ -304,6 +304,7 @@ class RedPandaIsolateClient implements RedPandaClient {
     String channelId,
     List<int> encryptionKey, {
     List<int>? peerOhId,
+    String? peerOhEndpoint,
     required bool isChannelCreator,
     String? ratchetState,
   }) {
@@ -312,6 +313,7 @@ class RedPandaIsolateClient implements RedPandaClient {
         channelId,
         encryptionKey,
         peerOhId: peerOhId,
+        peerOhEndpoint: peerOhEndpoint,
         isChannelCreator: isChannelCreator,
         ratchetState: ratchetState,
       ),
@@ -474,6 +476,7 @@ void _isolateEntryPoint(SendPort mainSendPort) {
           message.channelId,
           message.encryptionKey,
           peerOhId: message.peerOhId,
+          peerOhEndpoint: message.peerOhEndpoint,
           isChannelCreator: message.isChannelCreator,
           ratchetState: message.ratchetState,
         );

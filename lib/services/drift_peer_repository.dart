@@ -16,6 +16,7 @@ class DriftPeerRepository implements PeerRepository {
   void updatePeer(
     String address, {
     String? nodeId,
+    String? encryptionPublicKey,
     int? latencyMs,
     bool? isSuccess,
     bool? isFailure,
@@ -35,6 +36,10 @@ class DriftPeerRepository implements PeerRepository {
       var newFailure = existing?.failureCount ?? 0;
       var newNodeId =
           nodeId ?? existing?.nodeId; // Keep existing if not provided
+      // Keep existing key if not provided (MS04). Persisted in the Drift
+      // peers table; until the column lands the cache carries it in-session.
+      var newEncryptionKey =
+          encryptionPublicKey ?? _cache[address]?.encryptionPublicKey;
       final now = DateTime.now();
 
       if (latencyMs != null) {
@@ -56,6 +61,7 @@ class DriftPeerRepository implements PeerRepository {
       final updatedStats = PeerStats(
         address: address,
         nodeId: newNodeId,
+        encryptionPublicKey: newEncryptionKey,
         averageLatencyMs: newAverage,
         successCount: newSuccess,
         failureCount: newFailure,

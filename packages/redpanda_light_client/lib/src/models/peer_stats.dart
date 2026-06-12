@@ -1,6 +1,11 @@
 class PeerStats {
   final String address;
   String? nodeId;
+
+  /// MS04: 32-byte X25519 encryption public key of the node (hex, 64 chars).
+  /// Required for a peer to qualify as a garlic hop candidate.
+  String? encryptionPublicKey;
+
   int averageLatencyMs;
   int successCount;
   int failureCount;
@@ -9,6 +14,7 @@ class PeerStats {
   PeerStats({
     required this.address,
     this.nodeId,
+    this.encryptionPublicKey,
     this.averageLatencyMs = 9999,
     this.successCount = 0,
     this.failureCount = 0,
@@ -19,6 +25,7 @@ class PeerStats {
     return {
       'address': address,
       'nodeId': nodeId,
+      'encryptionPublicKey': encryptionPublicKey,
       'averageLatencyMs': averageLatencyMs,
       'successCount': successCount,
       'failureCount': failureCount,
@@ -30,6 +37,7 @@ class PeerStats {
     return PeerStats(
       address: json['address'] as String,
       nodeId: json['nodeId'] as String?,
+      encryptionPublicKey: json['encryptionPublicKey'] as String?,
       averageLatencyMs: json['averageLatencyMs'] as int? ?? 9999,
       successCount: json['successCount'] as int? ?? 0,
       failureCount: json['failureCount'] as int? ?? 0,

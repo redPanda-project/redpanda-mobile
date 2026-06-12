@@ -69,6 +69,7 @@ class MockPeerRepository implements PeerRepository {
   void updatePeer(
     String address, {
     String? nodeId,
+    String? encryptionPublicKey,
     int? latencyMs,
     bool? isSuccess,
     bool? isFailure,

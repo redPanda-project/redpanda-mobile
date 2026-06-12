@@ -63,6 +63,10 @@ abstract class RedPandaClient {
   /// Registers channel encryption keys so [sendMessage] can encrypt outgoing
   /// messages for [channelId]. Optionally associates a peer OH ID for routing.
   ///
+  /// [peerOhEndpoint] is the host:port of the node hosting the peer's OH
+  /// (from the OHDescriptor). MS04 uses it to keep the destination node out
+  /// of the garlic hop path.
+  ///
   /// MS03b: the channel ratchet is initialized from these keys.
   /// [isChannelCreator] must reflect the true role — `true` only on the
   /// device that generated the channel (it holds the channel auth private
@@ -75,6 +79,7 @@ abstract class RedPandaClient {
     String channelId,
     List<int> encryptionKey, {
     List<int>? peerOhId,
+    String? peerOhEndpoint,
     required bool isChannelCreator,
     String? ratchetState,
   });
