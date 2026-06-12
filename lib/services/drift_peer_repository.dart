@@ -36,10 +36,9 @@ class DriftPeerRepository implements PeerRepository {
       var newFailure = existing?.failureCount ?? 0;
       var newNodeId =
           nodeId ?? existing?.nodeId; // Keep existing if not provided
-      // Keep existing key if not provided (MS04). Persisted in the Drift
-      // peers table; until the column lands the cache carries it in-session.
+      // Keep existing key if not provided (MS04).
       var newEncryptionKey =
-          encryptionPublicKey ?? _cache[address]?.encryptionPublicKey;
+          encryptionPublicKey ?? existing?.encryptionPublicKey;
       final now = DateTime.now();
 
       if (latencyMs != null) {
@@ -76,6 +75,7 @@ class DriftPeerRepository implements PeerRepository {
             PeersCompanion(
               address: Value(address),
               nodeId: Value(newNodeId), // Insert or Update NodeId
+              encryptionPublicKey: Value(newEncryptionKey),
               averageLatencyMs: Value(newAverage),
               successCount: Value(newSuccess),
               failureCount: Value(newFailure),
@@ -123,6 +123,7 @@ class DriftPeerRepository implements PeerRepository {
       _cache[row.address] = PeerStats(
         address: row.address,
         nodeId: row.nodeId,
+        encryptionPublicKey: row.encryptionPublicKey,
         averageLatencyMs: row.averageLatencyMs,
         successCount: row.successCount,
         failureCount: row.failureCount,
