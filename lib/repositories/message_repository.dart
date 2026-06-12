@@ -150,7 +150,12 @@ class MessageRepository {
 
   /// Records a failed send attempt: increments retryCount and stamps
   /// lastRetryAt so the backoff window starts now.
-  Future<void> markRetryAttempt(int id) async {
+  ///
+  /// [penalty] is the retryCount increment. The default 1 gives the normal
+  /// exponential backoff; a larger penalty widens the next backoff window
+  /// without a schema change (used for QUOTA_EXCEEDED, where an immediate
+  /// retry is pointless until the recipient fetched their mailbox).
+  Future<void> markRetryAttempt(int id, {int penalty = 1}) async {
     final msg = await (_db.select(
       _db.messages,
     )..where((t) => t.id.equals(id))).getSingleOrNull();
@@ -158,7 +163,7 @@ class MessageRepository {
 
     await (_db.update(_db.messages)..where((t) => t.id.equals(id))).write(
       MessagesCompanion(
-        retryCount: drift.Value(msg.retryCount + 1),
+        retryCount: drift.Value(msg.retryCount + penalty),
         lastRetryAt: drift.Value(DateTime.now()),
       ),
     );

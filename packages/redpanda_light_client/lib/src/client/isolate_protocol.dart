@@ -115,7 +115,13 @@ class EventMessageSent extends IsolateEvent {
 class EventMessageSendFailed extends IsolateEvent {
   final int requestId;
   final String error;
-  EventMessageSendFailed(this.requestId, this.error);
+
+  /// Proto Status name when the node rejected the deposit (MS02b), e.g.
+  /// 'QUOTA_EXCEEDED'. Null for generic failures (no peer, timeout). Travels
+  /// as a string so the event stays isolate-sendable; the main side rebuilds
+  /// a DepositException from it.
+  final String? statusCode;
+  EventMessageSendFailed(this.requestId, this.error, {this.statusCode});
 }
 
 class EventIncomingMessage extends IsolateEvent {
@@ -146,7 +152,11 @@ class EventOhRegistered extends IsolateEvent {
 class EventOhRegisterFailed extends IsolateEvent {
   final int requestId;
   final String error;
-  EventOhRegisterFailed(this.requestId, this.error);
+
+  /// True when the node rejected the registration with RATE_LIMIT (MS02b);
+  /// the main side rebuilds a RateLimitException from it.
+  final bool rateLimited;
+  EventOhRegisterFailed(this.requestId, this.error, {this.rateLimited = false});
 }
 
 /// OH state change (cursor advanced, renewal, mailbox overflow) forwarded

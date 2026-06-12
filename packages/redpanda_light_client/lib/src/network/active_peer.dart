@@ -40,6 +40,7 @@ class ActivePeer {
   static const int _cmdOutboundFetchReq = 152;
   static const int _cmdOutboundFetchRes = 153;
   static const int _cmdOutboundAckFetchRes = 157;
+  static const int _cmdFlaschenpostPutRes = 158;
 
   final String address;
   final NodeId selfNodeId;
@@ -53,7 +54,7 @@ class ActivePeer {
   final List<String> Function()? onPeerListRequested;
   final void Function(String nodeId)? onNodeIdDiscovered;
 
-  /// Callback for OH response commands (151, 153, 157).
+  /// Callback for OH response commands (151, 153, 157, 158).
   void Function(int command, List<int> payload)? onCommandResponse;
 
   Socket? _socket;
@@ -293,7 +294,8 @@ class ActivePeer {
             _buffer.removeRange(0, length); // Remove Payload
           } else if (command == _cmdOutboundRegisterOhRes ||
               command == _cmdOutboundFetchRes ||
-              command == _cmdOutboundAckFetchRes) {
+              command == _cmdOutboundAckFetchRes ||
+              command == _cmdFlaschenpostPutRes) {
             if (_buffer.length < 1 + 4) break;
             final lengthData = Uint8List.fromList(_buffer.sublist(1, 5));
             final length = ByteData.view(
