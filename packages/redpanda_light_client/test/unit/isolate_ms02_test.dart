@@ -57,7 +57,7 @@ void main() {
 
         final registration = OHRegistration(
           ohId: List.generate(20, (i) => i),
-          keypair: OHKeypair.generate(),
+          keypair: await OHKeypair.generate(),
           expiresAtMs: DateTime.now()
               .add(const Duration(days: 7))
               .millisecondsSinceEpoch,

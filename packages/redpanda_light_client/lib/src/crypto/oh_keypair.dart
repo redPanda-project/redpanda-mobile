@@ -1,185 +1,56 @@
-import 'dart:math' as math;
 import 'dart:typed_data';
 
-import 'package:pointycastle/export.dart';
+import 'package:redpanda_light_client/src/crypto/crypto_utils.dart';
 
-/// ECDSA Keypair for Outbound Handle (OH) authentication.
+/// Ed25519 keypair for Outbound Handle (OH) authentication (MS03).
 ///
-/// Uses brainpoolp256r1 curve (same as the handshake layer).
-/// Generates signing keys and provides a `sign()` method
-/// for OH registration and fetch request authentication.
+/// Signs OH registration, fetch and ack-fetch requests. The signature covers
+/// the versioned signing bytes `[0x02 | CMD_BYTE | fields | timestamp |
+/// nonce]` (see [signingVersion]); the server identifies the algorithm by the
+/// 32-byte `oh_auth_public_key` (Ed25519 verify key).
 class OHKeypair {
-  final ECPublicKey publicKey;
-  final ECPrivateKey privateKey;
+  /// Signing-bytes version byte for Ed25519 (MS03, master spec section 8).
+  /// Prefixes every signed command body.
+  static const int signingVersion = 0x02;
 
-  OHKeypair({required this.publicKey, required this.privateKey});
+  final Ed25519KeyPairBytes _keys;
 
-  /// Generates a new random ECDSA keypair on brainpoolp256r1.
-  factory OHKeypair.generate() {
-    final ecParams = ECDomainParameters('brainpoolp256r1');
-    final keyParams = ECKeyGeneratorParameters(ecParams);
+  OHKeypair._(this._keys);
 
-    final random = FortunaRandom();
-    final secureRandom = math.Random.secure();
-    final seed = Uint8List.fromList(
-      List.generate(32, (_) => secureRandom.nextInt(256)),
-    );
-    random.seed(KeyParameter(seed));
-
-    final generator = ECKeyGenerator();
-    generator.init(ParametersWithRandom(keyParams, random));
-
-    final pair = generator.generateKeyPair();
-    return OHKeypair(publicKey: pair.publicKey, privateKey: pair.privateKey);
+  /// Generates a new random Ed25519 keypair.
+  static Future<OHKeypair> generate() async {
+    return OHKeypair._(await CryptoUtils.generateSigningKeypair());
   }
 
-  /// Restores a keypair from its 32-byte private scalar (see [privateKeyBytes]).
-  ///
-  /// The public key is recomputed as Q = d * G on brainpoolp256r1.
-  factory OHKeypair.fromPrivateKeyBytes(Uint8List bytes) {
-    if (bytes.length != 32) {
-      throw ArgumentError.value(
-        bytes.length,
-        'bytes',
-        'Expected 32 bytes for brainpoolp256r1 private key',
-      );
-    }
-    final ecParams = ECDomainParameters('brainpoolp256r1');
-    final d = _bytesToBigInt(bytes);
-    if (d == BigInt.zero || d >= ecParams.n) {
-      throw ArgumentError('Private key scalar out of range');
-    }
-    final q = (ecParams.G * d)!;
-    return OHKeypair(
-      publicKey: ECPublicKey(q, ecParams),
-      privateKey: ECPrivateKey(d, ecParams),
-    );
+  /// Restores a keypair from its 32-byte private seed (see
+  /// [privateKeyBytes]).
+  static Future<OHKeypair> fromPrivateKeyBytes(Uint8List bytes) async {
+    return OHKeypair._(await CryptoUtils.signingKeypairFromSeed(bytes));
   }
 
-  /// Uncompressed public key bytes (65 bytes: 0x04 + X + Y).
-  Uint8List get publicKeyBytes {
-    return publicKey.Q!.getEncoded(false);
+  /// The 32-byte Ed25519 verify key — sent as `oh_auth_public_key`.
+  Uint8List get publicKeyBytes => _keys.publicKey;
+
+  /// The 32-byte Ed25519 private seed, for persistence and isolate
+  /// transfer. Restore with [OHKeypair.fromPrivateKeyBytes].
+  Uint8List get privateKeyBytes => _keys.privateSeed;
+
+  /// Signs the versioned bytes `[0x02 | signingBytes]` with Ed25519 and
+  /// returns the 64-byte signature. [signingBytes] is the unversioned
+  /// command body `[CMD_BYTE | fields | timestamp | nonce]`.
+  Future<Uint8List> sign(Uint8List signingBytes) {
+    final versioned = Uint8List(1 + signingBytes.length);
+    versioned[0] = signingVersion;
+    versioned.setRange(1, versioned.length, signingBytes);
+    return CryptoUtils.sign(_keys.privateSeed, versioned);
   }
 
-  /// Private scalar as 32 bytes big-endian, for persistence and
-  /// isolate transfer. Restore with [OHKeypair.fromPrivateKeyBytes].
-  Uint8List get privateKeyBytes {
-    return _bigIntToBytes(privateKey.d!, 32);
-  }
-
-  /// Signs [data] using SHA256withECDSA and returns a DER-encoded signature.
-  Uint8List sign(Uint8List data) {
-    final signer = Signer('SHA-256/ECDSA');
-    final random = FortunaRandom();
-    final secureRandom = math.Random.secure();
-    final seed = Uint8List.fromList(
-      List.generate(32, (_) => secureRandom.nextInt(256)),
-    );
-    random.seed(KeyParameter(seed));
-    signer.init(
-      true,
-      ParametersWithRandom(PrivateKeyParameter(privateKey), random),
-    );
-    final sig = signer.generateSignature(data) as ECSignature;
-    return _derEncodeSignature(sig);
-  }
-
-  /// Verifies a DER-encoded signature against [data].
-  bool verify(Uint8List data, Uint8List signature) {
-    try {
-      final signer = Signer('SHA-256/ECDSA');
-      signer.init(false, PublicKeyParameter(publicKey));
-      final ecSig = _derDecodeSignature(signature);
-      return signer.verifySignature(data, ecSig);
-    } catch (_) {
-      return false;
-    }
-  }
-
-  // --- DER encoding helpers ---
-
-  static Uint8List _derEncodeSignature(ECSignature sig) {
-    final r = _derEncodeInteger(sig.r);
-    final s = _derEncodeInteger(sig.s);
-
-    final sequence = BytesBuilder();
-    sequence.addByte(0x30); // SEQUENCE
-    final totalLength = r.length + s.length;
-    sequence.addByte(totalLength);
-    sequence.add(r);
-    sequence.add(s);
-    return sequence.toBytes();
-  }
-
-  static ECSignature _derDecodeSignature(Uint8List bytes) {
-    var offset = 0;
-    if (bytes[offset++] != 0x30) {
-      throw FormatException('Invalid signature: expected SEQUENCE');
-    }
-    offset++; // skip length
-
-    final r = _derDecodeInteger(bytes, offset);
-    offset += (bytes[offset + 1] + 2);
-    final s = _derDecodeInteger(bytes, offset);
-
-    return ECSignature(r, s);
-  }
-
-  static Uint8List _derEncodeInteger(BigInt n) {
-    var bytes = _bigIntToBytes(n, (n.bitLength + 7) >> 3);
-
-    // Remove leading zeros
-    var firstNonZero = 0;
-    while (firstNonZero < bytes.length - 1 && bytes[firstNonZero] == 0) {
-      firstNonZero++;
-    }
-    bytes = bytes.sublist(firstNonZero);
-
-    // Prepend 0x00 if high bit set (to keep positive in DER)
-    if (bytes.isNotEmpty && (bytes[0] & 0x80) != 0) {
-      final tmp = Uint8List(bytes.length + 1);
-      tmp[0] = 0x00;
-      tmp.setRange(1, tmp.length, bytes);
-      bytes = tmp;
-    } else if (bytes.isEmpty) {
-      bytes = Uint8List.fromList([0]);
-    }
-
-    final builder = BytesBuilder();
-    builder.addByte(0x02); // INTEGER
-    builder.addByte(bytes.length);
-    builder.add(bytes);
-    return builder.toBytes();
-  }
-
-  static BigInt _derDecodeInteger(Uint8List bytes, int offset) {
-    if (bytes[offset++] != 0x02) {
-      throw FormatException('Invalid signature: expected INTEGER');
-    }
-    final len = bytes[offset++];
-    var val = bytes.sublist(offset, offset + len);
-
-    // Strip leading zero used for sign
-    if (val.length > 1 && val[0] == 0x00 && (val[1] & 0x80) != 0) {
-      val = val.sublist(1);
-    }
-    return _bytesToBigInt(val);
-  }
-
-  static Uint8List _bigIntToBytes(BigInt number, int length) {
-    final hex = number.toRadixString(16).padLeft(length * 2, '0');
-    final list = Uint8List(length);
-    for (var i = 0; i < length; i++) {
-      list[i] = int.parse(hex.substring(i * 2, i * 2 + 2), radix: 16);
-    }
-    return list;
-  }
-
-  static BigInt _bytesToBigInt(Uint8List bytes) {
-    var result = BigInt.zero;
-    for (final byte in bytes) {
-      result = (result << 8) | BigInt.from(byte);
-    }
-    return result;
+  /// Verifies a 64-byte signature over the versioned bytes
+  /// `[0x02 | signingBytes]`.
+  Future<bool> verify(Uint8List signingBytes, Uint8List signature) {
+    final versioned = Uint8List(1 + signingBytes.length);
+    versioned[0] = signingVersion;
+    versioned.setRange(1, versioned.length, signingBytes);
+    return CryptoUtils.verify(_keys.publicKey, versioned, signature);
   }
 }

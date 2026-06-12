@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -27,24 +29,28 @@ class _CreateChannelScreenState extends ConsumerState<CreateChannelScreen> {
     super.dispose();
   }
 
-  void _generateChannel() {
+  Future<void> _generateChannel() async {
     if (_labelController.text.trim().isEmpty) return;
 
-    final channel = Channel.generate(_labelController.text.trim());
+    final channel = await Channel.generate(_labelController.text.trim());
+    if (!mounted) return;
     setState(() {
       _createdChannel = channel;
-      // Show a v1 QR right away; upgraded to v2 once our OH is registered.
+      // Show the QR right away; the peer OH is embedded once registered.
       _qrData = channel.toJson();
     });
 
     // Add to repository
-    ref.read(channelRepositoryProvider).addChannel(channel);
+    await ref.read(channelRepositoryProvider).addChannel(channel);
 
-    _registerOwnOh(channel);
+    // Fire-and-forget by design: the QR is usable without the OH and gets
+    // upgraded in place once registration succeeds.
+    unawaited(_registerOwnOh(channel));
   }
 
   /// Registers our own Outbound Handle for this channel and embeds it into
-  /// the QR code (v2), so the scanning peer knows where to send messages.
+  /// the QR code (v3 `oh` field), so the scanning peer knows where to send
+  /// messages.
   Future<void> _registerOwnOh(Channel channel) async {
     final client = ref.read(redPandaClientProvider);
     final ownDescriptor = await ref

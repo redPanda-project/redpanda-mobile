@@ -16,7 +16,7 @@ void main() {
         );
 
         expect(registration.ohId, hasLength(20));
-        expect(registration.keypair.publicKeyBytes, hasLength(65));
+        expect(registration.keypair.publicKeyBytes, hasLength(32));
         expect(registration.keypair.privateKeyBytes, hasLength(32));
         expect(registration.channelId, 'test-channel');
         expect(

@@ -20,7 +20,7 @@ void main() {
 
   group('DriftChannelRepository', () {
     test('addChannel and getChannels round-trip a plain channel', () async {
-      final channel = Channel.generate('My Channel');
+      final channel = await Channel.generate('My Channel');
 
       await repo.addChannel(channel);
       final channels = await repo.getChannels();
@@ -35,11 +35,11 @@ void main() {
       final descriptor = OHDescriptor(
         serverEndpoint: 'node-1:59558',
         handleId: List.generate(20, (i) => i),
-        authPublicKey: List.generate(65, (i) => i),
+        authPublicKey: List.generate(32, (i) => i),
       );
-      final channel = Channel.generate(
+      final channel = (await Channel.generate(
         'With OH',
-      ).copyWith(peerOhDescriptor: descriptor);
+      )).copyWith(peerOhDescriptor: descriptor);
 
       await repo.addChannel(channel);
       final restored = (await repo.getChannels()).single;
@@ -54,7 +54,7 @@ void main() {
     });
 
     test('addChannel upserts on the same channel id', () async {
-      final channel = Channel.generate('Original');
+      final channel = await Channel.generate('Original');
       await repo.addChannel(channel);
       await repo.addChannel(channel);
 
@@ -62,7 +62,7 @@ void main() {
     });
 
     test('watchChannels emits the current channel list', () async {
-      await repo.addChannel(Channel.generate('Streamed'));
+      await repo.addChannel(await Channel.generate('Streamed'));
 
       final channels = await repo.watchChannels().first;
       expect(channels, hasLength(1));

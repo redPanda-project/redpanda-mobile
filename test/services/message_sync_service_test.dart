@@ -37,7 +37,7 @@ void main() {
         .insert(
           OutboundHandlesCompanion.insert(
             ohId: ohIdHex,
-            keypairBytes: OHKeypair.generate().privateKeyBytes,
+            keypairBytes: (await OHKeypair.generate()).privateKeyBytes,
             serverEndpoint: 'localhost:59558',
             expiresAt: DateTime.now().add(const Duration(days: 7)),
             channelId: drift.Value(channelId),
@@ -53,7 +53,7 @@ void main() {
             uuid: uuid,
             label: 'Test',
             encryptionKey: HEX.encode(List.generate(32, (i) => i)),
-            authenticationKey: HEX.encode(List.generate(32, (i) => i + 1)),
+            authPublicKey: HEX.encode(List.generate(32, (i) => i + 1)),
           ),
         );
   }
@@ -177,7 +177,7 @@ void main() {
           .insert(
             OutboundHandlesCompanion.insert(
               ohId: ohIdHex,
-              keypairBytes: OHKeypair.generate().privateKeyBytes,
+              keypairBytes: (await OHKeypair.generate()).privateKeyBytes,
               serverEndpoint: 'localhost:59558',
               expiresAt: DateTime.now().subtract(const Duration(days: 1)),
             ),

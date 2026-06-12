@@ -351,18 +351,28 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
     type: DriftSqlType.string,
     requiredDuringInsert: true,
   );
-  static const VerificationMeta _authenticationKeyMeta = const VerificationMeta(
-    'authenticationKey',
+  static const VerificationMeta _authPrivateKeyMeta = const VerificationMeta(
+    'authPrivateKey',
   );
   @override
-  late final GeneratedColumn<String> authenticationKey =
-      GeneratedColumn<String>(
-        'authentication_key',
-        aliasedName,
-        false,
-        type: DriftSqlType.string,
-        requiredDuringInsert: true,
-      );
+  late final GeneratedColumn<String> authPrivateKey = GeneratedColumn<String>(
+    'auth_private_key',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _authPublicKeyMeta = const VerificationMeta(
+    'authPublicKey',
+  );
+  @override
+  late final GeneratedColumn<String> authPublicKey = GeneratedColumn<String>(
+    'auth_public_key',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
   static const VerificationMeta _peerOhEndpointMeta = const VerificationMeta(
     'peerOhEndpoint',
   );
@@ -412,7 +422,8 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
     uuid,
     label,
     encryptionKey,
-    authenticationKey,
+    authPrivateKey,
+    authPublicKey,
     peerOhEndpoint,
     peerOhId,
     peerOhPublicKey,
@@ -457,16 +468,25 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
     } else if (isInserting) {
       context.missing(_encryptionKeyMeta);
     }
-    if (data.containsKey('authentication_key')) {
+    if (data.containsKey('auth_private_key')) {
       context.handle(
-        _authenticationKeyMeta,
-        authenticationKey.isAcceptableOrUnknown(
-          data['authentication_key']!,
-          _authenticationKeyMeta,
+        _authPrivateKeyMeta,
+        authPrivateKey.isAcceptableOrUnknown(
+          data['auth_private_key']!,
+          _authPrivateKeyMeta,
+        ),
+      );
+    }
+    if (data.containsKey('auth_public_key')) {
+      context.handle(
+        _authPublicKeyMeta,
+        authPublicKey.isAcceptableOrUnknown(
+          data['auth_public_key']!,
+          _authPublicKeyMeta,
         ),
       );
     } else if (isInserting) {
-      context.missing(_authenticationKeyMeta);
+      context.missing(_authPublicKeyMeta);
     }
     if (data.containsKey('peer_oh_endpoint')) {
       context.handle(
@@ -519,9 +539,13 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
         DriftSqlType.string,
         data['${effectivePrefix}encryption_key'],
       )!,
-      authenticationKey: attachedDatabase.typeMapping.read(
+      authPrivateKey: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
-        data['${effectivePrefix}authentication_key'],
+        data['${effectivePrefix}auth_private_key'],
+      ),
+      authPublicKey: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}auth_public_key'],
       )!,
       peerOhEndpoint: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
@@ -552,7 +576,8 @@ class Channel extends DataClass implements Insertable<Channel> {
   final String uuid;
   final String label;
   final String encryptionKey;
-  final String authenticationKey;
+  final String? authPrivateKey;
+  final String authPublicKey;
   final String? peerOhEndpoint;
   final String? peerOhId;
   final String? peerOhPublicKey;
@@ -561,7 +586,8 @@ class Channel extends DataClass implements Insertable<Channel> {
     required this.uuid,
     required this.label,
     required this.encryptionKey,
-    required this.authenticationKey,
+    this.authPrivateKey,
+    required this.authPublicKey,
     this.peerOhEndpoint,
     this.peerOhId,
     this.peerOhPublicKey,
@@ -573,7 +599,10 @@ class Channel extends DataClass implements Insertable<Channel> {
     map['uuid'] = Variable<String>(uuid);
     map['label'] = Variable<String>(label);
     map['encryption_key'] = Variable<String>(encryptionKey);
-    map['authentication_key'] = Variable<String>(authenticationKey);
+    if (!nullToAbsent || authPrivateKey != null) {
+      map['auth_private_key'] = Variable<String>(authPrivateKey);
+    }
+    map['auth_public_key'] = Variable<String>(authPublicKey);
     if (!nullToAbsent || peerOhEndpoint != null) {
       map['peer_oh_endpoint'] = Variable<String>(peerOhEndpoint);
     }
@@ -594,7 +623,10 @@ class Channel extends DataClass implements Insertable<Channel> {
       uuid: Value(uuid),
       label: Value(label),
       encryptionKey: Value(encryptionKey),
-      authenticationKey: Value(authenticationKey),
+      authPrivateKey: authPrivateKey == null && nullToAbsent
+          ? const Value.absent()
+          : Value(authPrivateKey),
+      authPublicKey: Value(authPublicKey),
       peerOhEndpoint: peerOhEndpoint == null && nullToAbsent
           ? const Value.absent()
           : Value(peerOhEndpoint),
@@ -619,7 +651,8 @@ class Channel extends DataClass implements Insertable<Channel> {
       uuid: serializer.fromJson<String>(json['uuid']),
       label: serializer.fromJson<String>(json['label']),
       encryptionKey: serializer.fromJson<String>(json['encryptionKey']),
-      authenticationKey: serializer.fromJson<String>(json['authenticationKey']),
+      authPrivateKey: serializer.fromJson<String?>(json['authPrivateKey']),
+      authPublicKey: serializer.fromJson<String>(json['authPublicKey']),
       peerOhEndpoint: serializer.fromJson<String?>(json['peerOhEndpoint']),
       peerOhId: serializer.fromJson<String?>(json['peerOhId']),
       peerOhPublicKey: serializer.fromJson<String?>(json['peerOhPublicKey']),
@@ -633,7 +666,8 @@ class Channel extends DataClass implements Insertable<Channel> {
       'uuid': serializer.toJson<String>(uuid),
       'label': serializer.toJson<String>(label),
       'encryptionKey': serializer.toJson<String>(encryptionKey),
-      'authenticationKey': serializer.toJson<String>(authenticationKey),
+      'authPrivateKey': serializer.toJson<String?>(authPrivateKey),
+      'authPublicKey': serializer.toJson<String>(authPublicKey),
       'peerOhEndpoint': serializer.toJson<String?>(peerOhEndpoint),
       'peerOhId': serializer.toJson<String?>(peerOhId),
       'peerOhPublicKey': serializer.toJson<String?>(peerOhPublicKey),
@@ -645,7 +679,8 @@ class Channel extends DataClass implements Insertable<Channel> {
     String? uuid,
     String? label,
     String? encryptionKey,
-    String? authenticationKey,
+    Value<String?> authPrivateKey = const Value.absent(),
+    String? authPublicKey,
     Value<String?> peerOhEndpoint = const Value.absent(),
     Value<String?> peerOhId = const Value.absent(),
     Value<String?> peerOhPublicKey = const Value.absent(),
@@ -654,7 +689,10 @@ class Channel extends DataClass implements Insertable<Channel> {
     uuid: uuid ?? this.uuid,
     label: label ?? this.label,
     encryptionKey: encryptionKey ?? this.encryptionKey,
-    authenticationKey: authenticationKey ?? this.authenticationKey,
+    authPrivateKey: authPrivateKey.present
+        ? authPrivateKey.value
+        : this.authPrivateKey,
+    authPublicKey: authPublicKey ?? this.authPublicKey,
     peerOhEndpoint: peerOhEndpoint.present
         ? peerOhEndpoint.value
         : this.peerOhEndpoint,
@@ -671,9 +709,12 @@ class Channel extends DataClass implements Insertable<Channel> {
       encryptionKey: data.encryptionKey.present
           ? data.encryptionKey.value
           : this.encryptionKey,
-      authenticationKey: data.authenticationKey.present
-          ? data.authenticationKey.value
-          : this.authenticationKey,
+      authPrivateKey: data.authPrivateKey.present
+          ? data.authPrivateKey.value
+          : this.authPrivateKey,
+      authPublicKey: data.authPublicKey.present
+          ? data.authPublicKey.value
+          : this.authPublicKey,
       peerOhEndpoint: data.peerOhEndpoint.present
           ? data.peerOhEndpoint.value
           : this.peerOhEndpoint,
@@ -691,7 +732,8 @@ class Channel extends DataClass implements Insertable<Channel> {
           ..write('uuid: $uuid, ')
           ..write('label: $label, ')
           ..write('encryptionKey: $encryptionKey, ')
-          ..write('authenticationKey: $authenticationKey, ')
+          ..write('authPrivateKey: $authPrivateKey, ')
+          ..write('authPublicKey: $authPublicKey, ')
           ..write('peerOhEndpoint: $peerOhEndpoint, ')
           ..write('peerOhId: $peerOhId, ')
           ..write('peerOhPublicKey: $peerOhPublicKey, ')
@@ -705,7 +747,8 @@ class Channel extends DataClass implements Insertable<Channel> {
     uuid,
     label,
     encryptionKey,
-    authenticationKey,
+    authPrivateKey,
+    authPublicKey,
     peerOhEndpoint,
     peerOhId,
     peerOhPublicKey,
@@ -718,7 +761,8 @@ class Channel extends DataClass implements Insertable<Channel> {
           other.uuid == this.uuid &&
           other.label == this.label &&
           other.encryptionKey == this.encryptionKey &&
-          other.authenticationKey == this.authenticationKey &&
+          other.authPrivateKey == this.authPrivateKey &&
+          other.authPublicKey == this.authPublicKey &&
           other.peerOhEndpoint == this.peerOhEndpoint &&
           other.peerOhId == this.peerOhId &&
           other.peerOhPublicKey == this.peerOhPublicKey &&
@@ -729,7 +773,8 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
   final Value<String> uuid;
   final Value<String> label;
   final Value<String> encryptionKey;
-  final Value<String> authenticationKey;
+  final Value<String?> authPrivateKey;
+  final Value<String> authPublicKey;
   final Value<String?> peerOhEndpoint;
   final Value<String?> peerOhId;
   final Value<String?> peerOhPublicKey;
@@ -739,7 +784,8 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     this.uuid = const Value.absent(),
     this.label = const Value.absent(),
     this.encryptionKey = const Value.absent(),
-    this.authenticationKey = const Value.absent(),
+    this.authPrivateKey = const Value.absent(),
+    this.authPublicKey = const Value.absent(),
     this.peerOhEndpoint = const Value.absent(),
     this.peerOhId = const Value.absent(),
     this.peerOhPublicKey = const Value.absent(),
@@ -750,7 +796,8 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     required String uuid,
     required String label,
     required String encryptionKey,
-    required String authenticationKey,
+    this.authPrivateKey = const Value.absent(),
+    required String authPublicKey,
     this.peerOhEndpoint = const Value.absent(),
     this.peerOhId = const Value.absent(),
     this.peerOhPublicKey = const Value.absent(),
@@ -759,12 +806,13 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
   }) : uuid = Value(uuid),
        label = Value(label),
        encryptionKey = Value(encryptionKey),
-       authenticationKey = Value(authenticationKey);
+       authPublicKey = Value(authPublicKey);
   static Insertable<Channel> custom({
     Expression<String>? uuid,
     Expression<String>? label,
     Expression<String>? encryptionKey,
-    Expression<String>? authenticationKey,
+    Expression<String>? authPrivateKey,
+    Expression<String>? authPublicKey,
     Expression<String>? peerOhEndpoint,
     Expression<String>? peerOhId,
     Expression<String>? peerOhPublicKey,
@@ -775,7 +823,8 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
       if (uuid != null) 'uuid': uuid,
       if (label != null) 'label': label,
       if (encryptionKey != null) 'encryption_key': encryptionKey,
-      if (authenticationKey != null) 'authentication_key': authenticationKey,
+      if (authPrivateKey != null) 'auth_private_key': authPrivateKey,
+      if (authPublicKey != null) 'auth_public_key': authPublicKey,
       if (peerOhEndpoint != null) 'peer_oh_endpoint': peerOhEndpoint,
       if (peerOhId != null) 'peer_oh_id': peerOhId,
       if (peerOhPublicKey != null) 'peer_oh_public_key': peerOhPublicKey,
@@ -788,7 +837,8 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     Value<String>? uuid,
     Value<String>? label,
     Value<String>? encryptionKey,
-    Value<String>? authenticationKey,
+    Value<String?>? authPrivateKey,
+    Value<String>? authPublicKey,
     Value<String?>? peerOhEndpoint,
     Value<String?>? peerOhId,
     Value<String?>? peerOhPublicKey,
@@ -799,7 +849,8 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
       uuid: uuid ?? this.uuid,
       label: label ?? this.label,
       encryptionKey: encryptionKey ?? this.encryptionKey,
-      authenticationKey: authenticationKey ?? this.authenticationKey,
+      authPrivateKey: authPrivateKey ?? this.authPrivateKey,
+      authPublicKey: authPublicKey ?? this.authPublicKey,
       peerOhEndpoint: peerOhEndpoint ?? this.peerOhEndpoint,
       peerOhId: peerOhId ?? this.peerOhId,
       peerOhPublicKey: peerOhPublicKey ?? this.peerOhPublicKey,
@@ -820,8 +871,11 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     if (encryptionKey.present) {
       map['encryption_key'] = Variable<String>(encryptionKey.value);
     }
-    if (authenticationKey.present) {
-      map['authentication_key'] = Variable<String>(authenticationKey.value);
+    if (authPrivateKey.present) {
+      map['auth_private_key'] = Variable<String>(authPrivateKey.value);
+    }
+    if (authPublicKey.present) {
+      map['auth_public_key'] = Variable<String>(authPublicKey.value);
     }
     if (peerOhEndpoint.present) {
       map['peer_oh_endpoint'] = Variable<String>(peerOhEndpoint.value);
@@ -847,7 +901,8 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
           ..write('uuid: $uuid, ')
           ..write('label: $label, ')
           ..write('encryptionKey: $encryptionKey, ')
-          ..write('authenticationKey: $authenticationKey, ')
+          ..write('authPrivateKey: $authPrivateKey, ')
+          ..write('authPublicKey: $authPublicKey, ')
           ..write('peerOhEndpoint: $peerOhEndpoint, ')
           ..write('peerOhId: $peerOhId, ')
           ..write('peerOhPublicKey: $peerOhPublicKey, ')
@@ -2566,7 +2621,8 @@ typedef $$ChannelsTableCreateCompanionBuilder =
       required String uuid,
       required String label,
       required String encryptionKey,
-      required String authenticationKey,
+      Value<String?> authPrivateKey,
+      required String authPublicKey,
       Value<String?> peerOhEndpoint,
       Value<String?> peerOhId,
       Value<String?> peerOhPublicKey,
@@ -2578,7 +2634,8 @@ typedef $$ChannelsTableUpdateCompanionBuilder =
       Value<String> uuid,
       Value<String> label,
       Value<String> encryptionKey,
-      Value<String> authenticationKey,
+      Value<String?> authPrivateKey,
+      Value<String> authPublicKey,
       Value<String?> peerOhEndpoint,
       Value<String?> peerOhId,
       Value<String?> peerOhPublicKey,
@@ -2636,8 +2693,13 @@ class $$ChannelsTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
-  ColumnFilters<String> get authenticationKey => $composableBuilder(
-    column: $table.authenticationKey,
+  ColumnFilters<String> get authPrivateKey => $composableBuilder(
+    column: $table.authPrivateKey,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get authPublicKey => $composableBuilder(
+    column: $table.authPublicKey,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -2711,8 +2773,13 @@ class $$ChannelsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
-  ColumnOrderings<String> get authenticationKey => $composableBuilder(
-    column: $table.authenticationKey,
+  ColumnOrderings<String> get authPrivateKey => $composableBuilder(
+    column: $table.authPrivateKey,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get authPublicKey => $composableBuilder(
+    column: $table.authPublicKey,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -2757,8 +2824,13 @@ class $$ChannelsTableAnnotationComposer
     builder: (column) => column,
   );
 
-  GeneratedColumn<String> get authenticationKey => $composableBuilder(
-    column: $table.authenticationKey,
+  GeneratedColumn<String> get authPrivateKey => $composableBuilder(
+    column: $table.authPrivateKey,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get authPublicKey => $composableBuilder(
+    column: $table.authPublicKey,
     builder: (column) => column,
   );
 
@@ -2835,7 +2907,8 @@ class $$ChannelsTableTableManager
                 Value<String> uuid = const Value.absent(),
                 Value<String> label = const Value.absent(),
                 Value<String> encryptionKey = const Value.absent(),
-                Value<String> authenticationKey = const Value.absent(),
+                Value<String?> authPrivateKey = const Value.absent(),
+                Value<String> authPublicKey = const Value.absent(),
                 Value<String?> peerOhEndpoint = const Value.absent(),
                 Value<String?> peerOhId = const Value.absent(),
                 Value<String?> peerOhPublicKey = const Value.absent(),
@@ -2845,7 +2918,8 @@ class $$ChannelsTableTableManager
                 uuid: uuid,
                 label: label,
                 encryptionKey: encryptionKey,
-                authenticationKey: authenticationKey,
+                authPrivateKey: authPrivateKey,
+                authPublicKey: authPublicKey,
                 peerOhEndpoint: peerOhEndpoint,
                 peerOhId: peerOhId,
                 peerOhPublicKey: peerOhPublicKey,
@@ -2857,7 +2931,8 @@ class $$ChannelsTableTableManager
                 required String uuid,
                 required String label,
                 required String encryptionKey,
-                required String authenticationKey,
+                Value<String?> authPrivateKey = const Value.absent(),
+                required String authPublicKey,
                 Value<String?> peerOhEndpoint = const Value.absent(),
                 Value<String?> peerOhId = const Value.absent(),
                 Value<String?> peerOhPublicKey = const Value.absent(),
@@ -2867,7 +2942,8 @@ class $$ChannelsTableTableManager
                 uuid: uuid,
                 label: label,
                 encryptionKey: encryptionKey,
-                authenticationKey: authenticationKey,
+                authPrivateKey: authPrivateKey,
+                authPublicKey: authPublicKey,
                 peerOhEndpoint: peerOhEndpoint,
                 peerOhId: peerOhId,
                 peerOhPublicKey: peerOhPublicKey,

@@ -83,11 +83,17 @@ void main() async {
         // Both should have valid keypairs
         final testData = Uint8List.fromList([1, 2, 3]);
         expect(
-          aliceOH.keypair.verify(testData, aliceOH.keypair.sign(testData)),
+          await aliceOH.keypair.verify(
+            testData,
+            await aliceOH.keypair.sign(testData),
+          ),
           isTrue,
         );
         expect(
-          bobOH.keypair.verify(testData, bobOH.keypair.sign(testData)),
+          await bobOH.keypair.verify(
+            testData,
+            await bobOH.keypair.sign(testData),
+          ),
           isTrue,
         );
       },
@@ -95,7 +101,7 @@ void main() async {
     );
 
     test(
-      'Alice creates channel v2 with Bobs OH descriptor and sends message',
+      'Alice creates channel v3 with Bobs OH descriptor and sends message',
       () async {
         // Connect sequentially to avoid race on single-node
         await alice.connect();
@@ -115,12 +121,12 @@ void main() async {
         );
 
         // Alice creates a channel and attaches Bob's OH descriptor
-        final channel = Channel.generate('Alice-Bob Chat');
+        final channel = await Channel.generate('Alice-Bob Chat');
         final channelWithOH = channel.copyWith(peerOhDescriptor: bobDescriptor);
 
-        // Verify the QR JSON is v2
+        // Verify the QR JSON is v3
         final qrJson = channelWithOH.toJson();
-        expect(qrJson.contains('"v":2'), isTrue);
+        expect(qrJson.contains('"v":3'), isTrue);
         expect(qrJson.contains('"oh"'), isTrue);
 
         // Reconstruct from QR
@@ -162,7 +168,7 @@ void main() async {
         final bobOH = await bob.registerOutboundHandle();
 
         // 2. Bob creates channel + shares via QR (simulated)
-        final sharedChannel = Channel.generate('Shared Channel');
+        final sharedChannel = await Channel.generate('Shared Channel');
         final bobDescriptor = OHDescriptor(
           serverEndpoint: '127.0.0.1:$nodePort',
           handleId: bobOH.ohId,

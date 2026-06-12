@@ -46,10 +46,10 @@ class OutboundHandleRepository {
 
   /// Maps a persisted row back to an [OHRegistration] for restoring into
   /// the network client after an app restart.
-  OHRegistration toRegistration(db.OutboundHandle row) {
+  Future<OHRegistration> toRegistration(db.OutboundHandle row) async {
     return OHRegistration(
       ohId: HEX.decode(row.ohId),
-      keypair: OHKeypair.fromPrivateKeyBytes(
+      keypair: await OHKeypair.fromPrivateKeyBytes(
         Uint8List.fromList(row.keypairBytes),
       ),
       expiresAtMs: row.expiresAt.millisecondsSinceEpoch,
@@ -87,7 +87,7 @@ class OutboundHandleRepository {
   ) async {
     final existing = await getByChannelId(channelId);
     if (existing != null && existing.expiresAt.isAfter(DateTime.now())) {
-      final keypair = OHKeypair.fromPrivateKeyBytes(
+      final keypair = await OHKeypair.fromPrivateKeyBytes(
         Uint8List.fromList(existing.keypairBytes),
       );
       return OHDescriptor(

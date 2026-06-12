@@ -151,10 +151,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               return IconButton(
                 icon: const Icon(Icons.qr_code),
                 onPressed: () async {
+                  // QR v3 (MS03): only K_enc + public material — the channel
+                  // auth private key never leaves this device.
                   final map = <String, dynamic>{
                     'l': channel.label,
                     'k_enc': channel.encryptionKey,
-                    'k_auth': channel.authenticationKey,
+                    'k_auth_pub': channel.authPublicKey,
                   };
 
                   // Embed our OWN outbound handle so the scanning peer
@@ -169,10 +171,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
                   if (ownDescriptor != null) {
                     map['oh'] = ownDescriptor.toJsonMap();
-                    map['v'] = 2;
-                  } else {
-                    map['v'] = 1;
                   }
+                  map['v'] = 3;
 
                   final jsonString = jsonEncode(map);
 

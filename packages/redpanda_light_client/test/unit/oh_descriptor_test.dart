@@ -7,7 +7,7 @@ void main() {
       final descriptor = OHDescriptor(
         serverEndpoint: '192.168.1.1:59558',
         handleId: List.generate(20, (i) => i),
-        authPublicKey: List.generate(65, (i) => i),
+        authPublicKey: List.generate(32, (i) => i),
       );
 
       final json = descriptor.toJson();
@@ -22,7 +22,7 @@ void main() {
       final descriptor = OHDescriptor(
         serverEndpoint: 'localhost:9000',
         handleId: List.filled(20, 0xAB),
-        authPublicKey: List.filled(65, 0xCD),
+        authPublicKey: List.filled(32, 0xCD),
       );
 
       final map = descriptor.toJsonMap();
@@ -59,7 +59,7 @@ void main() {
       final map = {
         'ep': 'host:1234',
         'id': '0102030405', // 5 bytes, not 20
-        'pk': '04${'ab' * 64}', // 65 bytes
+        'pk': 'ab' * 32, // 32 bytes
       };
       expect(
         () => OHDescriptor.fromJsonMap(map),
@@ -71,7 +71,7 @@ void main() {
       final map = {
         'ep': 'host:1234',
         'id': 'ab' * 20, // 20 bytes OK
-        'pk': '0102030405', // 5 bytes, not 65
+        'pk': '0102030405', // 5 bytes, not 32
       };
       expect(
         () => OHDescriptor.fromJsonMap(map),

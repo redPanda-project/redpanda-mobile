@@ -71,7 +71,7 @@ void main() async {
     test(
       'a deposit is confirmed with OK before the response timeout',
       () async {
-        final sharedChannel = Channel.generate('MS02b OK');
+        final sharedChannel = await Channel.generate('MS02b OK');
         await setupExchange(sharedChannel);
 
         // sendMessage now awaits the FlaschenpostPutResponse (158). A return
@@ -95,7 +95,7 @@ void main() async {
     test(
       'an oversize item (> 64 KiB) is rejected with BAD_REQUEST',
       () async {
-        final sharedChannel = Channel.generate('MS02b Oversize');
+        final sharedChannel = await Channel.generate('MS02b Oversize');
         await setupExchange(sharedChannel);
 
         // 70_000 ASCII chars encrypt to > 64 KiB ciphertext.
@@ -118,14 +118,14 @@ void main() async {
     test(
       'a deposit to a non-local oh_id is accepted best-effort (OK)',
       () async {
-        final sharedChannel = Channel.generate('MS02b Unknown OH');
+        final sharedChannel = await Channel.generate('MS02b Unknown OH');
         await setupExchange(sharedChannel);
 
         // Point the channel at an oh_id not registered on this node. Per the
         // MS02b contract, OK means "deposited OR accepted for forwarding
         // toward the OH host node (best-effort)" — the sender must NOT see an
         // error for a recipient whose OH lives elsewhere.
-        final bogusChannel = Channel.generate('MS02b Bogus');
+        final bogusChannel = await Channel.generate('MS02b Bogus');
         alice.addChannelKeys(
           bogusChannel.id,
           bogusChannel.encryptionKey,
