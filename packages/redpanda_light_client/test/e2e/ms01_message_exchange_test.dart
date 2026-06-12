@@ -2,13 +2,13 @@
 @Retry(2)
 library;
 
-import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:pointycastle/export.dart' as pc;
 import 'package:test/test.dart';
 
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
+import 'package:redpanda_light_client/src/crypto/channel_message.dart';
+import 'package:redpanda_light_client/src/crypto/message_crypto_v3.dart';
 import 'package:redpanda_light_client/src/domain/channel.dart';
 import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
@@ -31,7 +31,7 @@ void main() async {
       await launcher.start();
 
       // Create Alice
-      final aliceKeys = KeyPair.generate();
+      final aliceKeys = await KeyPair.generate();
       alice = RedPandaLightClient(
         selfNodeId: NodeId.fromPublicKey(aliceKeys),
         selfKeys: aliceKeys,
@@ -39,7 +39,7 @@ void main() async {
       );
 
       // Create Bob
-      final bobKeys = KeyPair.generate();
+      final bobKeys = await KeyPair.generate();
       bob = RedPandaLightClient(
         selfNodeId: NodeId.fromPublicKey(bobKeys),
         selfKeys: bobKeys,
@@ -197,29 +197,25 @@ void main() async {
         );
         expect(messageId, isNotEmpty);
 
-        // 6. Simulate Bob receiving and decrypting
-        //    (Since wire protocol isn't ready, we test the crypto layer directly)
-        final encKey = Uint8List.fromList(aliceChannel.encryptionKey);
-        final plaintext = 'Secret message from Alice!';
-        final plaintextBytes = Uint8List.fromList(utf8.encode(plaintext));
-
-        // NOTE: Deterministic IV for test reproducibility only.
-        // Production code uses Random.secure() for IVs.
-        final iv = Uint8List(16);
-        for (var i = 0; i < 16; i++) {
-          iv[i] = i;
-        }
-
-        final cipher = pc.CTRStreamCipher(pc.AESEngine());
-        cipher.init(true, pc.ParametersWithIV(pc.KeyParameter(encKey), iv));
-        final ciphertext = cipher.process(plaintextBytes);
-
-        // Bob decrypts
-        final decipher = pc.CTRStreamCipher(pc.AESEngine());
-        decipher.init(false, pc.ParametersWithIV(pc.KeyParameter(encKey), iv));
-        final decrypted = decipher.process(ciphertext);
-
-        expect(utf8.decode(decrypted), equals(plaintext));
+        // 6. Simulate Bob receiving and decrypting via the v3 envelope
+        //    (AES-256-GCM, AAD = channel id — both sides derive the same id).
+        const plaintext = 'Secret message from Alice!';
+        final inner = ChannelMessage(
+          messageId: Uint8List.fromList(List<int>.generate(16, (i) => i)),
+          timestampMs: DateTime.now().millisecondsSinceEpoch,
+          content: plaintext,
+        );
+        final payload = await MessageCryptoV3.encrypt(
+          inner,
+          aliceChannel.encryptionKey,
+          aliceChannel.id,
+        );
+        final decoded = await MessageCryptoV3.decrypt(
+          payload,
+          sharedChannel.encryptionKey,
+          sharedChannel.id,
+        );
+        expect(decoded.content, equals(plaintext));
       },
       skip: jarAvailable ? null : 'RedPanda JAR not found',
     );

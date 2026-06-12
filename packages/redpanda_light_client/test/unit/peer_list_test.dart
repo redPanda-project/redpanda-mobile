@@ -20,7 +20,7 @@ void main() {
   late NodeId selfNodeId;
   late KeyPair selfKeys;
 
-  setUp(() {
+  setUp(() async {
     registerFallbackValue(SocketOption.tcpNoDelay);
     registerFallbackValue(Uint8List(0)); // Just in case
 
@@ -45,7 +45,7 @@ void main() {
     when(() => mockSocket.destroy()).thenReturn(null);
 
     // Use the KeyPair.generate() factory which creates a valid dummy pair
-    selfKeys = KeyPair.generate();
+    selfKeys = await KeyPair.generate();
     selfNodeId = NodeId(Uint8List(20)); // Dummy NodeId
   });
 
@@ -135,6 +135,9 @@ void main() {
 
     // We can just call the method directly
     activePeer.requestPeerList();
+
+    // Sends go through the async tx chain — give it a moment to flush.
+    await Future.delayed(const Duration(milliseconds: 50));
 
     // Capture what was sent to socket
     // verify(() => mockSocket.add(any())).called(greaterThan(0));

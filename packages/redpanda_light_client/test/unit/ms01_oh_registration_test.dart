@@ -14,8 +14,8 @@ void main() {
   group('MS01 AK2: OH Registration', () {
     late RedPandaLightClient client;
 
-    setUp(() {
-      final keys = KeyPair.generate();
+    setUp(() async {
+      final keys = await KeyPair.generate();
       client = RedPandaLightClient(
         selfNodeId: NodeId.fromPublicKey(keys),
         selfKeys: keys,
@@ -111,8 +111,8 @@ void main() {
   group('MS01 AK7: Background Polling', () {
     late RedPandaLightClient client;
 
-    setUp(() {
-      final keys = KeyPair.generate();
+    setUp(() async {
+      final keys = await KeyPair.generate();
       client = RedPandaLightClient(
         selfNodeId: NodeId.fromPublicKey(keys),
         selfKeys: keys,
@@ -159,8 +159,8 @@ void main() {
   group('MS01 AK8: incomingMessages stream', () {
     late RedPandaLightClient client;
 
-    setUp(() {
-      final keys = KeyPair.generate();
+    setUp(() async {
+      final keys = await KeyPair.generate();
       client = RedPandaLightClient(
         selfNodeId: NodeId.fromPublicKey(keys),
         selfKeys: keys,

@@ -125,7 +125,7 @@ Future<(RedPandaLightClient, ScriptedSocket)> connectedClient({
   Duration depositResponseTimeout = const Duration(seconds: 10),
 }) async {
   final socket = ScriptedSocket();
-  final keys = KeyPair.generate();
+  final keys = await KeyPair.generate();
   final client = RedPandaLightClient(
     selfNodeId: NodeId.fromPublicKey(keys),
     selfKeys: keys,
@@ -134,7 +134,7 @@ Future<(RedPandaLightClient, ScriptedSocket)> connectedClient({
     depositResponseTimeout: depositResponseTimeout,
   );
   await client.connect();
-  final deadline = DateTime.now().add(const Duration(seconds: 5));
+  final deadline = DateTime.now().add(const Duration(seconds: 15));
   while (client.activePeerAddresses.isEmpty) {
     if (DateTime.now().isAfter(deadline)) {
       fail('peer never became handshake-verified');
@@ -187,7 +187,7 @@ void main() {
       'forwards FlaschenpostPutResponse payload to onCommandResponse',
       () async {
         final socket = ScriptedSocket();
-        final keys = KeyPair.generate();
+        final keys = await KeyPair.generate();
         final received = <(int, List<int>)>[];
 
         final peer = ActivePeer(

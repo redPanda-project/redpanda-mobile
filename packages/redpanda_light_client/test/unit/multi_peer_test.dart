@@ -61,9 +61,9 @@ void main() {
       return MockSocket();
     }
 
-    setUp(() {
+    setUp(() async {
       connectionAttempts.clear();
-      final keys = KeyPair.generate();
+      final keys = await KeyPair.generate();
       client = RedPandaLightClient(
         selfNodeId: NodeId.fromPublicKey(keys),
         selfKeys: keys,
@@ -89,8 +89,8 @@ void main() {
       // Create client that fails connections initially
       int callCount = 0;
       client = RedPandaLightClient(
-        selfNodeId: NodeId.fromPublicKey(KeyPair.generate()),
-        selfKeys: KeyPair.generate(),
+        selfNodeId: NodeId.fromPublicKey(await KeyPair.generate()),
+        selfKeys: await KeyPair.generate(),
         seeds: ['localhost:1001'],
         socketFactory: (h, p) async {
           callCount++;

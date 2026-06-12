@@ -27,8 +27,8 @@ void main() {
   group('MS02: restoreOutboundHandle', () {
     late RedPandaLightClient client;
 
-    setUp(() {
-      final keys = KeyPair.generate();
+    setUp(() async {
+      final keys = await KeyPair.generate();
       client = RedPandaLightClient(
         selfNodeId: NodeId.fromPublicKey(keys),
         selfKeys: keys,
@@ -71,8 +71,8 @@ void main() {
   group('MS02: ackFetch / renewal without a connected peer', () {
     late RedPandaLightClient client;
 
-    setUp(() {
-      final keys = KeyPair.generate();
+    setUp(() async {
+      final keys = await KeyPair.generate();
       client = RedPandaLightClient(
         selfNodeId: NodeId.fromPublicKey(keys),
         selfKeys: keys,

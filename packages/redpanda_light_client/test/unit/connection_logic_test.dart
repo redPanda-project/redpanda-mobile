@@ -149,8 +149,8 @@ void main() {
     test('Fast Boot: Connects to top peers immediately on start', () async {
       // Logic: Constructor calls load() -> load calls _runConnectionCheck
       client = RedPandaLightClient(
-        selfNodeId: NodeId.fromPublicKey(KeyPair.generate()),
-        selfKeys: KeyPair.generate(),
+        selfNodeId: NodeId.fromPublicKey(await KeyPair.generate()),
+        selfKeys: await KeyPair.generate(),
         peerRepository: mockRepo,
         socketFactory: mockFactory,
         seeds: [], // No seeds, rely on repo
@@ -171,8 +171,8 @@ void main() {
     test('Max Connections: Does not exceed limit (5)', () async {
       // Start client
       client = RedPandaLightClient(
-        selfNodeId: NodeId.fromPublicKey(KeyPair.generate()),
-        selfKeys: KeyPair.generate(),
+        selfNodeId: NodeId.fromPublicKey(await KeyPair.generate()),
+        selfKeys: await KeyPair.generate(),
         peerRepository: mockRepo,
         socketFactory: mockFactory,
         seeds: [],
@@ -198,8 +198,8 @@ void main() {
       // We start client. It should eventually drop 1006 if it connected to it, or strictly pick 1001-1005.
 
       client = RedPandaLightClient(
-        selfNodeId: NodeId.fromPublicKey(KeyPair.generate()),
-        selfKeys: KeyPair.generate(),
+        selfNodeId: NodeId.fromPublicKey(await KeyPair.generate()),
+        selfKeys: await KeyPair.generate(),
         peerRepository: mockRepo,
         socketFactory: mockFactory,
         seeds: [],
@@ -229,8 +229,8 @@ void main() {
     test('Bad Internet: Stops trying if all connections fail', () async {
       // Use failing factory
       client = RedPandaLightClient(
-        selfNodeId: NodeId.fromPublicKey(KeyPair.generate()),
-        selfKeys: KeyPair.generate(),
+        selfNodeId: NodeId.fromPublicKey(await KeyPair.generate()),
+        selfKeys: await KeyPair.generate(),
         peerRepository: mockRepo,
         socketFactory: failingFactory,
         seeds: [],
@@ -259,8 +259,8 @@ void main() {
       mockRepo.setPeerScore('127.0.0.1:9999', 50);
 
       client = RedPandaLightClient(
-        selfNodeId: NodeId.fromPublicKey(KeyPair.generate()),
-        selfKeys: KeyPair.generate(),
+        selfNodeId: NodeId.fromPublicKey(await KeyPair.generate()),
+        selfKeys: await KeyPair.generate(),
         peerRepository: mockRepo,
         socketFactory: failingFactory, // Fails
         seeds: [],

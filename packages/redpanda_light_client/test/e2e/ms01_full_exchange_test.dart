@@ -26,14 +26,14 @@ void main() async {
       launcher = RedPandaNodeLauncher(port: nodePort);
       await launcher.start();
 
-      final aliceKeys = KeyPair.generate();
+      final aliceKeys = await KeyPair.generate();
       alice = RedPandaLightClient(
         selfNodeId: NodeId.fromPublicKey(aliceKeys),
         selfKeys: aliceKeys,
         seeds: ['127.0.0.1:$nodePort'],
       );
 
-      final bobKeys = KeyPair.generate();
+      final bobKeys = await KeyPair.generate();
       bob = RedPandaLightClient(
         selfNodeId: NodeId.fromPublicKey(bobKeys),
         selfKeys: bobKeys,

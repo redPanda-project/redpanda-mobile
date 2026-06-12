@@ -1,42 +1,45 @@
 import 'dart:typed_data';
-import 'dart:math' as math;
-import 'package:pointycastle/export.dart';
 
-/// Represents an Ed25519 or X25519 key pair.
-/// The RedPanda protocol primarily uses Ed25519 for identity and signing,
-/// and converts to X25519 for encryption (or uses separate keys, checking docs).
+import 'package:redpanda_light_client/src/crypto/crypto_utils.dart';
+
+/// The node identity of this light client (MS03): a dual keypair with strict
+/// key separation, mirroring the backend `NodeId`.
+///
+/// - **Signing**: Ed25519 — identity (KademliaId is derived from the verify
+///   key) and signatures.
+/// - **Encryption**: X25519 — Diffie-Hellman key exchange (TCP v23 session
+///   keys, garlic messages).
+///
+/// Public export (sent as `SEND_PUBLIC_KEY` payload):
+/// `[32 verifyKey][32 encryptionPubKey]` = 64 bytes.
 class KeyPair {
-  final ECPublicKey publicKey;
-  final ECPrivateKey? privateKey;
+  /// Public export length: 32-byte Ed25519 verify key + 32-byte X25519 key.
+  static const int publicKeyLength = 64;
 
-  KeyPair({required this.publicKey, this.privateKey});
+  final Ed25519KeyPairBytes signing;
+  final X25519KeyPairBytes encryption;
 
-  factory KeyPair.generate() {
-    final ecParams = ECDomainParameters('brainpoolp256r1');
-    final keyParams = ECKeyGeneratorParameters(ecParams);
+  KeyPair({required this.signing, required this.encryption});
 
-    final random = FortunaRandom();
-    // Use platform secure random to seed Fortuna
-    final secureRandom = math.Random.secure();
-    final seed = Uint8List.fromList(
-      List.generate(32, (_) => secureRandom.nextInt(256)),
-    );
-    random.seed(KeyParameter(seed));
-
-    final generator = ECKeyGenerator();
-    generator.init(ParametersWithRandom(keyParams, random));
-
-    final pair = generator.generateKeyPair();
-    return KeyPair(publicKey: pair.publicKey, privateKey: pair.privateKey);
+  /// Generates a new random identity.
+  ///
+  /// No HashCash grinding: the server only enforces the proof-of-work for
+  /// full-node identities, not for light clients, and the light-client
+  /// identity is ephemeral (regenerated per app run).
+  static Future<KeyPair> generate() async {
+    final signing = await CryptoUtils.generateSigningKeypair();
+    final encryption = await CryptoUtils.generateEncryptionKeypair();
+    return KeyPair(signing: signing, encryption: encryption);
   }
 
+  /// The 32-byte Ed25519 verify key (identity).
+  Uint8List get verifyKeyBytes => signing.publicKey;
+
+  /// The 64-byte public export `[verifyKey][encryptionPubKey]`.
   Uint8List get publicKeyBytes {
-    return publicKey.Q!.getEncoded(
-      false,
-    ); // false = uncompressed (0x04 + X + Y)
-  }
-
-  AsymmetricKeyPair<PublicKey, PrivateKey> asAsymmetricKeyPair() {
-    return AsymmetricKeyPair(publicKey, privateKey!);
+    final out = Uint8List(publicKeyLength);
+    out.setRange(0, 32, signing.publicKey);
+    out.setRange(32, 64, encryption.publicKey);
+    return out;
   }
 }
