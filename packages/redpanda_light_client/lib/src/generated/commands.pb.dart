@@ -716,10 +716,14 @@ class FlaschenpostPut extends $pb.GeneratedMessage {
   factory FlaschenpostPut({
     $core.List<$core.int>? content,
     $core.List<$core.int>? ohId,
+    $core.bool? wantResponse,
+    $core.int? hopCount,
   }) {
     final result = create();
     if (content != null) result.content = content;
     if (ohId != null) result.ohId = ohId;
+    if (wantResponse != null) result.wantResponse = wantResponse;
+    if (hopCount != null) result.hopCount = hopCount;
     return result;
   }
 
@@ -741,6 +745,8 @@ class FlaschenpostPut extends $pb.GeneratedMessage {
         1, _omitFieldNames ? '' : 'content', $pb.PbFieldType.OY)
     ..a<$core.List<$core.int>>(
         2, _omitFieldNames ? '' : 'ohId', $pb.PbFieldType.OY)
+    ..aOB(3, _omitFieldNames ? '' : 'wantResponse')
+    ..a<$core.int>(4, _omitFieldNames ? '' : 'hopCount', $pb.PbFieldType.OU3)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -779,6 +785,92 @@ class FlaschenpostPut extends $pb.GeneratedMessage {
   $core.bool hasOhId() => $_has(1);
   @$pb.TagNumber(2)
   void clearOhId() => $_clearField(2);
+
+  /// MS02b: if set by a directly connected light client, the node answers
+  /// with FlaschenpostPutResponse (command 158). Full nodes never set this.
+  @$pb.TagNumber(3)
+  $core.bool get wantResponse => $_getBF(2);
+  @$pb.TagNumber(3)
+  set wantResponse($core.bool value) => $_setBool(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasWantResponse() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearWantResponse() => $_clearField(3);
+
+  /// MS02b: node-to-node forward counter (loop protection).
+  /// Light clients never set this.
+  @$pb.TagNumber(4)
+  $core.int get hopCount => $_getIZ(3);
+  @$pb.TagNumber(4)
+  set hopCount($core.int value) => $_setUnsignedInt32(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasHopCount() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearHopCount() => $_clearField(4);
+}
+
+// --- FlaschenpostPutResponse (MS02b) ---
+/// Optional response to a FlaschenpostPut deposit (command 158). Only sent to
+/// light clients that set FlaschenpostPut.want_response. OK means deposited
+/// or accepted for best-effort forwarding toward the OH host node.
+class FlaschenpostPutResponse extends $pb.GeneratedMessage {
+  factory FlaschenpostPutResponse({
+    Status? status,
+    $fixnum.Int64? serverTimeMs,
+  }) {
+    final result = create();
+    if (status != null) result.status = status;
+    if (serverTimeMs != null) result.serverTimeMs = serverTimeMs;
+    return result;
+  }
+
+  FlaschenpostPutResponse._();
+
+  factory FlaschenpostPutResponse.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'FlaschenpostPutResponse',
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
+      createEmptyInstance: create)
+    ..e<Status>(1, _omitFieldNames ? '' : 'status', $pb.PbFieldType.OE,
+        defaultOrMaker: Status.STATUS_UNSPECIFIED,
+        valueOf: Status.valueOf,
+        enumValues: Status.values)
+    ..aInt64(2, _omitFieldNames ? '' : 'serverTimeMs')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  FlaschenpostPutResponse clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  FlaschenpostPutResponse copyWith(
+          void Function(FlaschenpostPutResponse) updates) =>
+      super.copyWith((message) => updates(message as FlaschenpostPutResponse))
+          as FlaschenpostPutResponse;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static FlaschenpostPutResponse create() => FlaschenpostPutResponse._();
+  @$core.override
+  FlaschenpostPutResponse createEmptyInstance() => create();
+  static FlaschenpostPutResponse? _defaultInstance;
+  @$core.pragma('dart2js:noInline')
+  static FlaschenpostPutResponse getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<FlaschenpostPutResponse>(create);
+
+  @$pb.TagNumber(1)
+  Status get status => $_getN(0);
+  @$pb.TagNumber(1)
+  set status(Status value) => $_setField(1, value);
+
+  @$pb.TagNumber(2)
+  $fixnum.Int64 get serverTimeMs => $_getI64(1);
+  @$pb.TagNumber(2)
+  set serverTimeMs($fixnum.Int64 value) => $_setInt64(1, value);
 }
 
 // --- Status enum for OH operations ---

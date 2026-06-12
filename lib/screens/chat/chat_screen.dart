@@ -9,6 +9,8 @@ import 'package:redpanda/repositories/outbound_handle_repository.dart';
 import 'package:redpanda/screens/chat/share_qr_dialog.dart';
 import 'package:redpanda/services/message_sync_service.dart';
 import 'package:redpanda/shared/providers.dart';
+import 'package:redpanda_light_client/redpanda_light_client.dart'
+    show DepositException;
 
 class ChatScreen extends ConsumerStatefulWidget {
   final String peerUuid;
@@ -44,13 +46,35 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     // Send via network. On failure the message stays pending and the
     // SendRetryQueue re-sends it with backoff, reusing the same network
-    // message id so retries deduplicate at the receiver.
+    // message id so retries deduplicate at the receiver. MS02b: the node now
+    // reports deposit rejections (FlaschenpostPutResponse) — surface those to
+    // the user, analogous to the mailbox-overflow warning.
     try {
       final usedId = await ref
           .read(redPandaClientProvider)
           .sendMessage(widget.peerUuid, content);
       await messages.setNetworkMessageId(rowId, usedId);
       await messages.updateMessageStatus(rowId, MessageStatus.sent);
+    } on DepositException catch (e) {
+      if (e.isBadRequest) {
+        // Over the per-item size limit — retrying can never succeed.
+        await messages.updateMessageStatus(rowId, MessageStatus.failed);
+      } else {
+        await messages.markRetryAttempt(rowId);
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              e.isBadRequest
+                  ? 'Message too large to deliver.'
+                  : e.isQuotaExceeded
+                  ? "Recipient's mailbox is full — will retry later."
+                  : 'Message could not be delivered yet — will retry later.',
+            ),
+          ),
+        );
+      }
     } catch (_) {
       await messages.markRetryAttempt(rowId);
     }

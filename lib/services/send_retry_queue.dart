@@ -21,6 +21,12 @@ class SendRetryQueue {
   static const Duration checkInterval = Duration(seconds: 60);
   static const Duration maxBackoff = Duration(minutes: 30);
 
+  /// retryCount increment when the recipient mailbox is full
+  /// (QUOTA_EXCEEDED, reject-new). Jumps the next backoff window to
+  /// >= 2^3 = 8 minutes — retrying sooner cannot succeed until the
+  /// recipient fetched and acknowledged their mailbox.
+  static const int quotaExceededPenalty = 3;
+
   Timer? _timer;
   bool _passInProgress = false;
 
@@ -85,6 +91,24 @@ class SendRetryQueue {
             await _messages.setNetworkMessageId(msg.id, usedId);
           }
           await _messages.updateMessageStatus(msg.id, MessageStatus.sent);
+        } on DepositException catch (e) {
+          // MS02b: the node reported why the deposit was rejected.
+          if (e.isBadRequest) {
+            // Item exceeds the per-item size limit (64 KiB) — re-sending the
+            // same payload can never succeed.
+            await _messages.updateMessageStatus(msg.id, MessageStatus.failed);
+          } else if (e.isQuotaExceeded) {
+            // Recipient mailbox full (reject-new): back off harder than for
+            // transient network failures.
+            await _messages.markRetryAttempt(
+              msg.id,
+              penalty: quotaExceededPenalty,
+            );
+          } else {
+            // e.g. NOT_FOUND (hop limit) — normal backoff, routing may
+            // recover.
+            await _messages.markRetryAttempt(msg.id);
+          }
         } catch (_) {
           await _messages.markRetryAttempt(msg.id);
         }

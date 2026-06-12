@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
@@ -13,6 +14,7 @@ import 'package:redpanda_light_client/src/logging/logger.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
+import 'package:redpanda_light_client/src/domain/send_exceptions.dart';
 import 'package:redpanda_light_client/src/generated/commands.pb.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
@@ -76,6 +78,10 @@ class RedPandaLightClient implements RedPandaClient {
   bool get isEncryptionActive => _peers.values.any((p) => p.isEncryptionActive);
   bool get isPongSent => _peers.values.any((p) => p.isPongSent);
 
+  /// How long sendMessage waits for the deposit response (command 158)
+  /// before falling back to fire-and-forget semantics. Overridable for tests.
+  final Duration depositResponseTimeout;
+
   RedPandaLightClient({
     required this.selfNodeId,
     required this.selfKeys,
@@ -83,6 +89,7 @@ class RedPandaLightClient implements RedPandaClient {
     SocketFactory? socketFactory,
     // Injectable repository for testing? For now we create it.
     PeerRepository? peerRepository,
+    this.depositResponseTimeout = const Duration(seconds: 10),
   }) : _socketFactory = socketFactory ?? ((h, p) => Socket.connect(h, p)),
        _peerRepository = peerRepository ?? InMemoryPeerRepository() {
     _peerRepository.load().then((_) {
@@ -544,6 +551,7 @@ class RedPandaLightClient implements RedPandaClient {
     _peers.clear();
     _registeredOHs.clear();
     _pendingResponses.clear();
+    _pendingPutResponses.clear();
     await _incomingMessageController.close();
     await _ohMailboxUpdateController.close();
     _updateStatus(ConnectionStatus.disconnected);
@@ -572,7 +580,22 @@ class RedPandaLightClient implements RedPandaClient {
   /// Pending response completers keyed by command byte.
   final Map<int, Completer<List<int>>> _pendingResponses = {};
 
+  /// Pending FlaschenpostPutResponse (158) completers. Deposits can overlap
+  /// (UI send + retry pass), and the node answers them in order on the same
+  /// connection, so these are matched FIFO instead of by command byte.
+  final Queue<Completer<List<int>>> _pendingPutResponses = Queue();
+
   void _handleCommandResponse(int command, List<int> payload) {
+    if (command == 158) {
+      while (_pendingPutResponses.isNotEmpty) {
+        final completer = _pendingPutResponses.removeFirst();
+        if (!completer.isCompleted) {
+          completer.complete(payload);
+          break;
+        }
+      }
+      return;
+    }
     final completer = _pendingResponses.remove(command);
     if (completer != null && !completer.isCompleted) {
       completer.complete(payload);
@@ -670,12 +693,18 @@ class RedPandaLightClient implements RedPandaClient {
     final payload = MessageCryptoV2.encrypt(channelMessage, encKey);
 
     // Build FlaschenpostPut with target OH mailbox id for direct routing.
+    // want_response (MS02b) opts into a FlaschenpostPutResponse (command 158)
+    // from the directly connected node, so deposit rejections surface here
+    // instead of failing silently.
     final peerOhId = _channelPeerOhIds[channelId];
     final flaschenpost = FlaschenpostPut()
       ..content = payload
-      ..ohId = peerOhId ?? Uint8List(0);
+      ..ohId = peerOhId ?? Uint8List(0)
+      ..wantResponse = true;
 
-    // Send to a connected peer (best available).
+    // Send to a connected peer (best available). The node deposits locally or
+    // forwards toward the OH host node itself (MS02b, max 3 hops), so any
+    // connected Full Node works.
     final activePeer = _peers.values
         .where((p) => p.isHandshakeVerified)
         .firstOrNull;
@@ -685,11 +714,37 @@ class RedPandaLightClient implements RedPandaClient {
       throw StateError('sendMessage: no active peer available');
     }
 
+    final completer = Completer<List<int>>();
+    _pendingPutResponses.add(completer);
+
     final buffer = flaschenpost.writeToBuffer();
     RpLog.debug(
       'RedPandaLightClient: sendMessage() serialized ${buffer.length} bytes for channel $channelId',
     );
     activePeer.sendCommand(141, Uint8List.fromList(buffer));
+
+    final List<int> responseBytes;
+    try {
+      responseBytes = await completer.future.timeout(depositResponseTimeout);
+    } on TimeoutException {
+      _pendingPutResponses.remove(completer);
+      // No response — pre-MS02b nodes never answer deposits. Fall back to the
+      // legacy fire-and-forget semantics and treat the message as handed off;
+      // a genuinely lost deposit is re-sent and deduplicated by message_id.
+      RpLog.info(
+        'RedPandaLightClient: sendMessage() no deposit response within '
+        '${depositResponseTimeout.inSeconds}s, assuming accepted (legacy node?)',
+      );
+      return messageIdHex;
+    }
+
+    final response = FlaschenpostPutResponse.fromBuffer(responseBytes);
+    if (response.status != Status.OK) {
+      RpLog.info(
+        'RedPandaLightClient: sendMessage() deposit rejected: ${response.status}',
+      );
+      throw DepositException(response.status.name);
+    }
 
     return messageIdHex;
   }
@@ -711,12 +766,53 @@ class RedPandaLightClient implements RedPandaClient {
         .where((p) => p.isHandshakeVerified)
         .firstOrNull;
 
+    var expiresAtMs = expiresAt.millisecondsSinceEpoch;
     if (activePeer != null) {
       final buffer = request.writeToBuffer();
       RpLog.debug(
         'RedPandaLightClient: registerOutboundHandle() serialized ${buffer.length} bytes',
       );
+
+      // Await the RegisterOhResponse (command 151). The node may reject with
+      // RATE_LIMIT (MS02b: max 5 registrations/min per connection) — surface
+      // that as a typed error instead of returning a dead registration. On
+      // timeout, keep the legacy optimistic behavior (the handle is returned
+      // and renewed/confirmed later).
+      final completer = Completer<List<int>>();
+      _pendingResponses[151] = completer;
       activePeer.sendCommand(150, Uint8List.fromList(buffer));
+
+      List<int>? responseBytes;
+      try {
+        responseBytes = await completer.future.timeout(
+          const Duration(seconds: 10),
+        );
+      } on TimeoutException {
+        _pendingResponses.remove(151);
+        RpLog.info(
+          'RedPandaLightClient: registerOutboundHandle() no response within 10s, '
+          'returning unconfirmed registration',
+        );
+      }
+
+      if (responseBytes != null) {
+        final response = RegisterOhResponse.fromBuffer(responseBytes);
+        if (response.status == Status.RATE_LIMIT) {
+          RpLog.info(
+            'RedPandaLightClient: registerOutboundHandle() rate-limited',
+          );
+          throw RateLimitException();
+        }
+        if (response.status == Status.OK) {
+          // The server may clamp the requested TTL.
+          expiresAtMs = response.expiresAtMs.toInt();
+        } else {
+          RpLog.info(
+            'RedPandaLightClient: registerOutboundHandle() non-OK status: '
+            '${response.status}',
+          );
+        }
+      }
     } else {
       RpLog.info(
         'RedPandaLightClient: registerOutboundHandle() no active peer available',
@@ -726,7 +822,7 @@ class RedPandaLightClient implements RedPandaClient {
     final registration = OHRegistration(
       ohId: ohId.toList(),
       keypair: keypair,
-      expiresAtMs: expiresAt.millisecondsSinceEpoch,
+      expiresAtMs: expiresAtMs,
       channelId: channelId,
       serverEndpoint: activePeer?.address,
     );
@@ -803,6 +899,12 @@ class RedPandaLightClient implements RedPandaClient {
     }
 
     final response = RegisterOhResponse.fromBuffer(responseBytes);
+    if (response.status == Status.RATE_LIMIT) {
+      // MS02b: max 5 registrations/min per connection. The renewal timer
+      // fires every 5 minutes, so simply failing this cycle is backoff enough.
+      RpLog.info('RedPandaLightClient: renewOutboundHandle() rate-limited');
+      return false;
+    }
     if (response.status != Status.OK) {
       RpLog.info(
         'RedPandaLightClient: renewOutboundHandle() non-OK status: ${response.status}',

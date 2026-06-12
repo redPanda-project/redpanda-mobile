@@ -10,6 +10,7 @@ import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
+import 'package:redpanda_light_client/src/domain/send_exceptions.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
@@ -128,7 +129,9 @@ class RedPandaIsolateClient implements RedPandaClient {
     } else if (event is EventOhRegisterFailed) {
       final completer = _pendingOhRegistrations.remove(event.requestId);
       if (completer != null && !completer.isCompleted) {
-        completer.completeError(StateError(event.error));
+        completer.completeError(
+          event.rateLimited ? RateLimitException() : StateError(event.error),
+        );
       }
     } else if (event is EventMessageSent) {
       final completer = _pendingSends.remove(event.requestId);
@@ -138,7 +141,12 @@ class RedPandaIsolateClient implements RedPandaClient {
     } else if (event is EventMessageSendFailed) {
       final completer = _pendingSends.remove(event.requestId);
       if (completer != null && !completer.isCompleted) {
-        completer.completeError(StateError(event.error));
+        final statusCode = event.statusCode;
+        completer.completeError(
+          statusCode != null
+              ? DepositException(statusCode)
+              : StateError(event.error),
+        );
       }
     } else if (event is EventOhMailboxUpdate) {
       _ohMailboxUpdateController.add(
@@ -391,6 +399,14 @@ void _isolateEntryPoint(SendPort mainSendPort) {
             messageId: message.messageId,
           );
           mainSendPort.send(EventMessageSent(message.requestId, messageId));
+        } on DepositException catch (e) {
+          mainSendPort.send(
+            EventMessageSendFailed(
+              message.requestId,
+              e.toString(),
+              statusCode: e.statusName,
+            ),
+          );
         } catch (e) {
           mainSendPort.send(
             EventMessageSendFailed(message.requestId, e.toString()),
@@ -409,6 +425,14 @@ void _isolateEntryPoint(SendPort mainSendPort) {
               expiresAtMs: registration.expiresAtMs,
               channelId: registration.channelId,
               serverEndpoint: registration.serverEndpoint,
+            ),
+          );
+        } on RateLimitException catch (e) {
+          mainSendPort.send(
+            EventOhRegisterFailed(
+              message.requestId,
+              e.toString(),
+              rateLimited: true,
             ),
           );
         } catch (e) {

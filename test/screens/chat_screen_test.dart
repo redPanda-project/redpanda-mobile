@@ -239,4 +239,49 @@ void main() {
       await unmount(tester);
     });
   });
+
+  group('ChatScreen deposit rejections (MS02b)', () {
+    testWidgets('QUOTA_EXCEEDED keeps pending and warns the user', (
+      tester,
+    ) async {
+      client.sendError = DepositException(DepositStatus.quotaExceeded);
+
+      await tester.pumpWidget(app());
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextField), 'Mailbox full');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      await tester.pump();
+
+      final row = await db.select(db.messages).getSingle();
+      expect(row.status, equals(MessageStatus.pending));
+      expect(
+        find.text("Recipient's mailbox is full — will retry later."),
+        findsOneWidget,
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('BAD_REQUEST marks the message failed and warns the user', (
+      tester,
+    ) async {
+      client.sendError = DepositException(DepositStatus.badRequest);
+
+      await tester.pumpWidget(app());
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextField), 'Too large');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      await tester.pump();
+
+      final row = await db.select(db.messages).getSingle();
+      expect(row.status, equals(MessageStatus.failed));
+      expect(find.text('Message too large to deliver.'), findsOneWidget);
+
+      await unmount(tester);
+    });
+  });
 }

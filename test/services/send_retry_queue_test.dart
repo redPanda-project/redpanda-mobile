@@ -3,6 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:redpanda/database/database.dart';
 import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/services/send_retry_queue.dart';
+import 'package:redpanda_light_client/redpanda_light_client.dart'
+    show DepositException, DepositStatus;
 
 import '../helpers/fake_redpanda_client.dart';
 import '../helpers/test_database.dart';
@@ -133,6 +135,41 @@ void main() {
       expect(client.sentMessages.single.messageId, equals('stable-net-id'));
       // The id is unchanged after the send.
       expect((await messageById(id)).messageId, equals('stable-net-id'));
+    });
+
+    test('BAD_REQUEST (item too large) marks the message failed', () async {
+      // MS02b: re-sending an oversize payload can never succeed.
+      client.sendError = DepositException(DepositStatus.badRequest);
+      final id = await insertPending();
+
+      await queue.retryPending();
+
+      expect((await messageById(id)).status, equals(MessageStatus.failed));
+    });
+
+    test('QUOTA_EXCEEDED keeps pending with a widened backoff', () async {
+      // MS02b: recipient mailbox is full (reject-new) — back off harder.
+      client.sendError = DepositException(DepositStatus.quotaExceeded);
+      final id = await insertPending();
+
+      await queue.retryPending();
+
+      final msg = await messageById(id);
+      expect(msg.status, equals(MessageStatus.pending));
+      expect(msg.retryCount, equals(SendRetryQueue.quotaExceededPenalty));
+      expect(msg.lastRetryAt, isNotNull);
+    });
+
+    test('NOT_FOUND keeps pending with the normal backoff', () async {
+      // MS02b: not deliverable right now (hop limit) — routing may recover.
+      client.sendError = DepositException(DepositStatus.notFound);
+      final id = await insertPending();
+
+      await queue.retryPending();
+
+      final msg = await messageById(id);
+      expect(msg.status, equals(MessageStatus.pending));
+      expect(msg.retryCount, equals(1));
     });
 
     test('does not touch sent or failed messages', () async {

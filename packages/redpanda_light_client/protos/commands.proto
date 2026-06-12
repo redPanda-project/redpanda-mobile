@@ -60,6 +60,25 @@ message JobAck {
 message FlaschenpostPut {
     bytes content = 1;
     bytes oh_id = 2;    // 20 bytes — target OH mailbox KademliaId
+    // MS02b: if set by a directly connected light client, the node answers with
+    // FlaschenpostPutResponse (command 158). Full nodes never set this.
+    bool want_response = 3;
+    // MS02b: number of node-to-node forwards this packet has taken. Incremented on every
+    // forward; packets at the hop limit are dropped instead of forwarded (loop protection).
+    // Light clients never set this.
+    uint32 hop_count = 4;
+}
+
+// MS02b: optional response to a FlaschenpostPut deposit (command 158). Only sent to light
+// clients that set FlaschenpostPut.want_response, so existing clients never see it.
+//   OK             — deposited into a locally registered OH, or accepted for best-effort
+//                    forwarding toward the OH host node
+//   NOT_FOUND      — oh_id not registered here and forwarding not possible (hop limit)
+//   QUOTA_EXCEEDED — mailbox full (item cap or byte quota); deposit rejected, nothing displaced
+//   BAD_REQUEST    — item exceeds the per-item size limit
+message FlaschenpostPutResponse {
+    Status status = 1;
+    int64 server_time_ms = 2;
 }
 
 // --- Outbound Handle (OH) Registration ---
