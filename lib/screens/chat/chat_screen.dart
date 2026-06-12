@@ -124,7 +124,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         final peerOhId = channel.peerOhId != null
             ? HEX.decode(channel.peerOhId!)
             : null;
-        client.addChannelKeys(channel.uuid, encKey, peerOhId: peerOhId);
+        client.addChannelKeys(
+          channel.uuid,
+          encKey,
+          peerOhId: peerOhId,
+          // The creator is the device holding the channel auth private key;
+          // a device that joined via QR code holds only the public key.
+          isChannelCreator: channel.authPrivateKey != null,
+          ratchetState: channel.ratchetState,
+        );
       }
     });
 

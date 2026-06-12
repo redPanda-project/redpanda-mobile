@@ -32,6 +32,11 @@ class Channels extends Table {
   // Metadata
   DateTimeColumn get lastSeen => dateTime().nullable()(); // Last message time?
 
+  // MS03b: serialized channel ratchet state (RatchetSession.toJson). Key
+  // material — lives only in this on-device database and is never exported
+  // in the QR code or any backup that leaves the device.
+  TextColumn get ratchetState => text().nullable()();
+
   @override
   Set<Column> get primaryKey => {uuid};
 }
@@ -101,7 +106,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 9;
+  int get schemaVersion => 10;
 
   @override
   MigrationStrategy get migration {
@@ -190,6 +195,13 @@ class AppDatabase extends _$AppDatabase {
           await m.createTable(messages);
           await m.createTable(outboundHandles);
           await m.createIndex(idxMessagesConvMessageId);
+        }
+        if (from == 9 && to >= 10) {
+          // MS03b: per-channel ratchet state — non-destructive. Only DBs
+          // already at v9 need the new column; older DBs received it through
+          // the v9 table recreation above (createTable uses the current
+          // schema).
+          await m.addColumn(channels, channels.ratchetState);
         }
       },
     );

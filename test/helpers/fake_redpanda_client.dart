@@ -15,6 +15,10 @@ class FakeRedPandaClient implements RedPandaClient {
   sentMessages = [];
   final List<OHRegistration> restoredHandles = [];
   final Map<String, List<int>> channelKeys = {};
+  final Map<String, bool> channelCreatorRoles = {};
+  final Map<String, String> restoredRatchetStates = {};
+  final ratchetStateController =
+      StreamController<RatchetStateUpdate>.broadcast();
 
   @override
   Future<String> sendMessage(
@@ -43,9 +47,19 @@ class FakeRedPandaClient implements RedPandaClient {
     String channelId,
     List<int> encryptionKey, {
     List<int>? peerOhId,
+    required bool isChannelCreator,
+    String? ratchetState,
   }) {
     channelKeys[channelId] = encryptionKey;
+    channelCreatorRoles[channelId] = isChannelCreator;
+    if (ratchetState != null) {
+      restoredRatchetStates[channelId] = ratchetState;
+    }
   }
+
+  @override
+  Stream<RatchetStateUpdate> get ratchetStateUpdates =>
+      ratchetStateController.stream;
 
   @override
   Stream<DecryptedMessage> get incomingMessages => incomingController.stream;
@@ -70,6 +84,7 @@ class FakeRedPandaClient implements RedPandaClient {
   Future<void> disconnect() async {
     await incomingController.close();
     await updateController.close();
+    await ratchetStateController.close();
   }
 
   @override

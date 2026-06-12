@@ -55,7 +55,22 @@ class CmdAddChannelKeys extends IsolateCommand {
   final String channelId;
   final List<int> encryptionKey;
   final List<int>? peerOhId;
-  CmdAddChannelKeys(this.channelId, this.encryptionKey, {this.peerOhId});
+
+  /// MS03b: true only on the device that generated the channel; decides the
+  /// channel ratchet role.
+  final bool isChannelCreator;
+
+  /// MS03b: previously persisted ratchet state (JSON) to restore, or null to
+  /// initialize a fresh ratchet from the channel key.
+  final String? ratchetState;
+
+  CmdAddChannelKeys(
+    this.channelId,
+    this.encryptionKey, {
+    this.peerOhId,
+    required this.isChannelCreator,
+    this.ratchetState,
+  });
 }
 
 /// Re-activates a persisted OH registration inside the isolate so it gets
@@ -157,6 +172,15 @@ class EventOhRegisterFailed extends IsolateEvent {
   /// the main side rebuilds a RateLimitException from it.
   final bool rateLimited;
   EventOhRegisterFailed(this.requestId, this.error, {this.rateLimited = false});
+}
+
+/// Advanced channel ratchet state (MS03b) forwarded from the isolate so the
+/// main isolate can persist it on-device. Carries the state as its JSON
+/// serialization to stay isolate-sendable.
+class EventRatchetStateUpdate extends IsolateEvent {
+  final String channelId;
+  final String stateJson;
+  EventRatchetStateUpdate({required this.channelId, required this.stateJson});
 }
 
 /// OH state change (cursor advanced, renewal, mailbox overflow) forwarded

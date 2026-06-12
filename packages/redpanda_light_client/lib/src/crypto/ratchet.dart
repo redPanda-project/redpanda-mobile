@@ -484,10 +484,7 @@ class _Mutation {
     recvCount = 0;
     remotePublicKey = Uint8List.fromList(newRemotePublicKey);
 
-    final dhRecv = await CryptoUtils.x25519(
-      ownPrivateKey,
-      newRemotePublicKey,
-    );
+    final dhRecv = await CryptoUtils.x25519(ownPrivateKey, newRemotePublicKey);
     final (rootAfterRecv, recvChain) = await RatchetSession._kdfRoot(
       rootKey,
       dhRecv,
@@ -497,10 +494,7 @@ class _Mutation {
     final fresh = await CryptoUtils.generateEncryptionKeypair();
     ownPrivateKey = fresh.privateKey;
     ownPublicKey = fresh.publicKey;
-    final dhSend = await CryptoUtils.x25519(
-      ownPrivateKey,
-      newRemotePublicKey,
-    );
+    final dhSend = await CryptoUtils.x25519(ownPrivateKey, newRemotePublicKey);
     final (rootAfterSend, sendChain) = await RatchetSession._kdfRoot(
       rootAfterRecv,
       dhSend,

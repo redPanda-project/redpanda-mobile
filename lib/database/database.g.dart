@@ -417,6 +417,17 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
     type: DriftSqlType.dateTime,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _ratchetStateMeta = const VerificationMeta(
+    'ratchetState',
+  );
+  @override
+  late final GeneratedColumn<String> ratchetState = GeneratedColumn<String>(
+    'ratchet_state',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     uuid,
@@ -428,6 +439,7 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
     peerOhId,
     peerOhPublicKey,
     lastSeen,
+    ratchetState,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -518,6 +530,15 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
         lastSeen.isAcceptableOrUnknown(data['last_seen']!, _lastSeenMeta),
       );
     }
+    if (data.containsKey('ratchet_state')) {
+      context.handle(
+        _ratchetStateMeta,
+        ratchetState.isAcceptableOrUnknown(
+          data['ratchet_state']!,
+          _ratchetStateMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -563,6 +584,10 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
         DriftSqlType.dateTime,
         data['${effectivePrefix}last_seen'],
       ),
+      ratchetState: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}ratchet_state'],
+      ),
     );
   }
 
@@ -582,6 +607,7 @@ class Channel extends DataClass implements Insertable<Channel> {
   final String? peerOhId;
   final String? peerOhPublicKey;
   final DateTime? lastSeen;
+  final String? ratchetState;
   const Channel({
     required this.uuid,
     required this.label,
@@ -592,6 +618,7 @@ class Channel extends DataClass implements Insertable<Channel> {
     this.peerOhId,
     this.peerOhPublicKey,
     this.lastSeen,
+    this.ratchetState,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -614,6 +641,9 @@ class Channel extends DataClass implements Insertable<Channel> {
     }
     if (!nullToAbsent || lastSeen != null) {
       map['last_seen'] = Variable<DateTime>(lastSeen);
+    }
+    if (!nullToAbsent || ratchetState != null) {
+      map['ratchet_state'] = Variable<String>(ratchetState);
     }
     return map;
   }
@@ -639,6 +669,9 @@ class Channel extends DataClass implements Insertable<Channel> {
       lastSeen: lastSeen == null && nullToAbsent
           ? const Value.absent()
           : Value(lastSeen),
+      ratchetState: ratchetState == null && nullToAbsent
+          ? const Value.absent()
+          : Value(ratchetState),
     );
   }
 
@@ -657,6 +690,7 @@ class Channel extends DataClass implements Insertable<Channel> {
       peerOhId: serializer.fromJson<String?>(json['peerOhId']),
       peerOhPublicKey: serializer.fromJson<String?>(json['peerOhPublicKey']),
       lastSeen: serializer.fromJson<DateTime?>(json['lastSeen']),
+      ratchetState: serializer.fromJson<String?>(json['ratchetState']),
     );
   }
   @override
@@ -672,6 +706,7 @@ class Channel extends DataClass implements Insertable<Channel> {
       'peerOhId': serializer.toJson<String?>(peerOhId),
       'peerOhPublicKey': serializer.toJson<String?>(peerOhPublicKey),
       'lastSeen': serializer.toJson<DateTime?>(lastSeen),
+      'ratchetState': serializer.toJson<String?>(ratchetState),
     };
   }
 
@@ -685,6 +720,7 @@ class Channel extends DataClass implements Insertable<Channel> {
     Value<String?> peerOhId = const Value.absent(),
     Value<String?> peerOhPublicKey = const Value.absent(),
     Value<DateTime?> lastSeen = const Value.absent(),
+    Value<String?> ratchetState = const Value.absent(),
   }) => Channel(
     uuid: uuid ?? this.uuid,
     label: label ?? this.label,
@@ -701,6 +737,7 @@ class Channel extends DataClass implements Insertable<Channel> {
         ? peerOhPublicKey.value
         : this.peerOhPublicKey,
     lastSeen: lastSeen.present ? lastSeen.value : this.lastSeen,
+    ratchetState: ratchetState.present ? ratchetState.value : this.ratchetState,
   );
   Channel copyWithCompanion(ChannelsCompanion data) {
     return Channel(
@@ -723,6 +760,9 @@ class Channel extends DataClass implements Insertable<Channel> {
           ? data.peerOhPublicKey.value
           : this.peerOhPublicKey,
       lastSeen: data.lastSeen.present ? data.lastSeen.value : this.lastSeen,
+      ratchetState: data.ratchetState.present
+          ? data.ratchetState.value
+          : this.ratchetState,
     );
   }
 
@@ -737,7 +777,8 @@ class Channel extends DataClass implements Insertable<Channel> {
           ..write('peerOhEndpoint: $peerOhEndpoint, ')
           ..write('peerOhId: $peerOhId, ')
           ..write('peerOhPublicKey: $peerOhPublicKey, ')
-          ..write('lastSeen: $lastSeen')
+          ..write('lastSeen: $lastSeen, ')
+          ..write('ratchetState: $ratchetState')
           ..write(')'))
         .toString();
   }
@@ -753,6 +794,7 @@ class Channel extends DataClass implements Insertable<Channel> {
     peerOhId,
     peerOhPublicKey,
     lastSeen,
+    ratchetState,
   );
   @override
   bool operator ==(Object other) =>
@@ -766,7 +808,8 @@ class Channel extends DataClass implements Insertable<Channel> {
           other.peerOhEndpoint == this.peerOhEndpoint &&
           other.peerOhId == this.peerOhId &&
           other.peerOhPublicKey == this.peerOhPublicKey &&
-          other.lastSeen == this.lastSeen);
+          other.lastSeen == this.lastSeen &&
+          other.ratchetState == this.ratchetState);
 }
 
 class ChannelsCompanion extends UpdateCompanion<Channel> {
@@ -779,6 +822,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
   final Value<String?> peerOhId;
   final Value<String?> peerOhPublicKey;
   final Value<DateTime?> lastSeen;
+  final Value<String?> ratchetState;
   final Value<int> rowid;
   const ChannelsCompanion({
     this.uuid = const Value.absent(),
@@ -790,6 +834,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     this.peerOhId = const Value.absent(),
     this.peerOhPublicKey = const Value.absent(),
     this.lastSeen = const Value.absent(),
+    this.ratchetState = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   ChannelsCompanion.insert({
@@ -802,6 +847,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     this.peerOhId = const Value.absent(),
     this.peerOhPublicKey = const Value.absent(),
     this.lastSeen = const Value.absent(),
+    this.ratchetState = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : uuid = Value(uuid),
        label = Value(label),
@@ -817,6 +863,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     Expression<String>? peerOhId,
     Expression<String>? peerOhPublicKey,
     Expression<DateTime>? lastSeen,
+    Expression<String>? ratchetState,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -829,6 +876,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
       if (peerOhId != null) 'peer_oh_id': peerOhId,
       if (peerOhPublicKey != null) 'peer_oh_public_key': peerOhPublicKey,
       if (lastSeen != null) 'last_seen': lastSeen,
+      if (ratchetState != null) 'ratchet_state': ratchetState,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -843,6 +891,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     Value<String?>? peerOhId,
     Value<String?>? peerOhPublicKey,
     Value<DateTime?>? lastSeen,
+    Value<String?>? ratchetState,
     Value<int>? rowid,
   }) {
     return ChannelsCompanion(
@@ -855,6 +904,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
       peerOhId: peerOhId ?? this.peerOhId,
       peerOhPublicKey: peerOhPublicKey ?? this.peerOhPublicKey,
       lastSeen: lastSeen ?? this.lastSeen,
+      ratchetState: ratchetState ?? this.ratchetState,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -889,6 +939,9 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     if (lastSeen.present) {
       map['last_seen'] = Variable<DateTime>(lastSeen.value);
     }
+    if (ratchetState.present) {
+      map['ratchet_state'] = Variable<String>(ratchetState.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -907,6 +960,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
           ..write('peerOhId: $peerOhId, ')
           ..write('peerOhPublicKey: $peerOhPublicKey, ')
           ..write('lastSeen: $lastSeen, ')
+          ..write('ratchetState: $ratchetState, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -2627,6 +2681,7 @@ typedef $$ChannelsTableCreateCompanionBuilder =
       Value<String?> peerOhId,
       Value<String?> peerOhPublicKey,
       Value<DateTime?> lastSeen,
+      Value<String?> ratchetState,
       Value<int> rowid,
     });
 typedef $$ChannelsTableUpdateCompanionBuilder =
@@ -2640,6 +2695,7 @@ typedef $$ChannelsTableUpdateCompanionBuilder =
       Value<String?> peerOhId,
       Value<String?> peerOhPublicKey,
       Value<DateTime?> lastSeen,
+      Value<String?> ratchetState,
       Value<int> rowid,
     });
 
@@ -2723,6 +2779,11 @@ class $$ChannelsTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
+  ColumnFilters<String> get ratchetState => $composableBuilder(
+    column: $table.ratchetState,
+    builder: (column) => ColumnFilters(column),
+  );
+
   Expression<bool> messagesRefs(
     Expression<bool> Function($$MessagesTableFilterComposer f) f,
   ) {
@@ -2802,6 +2863,11 @@ class $$ChannelsTableOrderingComposer
     column: $table.lastSeen,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get ratchetState => $composableBuilder(
+    column: $table.ratchetState,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$ChannelsTableAnnotationComposer
@@ -2849,6 +2915,11 @@ class $$ChannelsTableAnnotationComposer
 
   GeneratedColumn<DateTime> get lastSeen =>
       $composableBuilder(column: $table.lastSeen, builder: (column) => column);
+
+  GeneratedColumn<String> get ratchetState => $composableBuilder(
+    column: $table.ratchetState,
+    builder: (column) => column,
+  );
 
   Expression<T> messagesRefs<T extends Object>(
     Expression<T> Function($$MessagesTableAnnotationComposer a) f,
@@ -2913,6 +2984,7 @@ class $$ChannelsTableTableManager
                 Value<String?> peerOhId = const Value.absent(),
                 Value<String?> peerOhPublicKey = const Value.absent(),
                 Value<DateTime?> lastSeen = const Value.absent(),
+                Value<String?> ratchetState = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ChannelsCompanion(
                 uuid: uuid,
@@ -2924,6 +2996,7 @@ class $$ChannelsTableTableManager
                 peerOhId: peerOhId,
                 peerOhPublicKey: peerOhPublicKey,
                 lastSeen: lastSeen,
+                ratchetState: ratchetState,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -2937,6 +3010,7 @@ class $$ChannelsTableTableManager
                 Value<String?> peerOhId = const Value.absent(),
                 Value<String?> peerOhPublicKey = const Value.absent(),
                 Value<DateTime?> lastSeen = const Value.absent(),
+                Value<String?> ratchetState = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ChannelsCompanion.insert(
                 uuid: uuid,
@@ -2948,6 +3022,7 @@ class $$ChannelsTableTableManager
                 peerOhId: peerOhId,
                 peerOhPublicKey: peerOhPublicKey,
                 lastSeen: lastSeen,
+                ratchetState: ratchetState,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

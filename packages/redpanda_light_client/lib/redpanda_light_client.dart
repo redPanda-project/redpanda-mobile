@@ -26,4 +26,6 @@ export 'src/crypto/crypto_utils.dart';
 export 'src/crypto/oh_keypair.dart';
 export 'src/crypto/channel_message.dart';
 export 'src/crypto/message_crypto_v3.dart';
+export 'src/crypto/message_crypto_v4.dart';
+export 'src/crypto/ratchet.dart';
 export 'src/generated/commands.pb.dart';

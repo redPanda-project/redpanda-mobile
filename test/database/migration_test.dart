@@ -18,8 +18,8 @@ void main() {
       await db.close();
     });
 
-    test('schema version is 9', () {
-      expect(db.schemaVersion, equals(9));
+    test('schema version is 10', () {
+      expect(db.schemaVersion, equals(10));
     });
 
     test('dedup is scoped per conversation: same id in two channels', () async {
@@ -247,6 +247,40 @@ void main() {
       final channel = await legacy.select(legacy.channels).getSingle();
       expect(channel.authPublicKey, equals('bb' * 32));
       expect(channel.authPrivateKey, isNull);
+
+      await legacy.close();
+    });
+
+    test('v9 → v10 migration adds ratchetState without losing data', () async {
+      // Reshape a fresh database into the v9 layout (no ratchet_state).
+      final legacy = createTestDatabase();
+      await legacy.customStatement(
+        'ALTER TABLE channels DROP COLUMN ratchet_state;',
+      );
+      await legacy.customStatement(
+        "INSERT INTO channels (uuid, label, encryption_key, auth_public_key) "
+        "VALUES ('kept-id', 'Kept Channel', '${'aa' * 32}', '${'bb' * 32}');",
+      );
+      await legacy.customStatement(
+        "INSERT INTO messages (conversation_id, sender_id, content, timestamp, status, type) "
+        "VALUES ('kept-id', 'me', 'kept msg', 0, 0, 0);",
+      );
+
+      await legacy.migration.onUpgrade(legacy.createMigrator(), 9, 10);
+
+      // MS03b is non-destructive: existing channels and messages survive.
+      final channel = await legacy.select(legacy.channels).getSingle();
+      expect(channel.uuid, equals('kept-id'));
+      expect(channel.ratchetState, isNull);
+      final message = await legacy.select(legacy.messages).getSingle();
+      expect(message.content, equals('kept msg'));
+
+      // The new column is writable.
+      await (legacy.update(legacy.channels)
+            ..where((c) => c.uuid.equals('kept-id')))
+          .write(const ChannelsCompanion(ratchetState: drift.Value('{"v":1}')));
+      final updated = await legacy.select(legacy.channels).getSingle();
+      expect(updated.ratchetState, equals('{"v":1}'));
 
       await legacy.close();
     });

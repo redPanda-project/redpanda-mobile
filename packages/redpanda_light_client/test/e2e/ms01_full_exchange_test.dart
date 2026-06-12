@@ -91,10 +91,15 @@ void main() async {
           channelWithOH.id,
           channelWithOH.encryptionKey,
           peerOhId: bobOH.ohId,
+          isChannelCreator: true,
         );
 
         // 6. Bob registers channel keys (for decryption)
-        bob.addChannelKeys(sharedChannel.id, sharedChannel.encryptionKey);
+        bob.addChannelKeys(
+          sharedChannel.id,
+          sharedChannel.encryptionKey,
+          isChannelCreator: false,
+        );
 
         // 7. Alice sends message
         final messageId = await alice.sendMessage(

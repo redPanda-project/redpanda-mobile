@@ -555,8 +555,10 @@ class RedPandaLightClient implements RedPandaClient {
     _pendingResponses.clear();
     _putResponses.clear();
     _registerResponses.clear();
+    _ratchetSessions.clear();
     await _incomingMessageController.close();
     await _ohMailboxUpdateController.close();
+    await _ratchetStateController.close();
     _updateStatus(ConnectionStatus.disconnected);
   }
 
@@ -613,17 +615,58 @@ class RedPandaLightClient implements RedPandaClient {
   final Map<String, List<int>> _channelEncryptionKeys = {};
   final Map<String, List<int>> _channelPeerOhIds = {};
 
+  /// Channel ratchet sessions (MS03b), keyed by channel id. Stored as
+  /// futures because session initialization is async while [addChannelKeys]
+  /// is sync; consumers await the future right before encrypt/decrypt.
+  final Map<String, Future<RatchetSession>> _ratchetSessions = {};
+
+  final _ratchetStateController =
+      StreamController<RatchetStateUpdate>.broadcast();
+
+  @override
+  Stream<RatchetStateUpdate> get ratchetStateUpdates =>
+      _ratchetStateController.stream;
+
   /// Register channel encryption info so sendMessage/fetchMessages can use it.
   @override
   void addChannelKeys(
     String channelId,
     List<int> encryptionKey, {
     List<int>? peerOhId,
+    required bool isChannelCreator,
+    String? ratchetState,
   }) {
     _channelEncryptionKeys[channelId] = encryptionKey;
     if (peerOhId != null) {
       _channelPeerOhIds[channelId] = peerOhId;
     }
+    // A live session is always at least as advanced as any persisted state,
+    // so re-registrations (e.g. on every chat-screen open) never replace it.
+    _ratchetSessions.putIfAbsent(channelId, () async {
+      if (ratchetState != null) {
+        try {
+          return RatchetSession.fromJson(ratchetState);
+        } on FormatException catch (e) {
+          RpLog.info(
+            'RedPandaLightClient: discarding unreadable ratchet state for '
+            'channel $channelId ($e), starting a fresh session',
+          );
+        }
+      }
+      return RatchetSession.create(
+        channelKey: encryptionKey,
+        isChannelCreator: isChannelCreator,
+      );
+    });
+  }
+
+  /// Publishes the advanced ratchet state of [channelId] so the app layer
+  /// can persist it (on-device only).
+  void _emitRatchetState(String channelId, RatchetSession session) {
+    if (_ratchetStateController.isClosed) return;
+    _ratchetStateController.add(
+      RatchetStateUpdate(channelId: channelId, stateJson: session.toJson()),
+    );
   }
 
   @override
@@ -689,18 +732,18 @@ class RedPandaLightClient implements RedPandaClient {
     }
 
     // Build the inner ChannelMessage (message_id + timestamp + content) and
-    // encrypt it into a message-format-v2 payload (HKDF key separation,
-    // version byte, MAC over version||IV||ciphertext).
+    // encrypt it into a v4 payload with the channel ratchet (MS03b): the
+    // AES-GCM key is the per-message key MK_n, not the static K_enc.
     final channelMessage = ChannelMessage(
       messageId: messageIdBytes,
       timestampMs: DateTime.now().millisecondsSinceEpoch,
       content: content,
     );
-    final payload = await MessageCryptoV3.encrypt(
-      channelMessage,
-      encKey,
-      channelId,
-    );
+    final session = await _ratchetSessions[channelId]!;
+    final payload = await session.encrypt(channelMessage, channelId);
+    // Persist immediately: the sending chain has advanced even if the
+    // deposit below fails — a retry re-encrypts with the next message key.
+    _emitRatchetState(channelId, session);
 
     // Build FlaschenpostPut with target OH mailbox id for direct routing.
     // want_response (MS02b) opts into a FlaschenpostPutResponse (command 158)
@@ -1074,14 +1117,27 @@ class RedPandaLightClient implements RedPandaClient {
     // MailItem.message_id — the reference node never sets that field.
     // A per-item failure is logged and skipped so one bad item cannot abort
     // the whole batch.
+    //
+    // Dispatch on the envelope version byte: v4 (MS03b) goes through the
+    // channel ratchet, v3 (pre-MS03b transition) through the static K_enc.
     final messages = <DecryptedMessage>[];
+    RatchetSession? session;
+    var ratchetAdvanced = false;
     for (final item in response.items) {
       try {
-        final channelMessage = await MessageCryptoV3.decrypt(
-          item.payload,
-          encKey,
-          oh.channelId!,
-        );
+        final ChannelMessage channelMessage;
+        if (item.payload.isNotEmpty &&
+            item.payload[0] == MessageCryptoV4.version) {
+          session ??= await _ratchetSessions[oh.channelId]!;
+          channelMessage = await session.decrypt(item.payload, oh.channelId!);
+          ratchetAdvanced = true;
+        } else {
+          channelMessage = await MessageCryptoV3.decrypt(
+            item.payload,
+            encKey,
+            oh.channelId!,
+          );
+        }
         messages.add(
           DecryptedMessage(
             id: _hexEncode(channelMessage.messageId),
@@ -1094,6 +1150,9 @@ class RedPandaLightClient implements RedPandaClient {
       } catch (e) {
         RpLog.info('RedPandaLightClient: failed to decrypt mail item: $e');
       }
+    }
+    if (ratchetAdvanced && session != null) {
+      _emitRatchetState(oh.channelId!, session);
     }
 
     // Acknowledge the fetched batch so the Full Node can delete it.

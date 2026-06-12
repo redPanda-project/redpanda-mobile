@@ -63,8 +63,13 @@ void main() async {
         sharedChannel.id,
         sharedChannel.encryptionKey,
         peerOhId: bobOH.ohId,
+        isChannelCreator: true,
       );
-      bob.addChannelKeys(sharedChannel.id, sharedChannel.encryptionKey);
+      bob.addChannelKeys(
+        sharedChannel.id,
+        sharedChannel.encryptionKey,
+        isChannelCreator: false,
+      );
       return bobOH.ohId;
     }
 
@@ -130,6 +135,7 @@ void main() async {
           bogusChannel.id,
           bogusChannel.encryptionKey,
           peerOhId: List.generate(20, (i) => 255 - i),
+          isChannelCreator: true,
         );
 
         final messageId = await alice.sendMessage(
