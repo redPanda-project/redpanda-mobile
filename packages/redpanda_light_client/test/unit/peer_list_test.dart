@@ -3,6 +3,8 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:hex/hex.dart';
+import 'package:redpanda_light_client/src/models/discovered_peer.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
 import 'package:redpanda_light_client/src/generated/commands.pb.dart';
@@ -54,7 +56,7 @@ void main() {
   });
 
   test('ActivePeer handles SEND_PEERLIST command correctly', () async {
-    final receivedPeers = Completer<List<String>>();
+    final receivedPeers = Completer<List<DiscoveredPeer>>();
 
     activePeer = ActivePeer(
       address: 'localhost:1234',
@@ -87,7 +89,11 @@ void main() {
     expect(activePeer.isHandshakeVerified, isTrue);
 
     // 2. Send SEND_PEERLIST command
-    // Create Proto
+    // Create Proto. One legacy entry (address only), one MS04 entry with a
+    // 64-byte node_id export and the explicit X25519 encryption key.
+    final export = Uint8List.fromList(List<int>.generate(64, (i) => i));
+    final explicitKey = List<int>.filled(32, 0xAB);
+
     final sendPeerList = SendPeerList();
     sendPeerList.peers.add(
       PeerInfoProto()
@@ -97,7 +103,9 @@ void main() {
     sendPeerList.peers.add(
       PeerInfoProto()
         ..ip = '10.0.0.5'
-        ..port = 6000,
+        ..port = 6000
+        ..nodeId = (NodeIdProto()..publicKeyBytes = export)
+        ..encryptionPublicKey = explicitKey,
     );
 
     final protoBytes = sendPeerList.writeToBuffer();
@@ -115,8 +123,67 @@ void main() {
 
     final peers = await receivedPeers.future;
     expect(peers.length, 2);
-    expect(peers, contains('192.168.1.50:5000'));
-    expect(peers, contains('10.0.0.5:6000'));
+
+    final legacy = peers.firstWhere((p) => p.address == '192.168.1.50:5000');
+    expect(legacy.nodeId, isNull);
+    expect(legacy.encryptionPublicKey, isNull);
+
+    final ms04 = peers.firstWhere((p) => p.address == '10.0.0.5:6000');
+    // KademliaId = SHA256(verifyKey)[0..20] of the export's first 32 bytes.
+    expect(ms04.nodeId, equals(NodeId.fromPublicKeyBytes(export).toHex()));
+    // The explicit field 4 wins over the export's bytes 32..63.
+    expect(ms04.encryptionPublicKey, equals(HEX.encode(explicitKey)));
+  });
+
+  test('SEND_PEERLIST falls back to export bytes 32..63 for the encryption '
+      'key when field 4 is missing', () async {
+    final receivedPeers = Completer<List<DiscoveredPeer>>();
+
+    activePeer = ActivePeer(
+      address: 'localhost:1234',
+      selfNodeId: selfNodeId,
+      selfKeys: selfKeys,
+      socketFactory: (h, p) async => mockSocket,
+      onStatusChange: (_) {},
+      onDisconnect: () {},
+      onPeersReceived: receivedPeers.complete,
+    );
+
+    await activePeer.connect();
+
+    final handshakeResponse = BytesBuilder();
+    handshakeResponse.add("k3gV".codeUnits);
+    handshakeResponse.addByte(22);
+    handshakeResponse.addByte(0xFF);
+    handshakeResponse.add(Uint8List(20));
+    handshakeResponse.add(Uint8List(4));
+    socketStreamController.add(handshakeResponse.toBytes());
+    await Future.delayed(Duration(milliseconds: 100));
+
+    final export = Uint8List.fromList(List<int>.generate(64, (i) => 64 - i));
+    final sendPeerList = SendPeerList();
+    sendPeerList.peers.add(
+      PeerInfoProto()
+        ..ip = '10.0.0.7'
+        ..port = 7000
+        ..nodeId = (NodeIdProto()..publicKeyBytes = export),
+    );
+
+    final protoBytes = sendPeerList.writeToBuffer();
+    final commandBuilder = BytesBuilder();
+    commandBuilder.addByte(8); // SEND_PEERLIST
+    final lengthData = ByteData(4);
+    lengthData.setInt32(0, protoBytes.length, Endian.big);
+    commandBuilder.add(lengthData.buffer.asUint8List());
+    commandBuilder.add(protoBytes);
+    socketStreamController.add(commandBuilder.toBytes());
+
+    final peers = await receivedPeers.future;
+    expect(peers, hasLength(1));
+    expect(
+      peers.single.encryptionPublicKey,
+      equals(HEX.encode(export.sublist(32, 64))),
+    );
   });
 
   test('ActivePeer sends REQUEST_PEERLIST command', () async {

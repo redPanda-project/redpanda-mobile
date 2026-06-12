@@ -17,6 +17,8 @@ import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/domain/send_exceptions.dart';
+import 'package:redpanda_light_client/src/garlic/garlic_builder.dart';
+import 'package:redpanda_light_client/src/garlic/hop_selector.dart';
 import 'package:redpanda_light_client/src/generated/commands.pb.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
@@ -84,6 +86,16 @@ class RedPandaLightClient implements RedPandaClient {
   /// before falling back to fire-and-forget semantics. Overridable for tests.
   final Duration depositResponseTimeout;
 
+  /// Number of garlic relay hops sendMessage aims for (MS04).
+  static const int defaultHopCount = 3;
+
+  /// Selects garlic relay hops from the peer repository (MS04).
+  late final HopSelector _hopSelector;
+
+  /// Hop count of the most recent sendMessage (0 = direct MS02b deposit).
+  /// Diagnostic only — used by tests to assert the garlic path was taken.
+  int lastSendHopCount = 0;
+
   RedPandaLightClient({
     required this.selfNodeId,
     required this.selfKeys,
@@ -92,8 +104,14 @@ class RedPandaLightClient implements RedPandaClient {
     // Injectable repository for testing? For now we create it.
     PeerRepository? peerRepository,
     this.depositResponseTimeout = const Duration(seconds: 10),
+    // Extra predicate for garlic hop candidates (tests pin local nodes).
+    bool Function(PeerStats peer)? hopCandidateFilter,
   }) : _socketFactory = socketFactory ?? ((h, p) => Socket.connect(h, p)),
        _peerRepository = peerRepository ?? InMemoryPeerRepository() {
+    _hopSelector = HopSelector(
+      _peerRepository,
+      candidateFilter: hopCandidateFilter,
+    );
     _peerRepository.load().then((_) {
       _peerRepository.addAll(seeds);
       // Fast boot: Trigger immediate check after load
@@ -415,8 +433,12 @@ class RedPandaLightClient implements RedPandaClient {
           selfKeys: selfKeys,
           socketFactory: _socketFactory,
           onStatusChange: _updateStatus,
-          onNodeIdDiscovered: (nodeId) {
-            _peerRepository.updatePeer(address, nodeId: nodeId);
+          onNodeIdDiscovered: (nodeId, encryptionPublicKey) {
+            _peerRepository.updatePeer(
+              address,
+              nodeId: nodeId,
+              encryptionPublicKey: encryptionPublicKey,
+            );
           },
           onDisconnect: () {
             if (_intentionalDisconnects.contains(address)) {
@@ -434,7 +456,14 @@ class RedPandaLightClient implements RedPandaClient {
             RpLog.debug(
               'RedPandaLightClient: Received ${peers.length} peers from $address',
             );
-            _peerRepository.addAll(peers);
+            for (final peer in peers) {
+              // Stores identity (node id + X25519 key, MS04) when included.
+              _peerRepository.updatePeer(
+                peer.address,
+                nodeId: peer.nodeId,
+                encryptionPublicKey: peer.encryptionPublicKey,
+              );
+            }
             // Trigger check to potentially fill slots immediately?
             // _runConnectionCheck();
           },
@@ -615,6 +644,10 @@ class RedPandaLightClient implements RedPandaClient {
   final Map<String, List<int>> _channelEncryptionKeys = {};
   final Map<String, List<int>> _channelPeerOhIds = {};
 
+  /// host:port of the node hosting the peer's OH (from the OHDescriptor),
+  /// excluded from garlic hop candidates (MS04: no hop == destination node).
+  final Map<String, String> _channelPeerOhEndpoints = {};
+
   /// Channel ratchet sessions (MS03b), keyed by channel id. Stored as
   /// futures because session initialization is async while [addChannelKeys]
   /// is sync; consumers await the future right before encrypt/decrypt.
@@ -633,12 +666,16 @@ class RedPandaLightClient implements RedPandaClient {
     String channelId,
     List<int> encryptionKey, {
     List<int>? peerOhId,
+    String? peerOhEndpoint,
     required bool isChannelCreator,
     String? ratchetState,
   }) {
     _channelEncryptionKeys[channelId] = encryptionKey;
     if (peerOhId != null) {
       _channelPeerOhIds[channelId] = peerOhId;
+    }
+    if (peerOhEndpoint != null) {
+      _channelPeerOhEndpoints[channelId] = peerOhEndpoint;
     }
     // A live session is always at least as advanced as any persisted state,
     // so re-registrations (e.g. on every chat-screen open) never replace it.
@@ -745,19 +782,9 @@ class RedPandaLightClient implements RedPandaClient {
     // deposit below fails — a retry re-encrypts with the next message key.
     _emitRatchetState(channelId, session);
 
-    // Build FlaschenpostPut with target OH mailbox id for direct routing.
-    // want_response (MS02b) opts into a FlaschenpostPutResponse (command 158)
-    // from the directly connected node, so deposit rejections surface here
-    // instead of failing silently.
-    final peerOhId = _channelPeerOhIds[channelId];
-    final flaschenpost = FlaschenpostPut()
-      ..content = payload
-      ..ohId = peerOhId ?? Uint8List(0)
-      ..wantResponse = true;
-
-    // Send to a connected peer (best available). The node deposits locally or
-    // forwards toward the OH host node itself (MS02b, max 3 hops), so any
-    // connected Full Node works.
+    // Send to a connected peer (best available). The node routes garlic
+    // packets toward their first hop / deposits direct puts locally or
+    // forwards them (MS02b), so any connected Full Node works.
     final activePeer = _peers.values
         .where((p) => p.isHandshakeVerified)
         .firstOrNull;
@@ -766,6 +793,30 @@ class RedPandaLightClient implements RedPandaClient {
       // No connected Full Node — the retry queue will try again later.
       throw StateError('sendMessage: no active peer available');
     }
+
+    // MS04: route via a multi-hop garlic path when relay hops are available.
+    final peerOhId = _channelPeerOhIds[channelId];
+    if (peerOhId != null && peerOhId.length == GarlicHop.nodeIdLength) {
+      final hops = _selectGarlicHops(channelId, activePeer);
+      if (hops.isNotEmpty) {
+        await _sendViaGarlic(activePeer, hops, peerOhId, payload, channelId);
+        return messageIdHex;
+      }
+      RpLog.info(
+        'RedPandaLightClient: sendMessage() no eligible garlic hops known, '
+        'falling back to a direct deposit (no relay privacy)',
+      );
+    }
+    lastSendHopCount = 0;
+
+    // Direct fallback (MS01/MS02b): FlaschenpostPut with target OH mailbox
+    // id. want_response (MS02b) opts into a FlaschenpostPutResponse
+    // (command 158) from the directly connected node, so deposit rejections
+    // surface here instead of failing silently.
+    final flaschenpost = FlaschenpostPut()
+      ..content = payload
+      ..ohId = peerOhId ?? Uint8List(0)
+      ..wantResponse = true;
 
     final completer = _putResponses.register();
 
@@ -799,6 +850,66 @@ class RedPandaLightClient implements RedPandaClient {
     }
 
     return messageIdHex;
+  }
+
+  /// Picks up to [defaultHopCount] garlic relay hops for [channelId],
+  /// excluding the node the packet is submitted through (anti-correlation:
+  /// it sees the sender directly) and the destination OH endpoint.
+  List<GarlicHop> _selectGarlicHops(String channelId, ActivePeer submitVia) {
+    final ohEndpoint = _channelPeerOhEndpoints[channelId];
+    return _hopSelector.selectHops(
+      count: defaultHopCount,
+      excludeAddresses: {submitVia.address, ?ohEndpoint},
+      excludeNodeIds: {
+        // The submission node may be known in the peer list under a
+        // different address (e.g. seed alias) — exclude it by identity too.
+        ?submitVia.discoveredNodeId,
+      },
+    );
+  }
+
+  /// Builds the layered Flaschenpost v2 packet and hands it to the connected
+  /// node (command 142), which routes it to the first hop by KademliaId.
+  ///
+  /// There is no deliver confirmation on the garlic path (R-ACK lands in
+  /// MS06), so the message counts as handed off once submitted; a re-send is
+  /// deduplicated at the receiver via the inner message_id.
+  Future<void> _sendViaGarlic(
+    ActivePeer submitVia,
+    List<GarlicHop> hops,
+    List<int> peerOhId,
+    Uint8List payload,
+    String channelId,
+  ) async {
+    if (payload.length > GarlicBuilder.maxPayloadLength(hops.length)) {
+      // The fixed 2048-byte packet cannot carry this payload over the
+      // selected path — re-sending the same content can never succeed.
+      RpLog.info(
+        'RedPandaLightClient: sendMessage() payload of ${payload.length} '
+        'bytes exceeds the garlic budget of '
+        '${GarlicBuilder.maxPayloadLength(hops.length)} bytes',
+      );
+      throw DepositException(DepositStatus.badRequest);
+    }
+
+    if (hops.length < defaultHopCount) {
+      RpLog.info(
+        'RedPandaLightClient: sendMessage() only ${hops.length} of '
+        '$defaultHopCount garlic hops available — reduced privacy',
+      );
+    }
+
+    final packet = await GarlicBuilder.build(
+      hops: hops,
+      ohId: peerOhId,
+      payload: payload,
+    );
+    submitVia.sendCommand(142, packet);
+    lastSendHopCount = hops.length;
+    RpLog.debug(
+      'RedPandaLightClient: sendMessage() submitted a ${packet.length}-byte '
+      'flaschenpost v2 over ${hops.length} hops for channel $channelId',
+    );
   }
 
   @override
@@ -1301,6 +1412,15 @@ class RedPandaLightClient implements RedPandaClient {
   /// DEBUG ONLY: Get current peer stats
   List<PeerStats> getDebugPeerStats() {
     return _peerRepository.getBestPeers(100);
+  }
+
+  /// Asks every encrypted connection for a fresh peer list. Peers are
+  /// normally requested once per connection; this speeds up garlic hop
+  /// candidate discovery (MS04) when the network is still settling.
+  void requestPeerLists() {
+    for (final peer in _peers.values.where((p) => p.isEncryptionActive)) {
+      peer.requestPeerList();
+    }
   }
 }
 

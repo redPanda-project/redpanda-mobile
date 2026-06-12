@@ -134,11 +134,15 @@ class PeerInfoProto extends $pb.GeneratedMessage {
     $core.String? ip,
     $core.int? port,
     NodeIdProto? nodeId,
+    $core.List<$core.int>? encryptionPublicKey,
   }) {
     final result = create();
     if (ip != null) result.ip = ip;
     if (port != null) result.port = port;
     if (nodeId != null) result.nodeId = nodeId;
+    if (encryptionPublicKey != null) {
+      result.encryptionPublicKey = encryptionPublicKey;
+    }
     return result;
   }
 
@@ -160,6 +164,8 @@ class PeerInfoProto extends $pb.GeneratedMessage {
     ..aI(2, _omitFieldNames ? '' : 'port')
     ..aOM<NodeIdProto>(3, _omitFieldNames ? '' : 'nodeId',
         subBuilder: NodeIdProto.create)
+    ..a<$core.List<$core.int>>(
+        4, _omitFieldNames ? '' : 'encryptionPublicKey', $pb.PbFieldType.OY)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -209,6 +215,18 @@ class PeerInfoProto extends $pb.GeneratedMessage {
   void clearNodeId() => $_clearField(3);
   @$pb.TagNumber(3)
   NodeIdProto ensureNodeId() => $_ensure(2);
+
+  /// MS04: 32-byte X25519 encryption public key of the node, so light clients
+  /// can pick garlic hops without importing the full 64-byte node_id export.
+  /// Only set when node_id is known (duplicates bytes 32..63 of the export).
+  @$pb.TagNumber(4)
+  $core.List<$core.int> get encryptionPublicKey => $_getN(3);
+  @$pb.TagNumber(4)
+  set encryptionPublicKey($core.List<$core.int> value) => $_setBytes(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasEncryptionPublicKey() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearEncryptionPublicKey() => $_clearField(4);
 }
 
 class SendPeerList extends $pb.GeneratedMessage {

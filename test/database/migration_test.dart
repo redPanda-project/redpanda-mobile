@@ -18,8 +18,8 @@ void main() {
       await db.close();
     });
 
-    test('schema version is 10', () {
-      expect(db.schemaVersion, equals(10));
+    test('schema version is 11', () {
+      expect(db.schemaVersion, equals(11));
     });
 
     test('dedup is scoped per conversation: same id in two channels', () async {
@@ -284,5 +284,38 @@ void main() {
 
       await legacy.close();
     });
+
+    test(
+      'v10 → v11 migration adds peer encryption key without losing data',
+      () async {
+        // Reshape a fresh database into the v10 layout (no encryption key).
+        final legacy = createTestDatabase();
+        await legacy.customStatement(
+          'ALTER TABLE peers DROP COLUMN encryption_public_key;',
+        );
+        await legacy.customStatement(
+          "INSERT INTO peers (address, node_id, average_latency_ms, "
+          "success_count, failure_count) "
+          "VALUES ('1.2.3.4:5', '${'ab' * 20}', 42, 7, 1);",
+        );
+
+        await legacy.migration.onUpgrade(legacy.createMigrator(), 10, 11);
+
+        // MS04 is non-destructive: existing peer stats survive.
+        final peer = await legacy.select(legacy.peers).getSingle();
+        expect(peer.address, equals('1.2.3.4:5'));
+        expect(peer.nodeId, equals('ab' * 20));
+        expect(peer.encryptionPublicKey, isNull);
+
+        // The new column is writable.
+        await (legacy.update(legacy.peers)
+              ..where((p) => p.address.equals('1.2.3.4:5')))
+            .write(PeersCompanion(encryptionPublicKey: drift.Value('cd' * 32)));
+        final updated = await legacy.select(legacy.peers).getSingle();
+        expect(updated.encryptionPublicKey, equals('cd' * 32));
+
+        await legacy.close();
+      },
+    );
   });
 }

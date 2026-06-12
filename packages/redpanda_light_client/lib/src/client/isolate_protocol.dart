@@ -56,6 +56,10 @@ class CmdAddChannelKeys extends IsolateCommand {
   final List<int> encryptionKey;
   final List<int>? peerOhId;
 
+  /// MS04: host:port of the node hosting the peer's OH; kept out of the
+  /// garlic hop path.
+  final String? peerOhEndpoint;
+
   /// MS03b: true only on the device that generated the channel; decides the
   /// channel ratchet role.
   final bool isChannelCreator;
@@ -68,6 +72,7 @@ class CmdAddChannelKeys extends IsolateCommand {
     this.channelId,
     this.encryptionKey, {
     this.peerOhId,
+    this.peerOhEndpoint,
     required this.isChannelCreator,
     this.ratchetState,
   });

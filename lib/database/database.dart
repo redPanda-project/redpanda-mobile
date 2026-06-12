@@ -74,6 +74,10 @@ class Messages extends Table {
 class Peers extends Table {
   TextColumn get address => text()();
   TextColumn get nodeId => text().nullable()();
+
+  /// MS04: 32-byte X25519 encryption public key (hex, 64 chars) from the
+  /// peer exchange — required for the peer to qualify as a garlic hop.
+  TextColumn get encryptionPublicKey => text().nullable()();
   IntColumn get averageLatencyMs =>
       integer().withDefault(const Constant(9999))();
   IntColumn get successCount => integer().withDefault(const Constant(0))();
@@ -106,7 +110,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 10;
+  int get schemaVersion => 11;
 
   @override
   MigrationStrategy get migration {
@@ -202,6 +206,12 @@ class AppDatabase extends _$AppDatabase {
           // the v9 table recreation above (createTable uses the current
           // schema).
           await m.addColumn(channels, channels.ratchetState);
+        }
+        if (from >= 3 && from < 11 && to >= 11) {
+          // MS04: X25519 encryption public key of known peers (garlic hop
+          // candidates) — non-destructive. DBs older than v3 receive the
+          // column through createTable(peers) above (current schema).
+          await m.addColumn(peers, peers.encryptionPublicKey);
         }
       },
     );

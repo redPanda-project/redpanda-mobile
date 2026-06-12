@@ -1600,6 +1600,17 @@ class $PeersTable extends Peers with TableInfo<$PeersTable, Peer> {
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _encryptionPublicKeyMeta =
+      const VerificationMeta('encryptionPublicKey');
+  @override
+  late final GeneratedColumn<String> encryptionPublicKey =
+      GeneratedColumn<String>(
+        'encryption_public_key',
+        aliasedName,
+        true,
+        type: DriftSqlType.string,
+        requiredDuringInsert: false,
+      );
   static const VerificationMeta _averageLatencyMsMeta = const VerificationMeta(
     'averageLatencyMs',
   );
@@ -1651,6 +1662,7 @@ class $PeersTable extends Peers with TableInfo<$PeersTable, Peer> {
   List<GeneratedColumn> get $columns => [
     address,
     nodeId,
+    encryptionPublicKey,
     averageLatencyMs,
     successCount,
     failureCount,
@@ -1680,6 +1692,15 @@ class $PeersTable extends Peers with TableInfo<$PeersTable, Peer> {
       context.handle(
         _nodeIdMeta,
         nodeId.isAcceptableOrUnknown(data['node_id']!, _nodeIdMeta),
+      );
+    }
+    if (data.containsKey('encryption_public_key')) {
+      context.handle(
+        _encryptionPublicKeyMeta,
+        encryptionPublicKey.isAcceptableOrUnknown(
+          data['encryption_public_key']!,
+          _encryptionPublicKeyMeta,
+        ),
       );
     }
     if (data.containsKey('average_latency_ms')) {
@@ -1732,6 +1753,10 @@ class $PeersTable extends Peers with TableInfo<$PeersTable, Peer> {
         DriftSqlType.string,
         data['${effectivePrefix}node_id'],
       ),
+      encryptionPublicKey: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}encryption_public_key'],
+      ),
       averageLatencyMs: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}average_latency_ms'],
@@ -1760,6 +1785,10 @@ class $PeersTable extends Peers with TableInfo<$PeersTable, Peer> {
 class Peer extends DataClass implements Insertable<Peer> {
   final String address;
   final String? nodeId;
+
+  /// MS04: 32-byte X25519 encryption public key (hex, 64 chars) from the
+  /// peer exchange — required for the peer to qualify as a garlic hop.
+  final String? encryptionPublicKey;
   final int averageLatencyMs;
   final int successCount;
   final int failureCount;
@@ -1767,6 +1796,7 @@ class Peer extends DataClass implements Insertable<Peer> {
   const Peer({
     required this.address,
     this.nodeId,
+    this.encryptionPublicKey,
     required this.averageLatencyMs,
     required this.successCount,
     required this.failureCount,
@@ -1778,6 +1808,9 @@ class Peer extends DataClass implements Insertable<Peer> {
     map['address'] = Variable<String>(address);
     if (!nullToAbsent || nodeId != null) {
       map['node_id'] = Variable<String>(nodeId);
+    }
+    if (!nullToAbsent || encryptionPublicKey != null) {
+      map['encryption_public_key'] = Variable<String>(encryptionPublicKey);
     }
     map['average_latency_ms'] = Variable<int>(averageLatencyMs);
     map['success_count'] = Variable<int>(successCount);
@@ -1794,6 +1827,9 @@ class Peer extends DataClass implements Insertable<Peer> {
       nodeId: nodeId == null && nullToAbsent
           ? const Value.absent()
           : Value(nodeId),
+      encryptionPublicKey: encryptionPublicKey == null && nullToAbsent
+          ? const Value.absent()
+          : Value(encryptionPublicKey),
       averageLatencyMs: Value(averageLatencyMs),
       successCount: Value(successCount),
       failureCount: Value(failureCount),
@@ -1811,6 +1847,9 @@ class Peer extends DataClass implements Insertable<Peer> {
     return Peer(
       address: serializer.fromJson<String>(json['address']),
       nodeId: serializer.fromJson<String?>(json['nodeId']),
+      encryptionPublicKey: serializer.fromJson<String?>(
+        json['encryptionPublicKey'],
+      ),
       averageLatencyMs: serializer.fromJson<int>(json['averageLatencyMs']),
       successCount: serializer.fromJson<int>(json['successCount']),
       failureCount: serializer.fromJson<int>(json['failureCount']),
@@ -1823,6 +1862,7 @@ class Peer extends DataClass implements Insertable<Peer> {
     return <String, dynamic>{
       'address': serializer.toJson<String>(address),
       'nodeId': serializer.toJson<String?>(nodeId),
+      'encryptionPublicKey': serializer.toJson<String?>(encryptionPublicKey),
       'averageLatencyMs': serializer.toJson<int>(averageLatencyMs),
       'successCount': serializer.toJson<int>(successCount),
       'failureCount': serializer.toJson<int>(failureCount),
@@ -1833,6 +1873,7 @@ class Peer extends DataClass implements Insertable<Peer> {
   Peer copyWith({
     String? address,
     Value<String?> nodeId = const Value.absent(),
+    Value<String?> encryptionPublicKey = const Value.absent(),
     int? averageLatencyMs,
     int? successCount,
     int? failureCount,
@@ -1840,6 +1881,9 @@ class Peer extends DataClass implements Insertable<Peer> {
   }) => Peer(
     address: address ?? this.address,
     nodeId: nodeId.present ? nodeId.value : this.nodeId,
+    encryptionPublicKey: encryptionPublicKey.present
+        ? encryptionPublicKey.value
+        : this.encryptionPublicKey,
     averageLatencyMs: averageLatencyMs ?? this.averageLatencyMs,
     successCount: successCount ?? this.successCount,
     failureCount: failureCount ?? this.failureCount,
@@ -1849,6 +1893,9 @@ class Peer extends DataClass implements Insertable<Peer> {
     return Peer(
       address: data.address.present ? data.address.value : this.address,
       nodeId: data.nodeId.present ? data.nodeId.value : this.nodeId,
+      encryptionPublicKey: data.encryptionPublicKey.present
+          ? data.encryptionPublicKey.value
+          : this.encryptionPublicKey,
       averageLatencyMs: data.averageLatencyMs.present
           ? data.averageLatencyMs.value
           : this.averageLatencyMs,
@@ -1867,6 +1914,7 @@ class Peer extends DataClass implements Insertable<Peer> {
     return (StringBuffer('Peer(')
           ..write('address: $address, ')
           ..write('nodeId: $nodeId, ')
+          ..write('encryptionPublicKey: $encryptionPublicKey, ')
           ..write('averageLatencyMs: $averageLatencyMs, ')
           ..write('successCount: $successCount, ')
           ..write('failureCount: $failureCount, ')
@@ -1879,6 +1927,7 @@ class Peer extends DataClass implements Insertable<Peer> {
   int get hashCode => Object.hash(
     address,
     nodeId,
+    encryptionPublicKey,
     averageLatencyMs,
     successCount,
     failureCount,
@@ -1890,6 +1939,7 @@ class Peer extends DataClass implements Insertable<Peer> {
       (other is Peer &&
           other.address == this.address &&
           other.nodeId == this.nodeId &&
+          other.encryptionPublicKey == this.encryptionPublicKey &&
           other.averageLatencyMs == this.averageLatencyMs &&
           other.successCount == this.successCount &&
           other.failureCount == this.failureCount &&
@@ -1899,6 +1949,7 @@ class Peer extends DataClass implements Insertable<Peer> {
 class PeersCompanion extends UpdateCompanion<Peer> {
   final Value<String> address;
   final Value<String?> nodeId;
+  final Value<String?> encryptionPublicKey;
   final Value<int> averageLatencyMs;
   final Value<int> successCount;
   final Value<int> failureCount;
@@ -1907,6 +1958,7 @@ class PeersCompanion extends UpdateCompanion<Peer> {
   const PeersCompanion({
     this.address = const Value.absent(),
     this.nodeId = const Value.absent(),
+    this.encryptionPublicKey = const Value.absent(),
     this.averageLatencyMs = const Value.absent(),
     this.successCount = const Value.absent(),
     this.failureCount = const Value.absent(),
@@ -1916,6 +1968,7 @@ class PeersCompanion extends UpdateCompanion<Peer> {
   PeersCompanion.insert({
     required String address,
     this.nodeId = const Value.absent(),
+    this.encryptionPublicKey = const Value.absent(),
     this.averageLatencyMs = const Value.absent(),
     this.successCount = const Value.absent(),
     this.failureCount = const Value.absent(),
@@ -1925,6 +1978,7 @@ class PeersCompanion extends UpdateCompanion<Peer> {
   static Insertable<Peer> custom({
     Expression<String>? address,
     Expression<String>? nodeId,
+    Expression<String>? encryptionPublicKey,
     Expression<int>? averageLatencyMs,
     Expression<int>? successCount,
     Expression<int>? failureCount,
@@ -1934,6 +1988,8 @@ class PeersCompanion extends UpdateCompanion<Peer> {
     return RawValuesInsertable({
       if (address != null) 'address': address,
       if (nodeId != null) 'node_id': nodeId,
+      if (encryptionPublicKey != null)
+        'encryption_public_key': encryptionPublicKey,
       if (averageLatencyMs != null) 'average_latency_ms': averageLatencyMs,
       if (successCount != null) 'success_count': successCount,
       if (failureCount != null) 'failure_count': failureCount,
@@ -1945,6 +2001,7 @@ class PeersCompanion extends UpdateCompanion<Peer> {
   PeersCompanion copyWith({
     Value<String>? address,
     Value<String?>? nodeId,
+    Value<String?>? encryptionPublicKey,
     Value<int>? averageLatencyMs,
     Value<int>? successCount,
     Value<int>? failureCount,
@@ -1954,6 +2011,7 @@ class PeersCompanion extends UpdateCompanion<Peer> {
     return PeersCompanion(
       address: address ?? this.address,
       nodeId: nodeId ?? this.nodeId,
+      encryptionPublicKey: encryptionPublicKey ?? this.encryptionPublicKey,
       averageLatencyMs: averageLatencyMs ?? this.averageLatencyMs,
       successCount: successCount ?? this.successCount,
       failureCount: failureCount ?? this.failureCount,
@@ -1970,6 +2028,11 @@ class PeersCompanion extends UpdateCompanion<Peer> {
     }
     if (nodeId.present) {
       map['node_id'] = Variable<String>(nodeId.value);
+    }
+    if (encryptionPublicKey.present) {
+      map['encryption_public_key'] = Variable<String>(
+        encryptionPublicKey.value,
+      );
     }
     if (averageLatencyMs.present) {
       map['average_latency_ms'] = Variable<int>(averageLatencyMs.value);
@@ -1994,6 +2057,7 @@ class PeersCompanion extends UpdateCompanion<Peer> {
     return (StringBuffer('PeersCompanion(')
           ..write('address: $address, ')
           ..write('nodeId: $nodeId, ')
+          ..write('encryptionPublicKey: $encryptionPublicKey, ')
           ..write('averageLatencyMs: $averageLatencyMs, ')
           ..write('successCount: $successCount, ')
           ..write('failureCount: $failureCount, ')
@@ -3491,6 +3555,7 @@ typedef $$PeersTableCreateCompanionBuilder =
     PeersCompanion Function({
       required String address,
       Value<String?> nodeId,
+      Value<String?> encryptionPublicKey,
       Value<int> averageLatencyMs,
       Value<int> successCount,
       Value<int> failureCount,
@@ -3501,6 +3566,7 @@ typedef $$PeersTableUpdateCompanionBuilder =
     PeersCompanion Function({
       Value<String> address,
       Value<String?> nodeId,
+      Value<String?> encryptionPublicKey,
       Value<int> averageLatencyMs,
       Value<int> successCount,
       Value<int> failureCount,
@@ -3523,6 +3589,11 @@ class $$PeersTableFilterComposer extends Composer<_$AppDatabase, $PeersTable> {
 
   ColumnFilters<String> get nodeId => $composableBuilder(
     column: $table.nodeId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get encryptionPublicKey => $composableBuilder(
+    column: $table.encryptionPublicKey,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -3566,6 +3637,11 @@ class $$PeersTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get encryptionPublicKey => $composableBuilder(
+    column: $table.encryptionPublicKey,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<int> get averageLatencyMs => $composableBuilder(
     column: $table.averageLatencyMs,
     builder: (column) => ColumnOrderings(column),
@@ -3601,6 +3677,11 @@ class $$PeersTableAnnotationComposer
 
   GeneratedColumn<String> get nodeId =>
       $composableBuilder(column: $table.nodeId, builder: (column) => column);
+
+  GeneratedColumn<String> get encryptionPublicKey => $composableBuilder(
+    column: $table.encryptionPublicKey,
+    builder: (column) => column,
+  );
 
   GeneratedColumn<int> get averageLatencyMs => $composableBuilder(
     column: $table.averageLatencyMs,
@@ -3651,6 +3732,7 @@ class $$PeersTableTableManager
               ({
                 Value<String> address = const Value.absent(),
                 Value<String?> nodeId = const Value.absent(),
+                Value<String?> encryptionPublicKey = const Value.absent(),
                 Value<int> averageLatencyMs = const Value.absent(),
                 Value<int> successCount = const Value.absent(),
                 Value<int> failureCount = const Value.absent(),
@@ -3659,6 +3741,7 @@ class $$PeersTableTableManager
               }) => PeersCompanion(
                 address: address,
                 nodeId: nodeId,
+                encryptionPublicKey: encryptionPublicKey,
                 averageLatencyMs: averageLatencyMs,
                 successCount: successCount,
                 failureCount: failureCount,
@@ -3669,6 +3752,7 @@ class $$PeersTableTableManager
               ({
                 required String address,
                 Value<String?> nodeId = const Value.absent(),
+                Value<String?> encryptionPublicKey = const Value.absent(),
                 Value<int> averageLatencyMs = const Value.absent(),
                 Value<int> successCount = const Value.absent(),
                 Value<int> failureCount = const Value.absent(),
@@ -3677,6 +3761,7 @@ class $$PeersTableTableManager
               }) => PeersCompanion.insert(
                 address: address,
                 nodeId: nodeId,
+                encryptionPublicKey: encryptionPublicKey,
                 averageLatencyMs: averageLatencyMs,
                 successCount: successCount,
                 failureCount: failureCount,

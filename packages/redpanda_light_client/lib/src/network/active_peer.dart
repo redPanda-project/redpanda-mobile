@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:hex/hex.dart';
 import 'package:redpanda_light_client/src/crypto/crypto_utils.dart';
 import 'package:redpanda_light_client/src/security/gcm_framed_codec.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
+import 'package:redpanda_light_client/src/models/discovered_peer.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
 import 'package:redpanda_light_client/src/generated/commands.pb.dart';
@@ -38,6 +40,7 @@ class ActivePeer {
   static const int _cmdKademliaGetAnswer = 122;
   static const int _cmdJobAck = 130;
   static const int _cmdFlaschenpostPut = 141;
+  static const int _cmdFlaschenpostV2 = 142;
   static const int _cmdOutboundRegisterOhReq = 150;
   static const int _cmdOutboundRegisterOhRes = 151;
   static const int _cmdOutboundFetchReq = 152;
@@ -51,11 +54,18 @@ class ActivePeer {
   final SocketFactory socketFactory;
   final void Function(ConnectionStatus) onStatusChange;
   final void Function() onDisconnect;
-  final void Function(List<String>)? onPeersReceived;
+  final void Function(List<DiscoveredPeer>)? onPeersReceived;
   final void Function(int latencyMs)? onLatencyUpdate;
   final void Function()? onHandshakeComplete;
   final List<String> Function()? onPeerListRequested;
-  final void Function(String nodeId)? onNodeIdDiscovered;
+
+  /// Called once the peer's identity is known: the KademliaId and the
+  /// X25519 encryption public key (both hex) from the 64-byte public export.
+  final void Function(String nodeId, String encryptionPublicKey)?
+  onNodeIdDiscovered;
+
+  /// KademliaId (hex) of this peer, set once its public key was received.
+  String? discoveredNodeId;
 
   /// Callback for OH response commands (151, 153, 157, 158).
   void Function(int command, List<int> payload)? onCommandResponse;
@@ -301,6 +311,7 @@ class ActivePeer {
               command == _cmdKademliaGetAnswer ||
               command == _cmdJobAck ||
               command == _cmdFlaschenpostPut ||
+              command == _cmdFlaschenpostV2 ||
               command == _cmdOutboundRegisterOhReq ||
               command == _cmdOutboundFetchReq) {
             // These commands all follow the pattern: [CMD] [Length: 4 bytes] [Protobuf Data]
@@ -389,9 +400,15 @@ class ActivePeer {
     _peerPublicExport = Uint8List.fromList(keyBytes);
     RpLog.debug('ActivePeer($address): Peer Public Key Parsed.');
 
-    // KademliaId = SHA256(verifyKey)[0..20] (master spec Decision 2).
+    // KademliaId = SHA256(verifyKey)[0..20] (master spec Decision 2); the
+    // export's bytes 32..63 are the node's X25519 encryption public key
+    // (needed for garlic hop selection, MS04).
     final nodeId = NodeId.fromPublicKeyBytes(Uint8List.fromList(keyBytes));
-    onNodeIdDiscovered?.call(nodeId.toHex());
+    discoveredNodeId = nodeId.toHex();
+    onNodeIdDiscovered?.call(
+      nodeId.toHex(),
+      HEX.encode(keyBytes.sublist(32, 64)),
+    );
 
     if (_ephemeralFromUs == null) {
       _handshakeInitiationFuture = _initiateEncryptionHandshake();
@@ -581,14 +598,37 @@ class ActivePeer {
   void _handlePeerList(List<int> payload) {
     try {
       final msg = SendPeerList.fromBuffer(payload);
-      final peers = <String>[];
+      final peers = <DiscoveredPeer>[];
       for (final peerProto in msg.peers) {
-        if (peerProto.ip.isNotEmpty && peerProto.port > 0) {
-          final peerAddr = '${peerProto.ip}:${peerProto.port}';
-          // Filter out our own address if possible, but we might not know it easily.
-          // The client will deduplicate anyway.
-          peers.add(peerAddr);
+        if (peerProto.ip.isEmpty || peerProto.port <= 0) continue;
+        final peerAddr = '${peerProto.ip}:${peerProto.port}';
+
+        // MS04: extract the peer's identity if included. The KademliaId is
+        // derived from the 64-byte public export; the encryption key comes
+        // from the explicit field 4 with a fallback to bytes 32..63 of the
+        // export (Decision 10: the two are redundant).
+        String? nodeId;
+        String? encryptionKey;
+        final export = peerProto.hasNodeId()
+            ? peerProto.nodeId.publicKeyBytes
+            : const <int>[];
+        if (export.length == KeyPair.publicKeyLength) {
+          nodeId = NodeId.fromPublicKeyBytes(
+            Uint8List.fromList(export),
+          ).toHex();
+          encryptionKey = HEX.encode(export.sublist(32, 64));
         }
+        if (peerProto.encryptionPublicKey.length == CryptoUtils.keyLength) {
+          encryptionKey = HEX.encode(peerProto.encryptionPublicKey);
+        }
+
+        peers.add(
+          DiscoveredPeer(
+            address: peerAddr,
+            nodeId: nodeId,
+            encryptionPublicKey: encryptionKey,
+          ),
+        );
       }
       onPeersReceived?.call(peers);
     } catch (e) {

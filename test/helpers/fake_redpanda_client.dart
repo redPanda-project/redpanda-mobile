@@ -47,6 +47,7 @@ class FakeRedPandaClient implements RedPandaClient {
     String channelId,
     List<int> encryptionKey, {
     List<int>? peerOhId,
+    String? peerOhEndpoint,
     required bool isChannelCreator,
     String? ratchetState,
   }) {
