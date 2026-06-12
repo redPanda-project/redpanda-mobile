@@ -27,6 +27,10 @@ class MessageSyncService {
   StreamSubscription<OhMailboxUpdate>? _updateSub;
   StreamSubscription<RatchetStateUpdate>? _ratchetSub;
 
+  /// Serializes ratchet-state DB writes so they are applied in emission
+  /// order — a slow earlier write must not overwrite a newer state.
+  Future<void> _ratchetPersistPending = Future.value();
+
   MessageSyncService(
     this._client,
     this._messages,
@@ -58,15 +62,15 @@ class MessageSyncService {
         ),
       ),
     );
-    _ratchetSub ??= _client.ratchetStateUpdates.listen(
-      (update) => unawaited(
-        handleRatchetStateUpdate(update).catchError(
-          (Object e) => debugPrint(
-            'MessageSyncService: failed to persist ratchet state: $e',
-          ),
-        ),
-      ),
-    );
+    _ratchetSub ??= _client.ratchetStateUpdates.listen((update) {
+      _ratchetPersistPending = _ratchetPersistPending
+          .then((_) => handleRatchetStateUpdate(update))
+          .catchError(
+            (Object e) => debugPrint(
+              'MessageSyncService: failed to persist ratchet state: $e',
+            ),
+          );
+    });
   }
 
   Future<void> stop() async {

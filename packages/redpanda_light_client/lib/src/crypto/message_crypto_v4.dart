@@ -102,14 +102,15 @@ class MessageCryptoV4 {
   /// Verifies and decrypts a v4 payload with the per-message key
   /// [messageKey]; returns the inner plaintext.
   ///
-  /// Throws [GcmAuthenticationException] when the tag does not verify
+  /// Throws [FormatException] on an unknown version byte or a too-short
+  /// payload, and [GcmAuthenticationException] when the tag does not verify
   /// (tampered payload/header, wrong message key or wrong channel AAD).
   static Future<Uint8List> open({
     required List<int> payload,
     required List<int> messageKey,
     required String channelId,
   }) async {
-    // parseHeader has validated version and length.
+    parseHeader(payload); // validates version byte and minimum length
     final data = Uint8List.fromList(payload);
     final header = Uint8List.sublistView(data, 0, headerLength);
     final nonce = Uint8List.sublistView(

@@ -58,11 +58,15 @@ void main() {
       expect(() => MessageCryptoV4.parseHeader(payload), throwsFormatException);
     });
 
-    test('parseHeader rejects too-short payloads', () {
+    test('parseHeader and open reject too-short payloads', () {
+      final short = Uint8List(MessageCryptoV4.minPayloadLength - 1)
+        ..[0] = MessageCryptoV4.version;
+      expect(() => MessageCryptoV4.parseHeader(short), throwsFormatException);
       expect(
-        () => MessageCryptoV4.parseHeader(
-          Uint8List(MessageCryptoV4.minPayloadLength - 1)
-            ..[0] = MessageCryptoV4.version,
+        () => MessageCryptoV4.open(
+          payload: short,
+          messageKey: messageKey,
+          channelId: channelId,
         ),
         throwsFormatException,
       );

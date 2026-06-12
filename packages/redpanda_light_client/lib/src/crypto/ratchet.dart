@@ -328,38 +328,46 @@ class RatchetSession {
   /// Restores a session persisted with [toJson]. Throws [FormatException]
   /// on malformed input.
   factory RatchetSession.fromJson(String json) {
-    final Object? decoded = jsonDecode(json);
-    if (decoded is! Map<String, dynamic> || decoded['v'] != 1) {
-      throw const FormatException('unsupported ratchet state');
-    }
-    Uint8List bytes(String field) =>
-        Uint8List.fromList(HEX.decode(decoded[field] as String));
-    Uint8List? maybeBytes(String field) => decoded[field] != null
-        ? Uint8List.fromList(HEX.decode(decoded[field] as String))
-        : null;
+    try {
+      final Object? decoded = jsonDecode(json);
+      if (decoded is! Map<String, dynamic> || decoded['v'] != 1) {
+        throw const FormatException('unsupported ratchet state');
+      }
+      Uint8List bytes(String field) =>
+          Uint8List.fromList(HEX.decode(decoded[field] as String));
+      Uint8List? maybeBytes(String field) => decoded[field] != null
+          ? Uint8List.fromList(HEX.decode(decoded[field] as String))
+          : null;
 
-    return RatchetSession._(
-      rootKey: bytes('rk'),
-      ownPrivateKey: bytes('ownPriv'),
-      ownPublicKey: bytes('ownPub'),
-      remotePublicKey: maybeBytes('remotePub'),
-      sendChainKey: maybeBytes('cks'),
-      sendCount: decoded['ns'] as int,
-      recvChainKey: maybeBytes('ckr'),
-      recvCount: decoded['nr'] as int,
-      prevSendCount: decoded['pn'] as int,
-      skipped: [
-        for (final entry in decoded['skipped'] as List)
-          _SkippedKey(
-            ratchetPublicKey: Uint8List.fromList(
-              HEX.decode((entry as Map<String, dynamic>)['pub'] as String),
+      return RatchetSession._(
+        rootKey: bytes('rk'),
+        ownPrivateKey: bytes('ownPriv'),
+        ownPublicKey: bytes('ownPub'),
+        remotePublicKey: maybeBytes('remotePub'),
+        sendChainKey: maybeBytes('cks'),
+        sendCount: decoded['ns'] as int,
+        recvChainKey: maybeBytes('ckr'),
+        recvCount: decoded['nr'] as int,
+        prevSendCount: decoded['pn'] as int,
+        skipped: [
+          for (final entry in decoded['skipped'] as List)
+            _SkippedKey(
+              ratchetPublicKey: Uint8List.fromList(
+                HEX.decode((entry as Map<String, dynamic>)['pub'] as String),
+              ),
+              counter: entry['n'] as int,
+              messageKey: Uint8List.fromList(HEX.decode(entry['mk'] as String)),
+              createdAtMs: entry['ts'] as int,
             ),
-            counter: entry['n'] as int,
-            messageKey: Uint8List.fromList(HEX.decode(entry['mk'] as String)),
-            createdAtMs: entry['ts'] as int,
-          ),
-      ],
-    );
+        ],
+      );
+    } on FormatException {
+      rethrow;
+    } catch (e) {
+      // Missing fields / wrong types surface as TypeError or similar —
+      // normalize to the documented contract.
+      throw FormatException('malformed ratchet state: $e');
+    }
   }
 
   // -----------------------------------------------------------------------

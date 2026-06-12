@@ -218,6 +218,9 @@ void main() {
     test('fromJson rejects malformed state', () {
       expect(() => RatchetSession.fromJson('{}'), throwsFormatException);
       expect(() => RatchetSession.fromJson('not json'), throwsFormatException);
+      // Right version but missing fields: still a FormatException, not a
+      // TypeError leaking out of the parser.
+      expect(() => RatchetSession.fromJson('{"v":1}'), throwsFormatException);
     });
   });
 
