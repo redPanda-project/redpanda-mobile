@@ -33,6 +33,10 @@ class ScriptedV23Server implements Socket {
   /// Decrypted plaintext commands received from the client after encryption.
   final List<int> decryptedFromClient = [];
 
+  /// Raw bytes of the first encrypted frame sent to the client (the PING
+  /// with counter nonce 0) — kept for replay tests.
+  Uint8List? firstSentFrame;
+
   /// Completes when the server has decrypted the client's first encrypted
   /// command (must be PING = 5).
   final firstEncryptedCommand = Completer<int>();
@@ -57,7 +61,9 @@ class ScriptedV23Server implements Socket {
 
   /// Encrypts [plaintext] with the server codec and injects it.
   Future<void> replyEncrypted(List<int> plaintext) async {
-    _reply(await codec!.encrypt(plaintext));
+    final frame = await codec!.encrypt(plaintext);
+    firstSentFrame ??= frame;
+    _reply(frame);
   }
 
   @override
@@ -283,16 +289,12 @@ void main() {
       await waitFor(() => peer.isEncryptionActive);
       await server.firstEncryptedCommand.future;
 
-      // Re-send the frame with counter 0 — the client must enforce the
-      // expected receive counter and drop the connection.
-      final replay = GcmFramedCodec(
-        sendKey: Uint8List(32),
-        receiveKey: Uint8List(32),
-      );
-      // Build a syntactically valid frame with nonce counter 0 but bogus
-      // contents: tag check fails either way; counter mismatch also kills it.
-      final bogus = await replay.encrypt([5]);
-      server._reply(bogus);
+      // Replay the *exact* bytes of the server's first frame (valid GCM tag
+      // for counter nonce 0). The client already consumed counter 0, so only
+      // the receiver-enforced counter check can reject this — if the counter
+      // enforcement were removed, the frame would decrypt successfully.
+      final replayedFrame = server.firstSentFrame!;
+      server._reply(replayedFrame);
 
       await waitFor(() => disconnected);
       expect(peer.isDisconnected, isTrue);

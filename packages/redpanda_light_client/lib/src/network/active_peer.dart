@@ -378,7 +378,9 @@ class ActivePeer {
     final buffer = BytesBuilder();
     buffer.addByte(_cmdSendPublicKey);
     buffer.add(selfKeys.publicKeyBytes);
-    _sendData(buffer.toBytes());
+    // Part of the plaintext handshake: must never be encrypted, even if the
+    // codec got activated while this write was still queued on the tx chain.
+    _sendData(buffer.toBytes(), forceUnencrypted: true);
   }
 
   Uint8List? _pendingEphemeralFromThem;
