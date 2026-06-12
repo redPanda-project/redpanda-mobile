@@ -167,7 +167,8 @@ class CryptoUtils {
   // ---------------------------------------------------------------------
 
   /// HKDF-SHA256: derives [length] bytes from the input key material [ikm]
-  /// with the given [salt] and ASCII [info] string.
+  /// with the given [salt] and [info] string (encoded as Latin-1, i.e. one
+  /// byte per char — the protocol info strings are plain ASCII).
   static Future<Uint8List> hkdfSha256(
     List<int> ikm,
     List<int> salt,
@@ -178,7 +179,7 @@ class CryptoUtils {
     final key = await hkdf.deriveKey(
       secretKey: c.SecretKey(ikm),
       nonce: salt,
-      info: ascii.encode(info),
+      info: latin1.encode(info),
     );
     return Uint8List.fromList(await key.extractBytes());
   }

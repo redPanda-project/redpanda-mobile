@@ -64,20 +64,28 @@ void main() {
   });
 
   group('CryptoUtils HKDF-SHA256', () {
-    test('RFC 5869 test case 1', () async {
+    test('RFC 5869 test case 1 vector', () async {
       final ikm = _hex('0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b');
       final salt = _hex('000102030405060708090a0b0c');
-      // info = 0xf0f1f2f3f4f5f6f7f8f9 — not ASCII, so test via raw helper
-      // by comparing against a known derivation of the ASCII-info variant
-      // is not possible; instead verify determinism and length here and the
-      // ASCII-info path against the backend in the e2e tests.
-      final okm1 = await CryptoUtils.hkdfSha256(ikm, salt, 'tcp-client', 42);
-      final okm2 = await CryptoUtils.hkdfSha256(ikm, salt, 'tcp-client', 42);
-      final other = await CryptoUtils.hkdfSha256(ikm, salt, 'tcp-server', 42);
+      // info = 0xf0..0xf9; the info string is encoded as Latin-1 (one byte
+      // per char), so the non-ASCII vector bytes are representable.
+      final info = String.fromCharCodes(_hex('f0f1f2f3f4f5f6f7f8f9'));
+      final expectedOkm = _hex(
+        '3cb25f25faacd57a90434f64d0362f2a'
+        '2d2d0a90cf1a5a4c5db02d56ecc4c5bf'
+        '34007208d5b887185865',
+      );
 
-      expect(okm1.length, 42);
-      expect(okm1, equals(okm2));
-      expect(okm1, isNot(equals(other)));
+      final okm = await CryptoUtils.hkdfSha256(ikm, salt, info, 42);
+      expect(okm, equals(expectedOkm));
+    });
+
+    test('per-direction info strings derive distinct keys', () async {
+      final ikm = _hex('0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b');
+      final salt = _hex('000102030405060708090a0b0c');
+      final client = await CryptoUtils.hkdfSha256(ikm, salt, 'tcp-client', 32);
+      final server = await CryptoUtils.hkdfSha256(ikm, salt, 'tcp-server', 32);
+      expect(client, isNot(equals(server)));
     });
   });
 

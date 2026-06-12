@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -39,9 +41,11 @@ class _CreateChannelScreenState extends ConsumerState<CreateChannelScreen> {
     });
 
     // Add to repository
-    ref.read(channelRepositoryProvider).addChannel(channel);
+    await ref.read(channelRepositoryProvider).addChannel(channel);
 
-    _registerOwnOh(channel);
+    // Fire-and-forget by design: the QR is usable without the OH and gets
+    // upgraded in place once registration succeeds.
+    unawaited(_registerOwnOh(channel));
   }
 
   /// Registers our own Outbound Handle for this channel and embeds it into
