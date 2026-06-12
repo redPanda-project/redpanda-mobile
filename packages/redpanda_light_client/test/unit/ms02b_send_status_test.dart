@@ -294,6 +294,45 @@ void main() {
       final messageId = await client.sendMessage(channel.id, 'Hello');
       expect(messageId, hasLength(32));
     });
+
+    test('a response arriving after the timeout is not misattributed to the '
+        'next deposit', () async {
+      final (client, socket) = await connectedClient(
+        depositResponseTimeout: const Duration(milliseconds: 200),
+      );
+      addTearDown(client.disconnect);
+
+      final channel = Channel.generate('Test');
+      client.addChannelKeys(channel.id, channel.encryptionKey);
+
+      // First deposit: the node answers QUOTA_EXCEEDED, but only after the
+      // client already gave up waiting.
+      var deposits = 0;
+      socket.onCommandFrame = (command, payload) {
+        if (command != 141) return;
+        deposits++;
+        if (deposits == 1) {
+          Future.delayed(const Duration(milliseconds: 400), () {
+            final late = FlaschenpostPutResponse()
+              ..status = Status.QUOTA_EXCEEDED;
+            socket.replyCommand(158, late.writeToBuffer());
+          });
+        } else {
+          final response = FlaschenpostPutResponse()..status = Status.OK;
+          socket.replyCommand(158, response.writeToBuffer());
+        }
+      };
+
+      // Times out and falls back to fire-and-forget.
+      await client.sendMessage(channel.id, 'First');
+
+      // Let the stale QUOTA_EXCEEDED arrive before the next deposit.
+      await Future.delayed(const Duration(milliseconds: 400));
+
+      // The second deposit must see ITS response (OK), not the stale one.
+      final messageId = await client.sendMessage(channel.id, 'Second');
+      expect(messageId, hasLength(32));
+    });
   });
 
   group('MS02b registerOutboundHandle: RegisterOhResponse handling', () {

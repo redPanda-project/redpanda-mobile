@@ -21,8 +21,8 @@ class SendRetryQueue {
   static const Duration checkInterval = Duration(seconds: 60);
   static const Duration maxBackoff = Duration(minutes: 30);
 
-  /// retryCount increment when the recipient mailbox is full
-  /// (QUOTA_EXCEEDED, reject-new). Jumps the next backoff window to
+  /// How much retryCount is incremented by when the recipient mailbox is
+  /// full (QUOTA_EXCEEDED, reject-new). Jumps the next backoff window to
   /// >= 2^3 = 8 minutes — retrying sooner cannot succeed until the
   /// recipient fetched and acknowledged their mailbox.
   static const int quotaExceededPenalty = 3;
