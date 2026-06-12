@@ -428,6 +428,17 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _pendingRgbMeta = const VerificationMeta(
+    'pendingRgb',
+  );
+  @override
+  late final GeneratedColumn<String> pendingRgb = GeneratedColumn<String>(
+    'pending_rgb',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     uuid,
@@ -440,6 +451,7 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
     peerOhPublicKey,
     lastSeen,
     ratchetState,
+    pendingRgb,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -539,6 +551,12 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
         ),
       );
     }
+    if (data.containsKey('pending_rgb')) {
+      context.handle(
+        _pendingRgbMeta,
+        pendingRgb.isAcceptableOrUnknown(data['pending_rgb']!, _pendingRgbMeta),
+      );
+    }
     return context;
   }
 
@@ -588,6 +606,10 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
         DriftSqlType.string,
         data['${effectivePrefix}ratchet_state'],
       ),
+      pendingRgb: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}pending_rgb'],
+      ),
     );
   }
 
@@ -608,6 +630,7 @@ class Channel extends DataClass implements Insertable<Channel> {
   final String? peerOhPublicKey;
   final DateTime? lastSeen;
   final String? ratchetState;
+  final String? pendingRgb;
   const Channel({
     required this.uuid,
     required this.label,
@@ -619,6 +642,7 @@ class Channel extends DataClass implements Insertable<Channel> {
     this.peerOhPublicKey,
     this.lastSeen,
     this.ratchetState,
+    this.pendingRgb,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -644,6 +668,9 @@ class Channel extends DataClass implements Insertable<Channel> {
     }
     if (!nullToAbsent || ratchetState != null) {
       map['ratchet_state'] = Variable<String>(ratchetState);
+    }
+    if (!nullToAbsent || pendingRgb != null) {
+      map['pending_rgb'] = Variable<String>(pendingRgb);
     }
     return map;
   }
@@ -672,6 +699,9 @@ class Channel extends DataClass implements Insertable<Channel> {
       ratchetState: ratchetState == null && nullToAbsent
           ? const Value.absent()
           : Value(ratchetState),
+      pendingRgb: pendingRgb == null && nullToAbsent
+          ? const Value.absent()
+          : Value(pendingRgb),
     );
   }
 
@@ -691,6 +721,7 @@ class Channel extends DataClass implements Insertable<Channel> {
       peerOhPublicKey: serializer.fromJson<String?>(json['peerOhPublicKey']),
       lastSeen: serializer.fromJson<DateTime?>(json['lastSeen']),
       ratchetState: serializer.fromJson<String?>(json['ratchetState']),
+      pendingRgb: serializer.fromJson<String?>(json['pendingRgb']),
     );
   }
   @override
@@ -707,6 +738,7 @@ class Channel extends DataClass implements Insertable<Channel> {
       'peerOhPublicKey': serializer.toJson<String?>(peerOhPublicKey),
       'lastSeen': serializer.toJson<DateTime?>(lastSeen),
       'ratchetState': serializer.toJson<String?>(ratchetState),
+      'pendingRgb': serializer.toJson<String?>(pendingRgb),
     };
   }
 
@@ -721,6 +753,7 @@ class Channel extends DataClass implements Insertable<Channel> {
     Value<String?> peerOhPublicKey = const Value.absent(),
     Value<DateTime?> lastSeen = const Value.absent(),
     Value<String?> ratchetState = const Value.absent(),
+    Value<String?> pendingRgb = const Value.absent(),
   }) => Channel(
     uuid: uuid ?? this.uuid,
     label: label ?? this.label,
@@ -738,6 +771,7 @@ class Channel extends DataClass implements Insertable<Channel> {
         : this.peerOhPublicKey,
     lastSeen: lastSeen.present ? lastSeen.value : this.lastSeen,
     ratchetState: ratchetState.present ? ratchetState.value : this.ratchetState,
+    pendingRgb: pendingRgb.present ? pendingRgb.value : this.pendingRgb,
   );
   Channel copyWithCompanion(ChannelsCompanion data) {
     return Channel(
@@ -763,6 +797,9 @@ class Channel extends DataClass implements Insertable<Channel> {
       ratchetState: data.ratchetState.present
           ? data.ratchetState.value
           : this.ratchetState,
+      pendingRgb: data.pendingRgb.present
+          ? data.pendingRgb.value
+          : this.pendingRgb,
     );
   }
 
@@ -778,7 +815,8 @@ class Channel extends DataClass implements Insertable<Channel> {
           ..write('peerOhId: $peerOhId, ')
           ..write('peerOhPublicKey: $peerOhPublicKey, ')
           ..write('lastSeen: $lastSeen, ')
-          ..write('ratchetState: $ratchetState')
+          ..write('ratchetState: $ratchetState, ')
+          ..write('pendingRgb: $pendingRgb')
           ..write(')'))
         .toString();
   }
@@ -795,6 +833,7 @@ class Channel extends DataClass implements Insertable<Channel> {
     peerOhPublicKey,
     lastSeen,
     ratchetState,
+    pendingRgb,
   );
   @override
   bool operator ==(Object other) =>
@@ -809,7 +848,8 @@ class Channel extends DataClass implements Insertable<Channel> {
           other.peerOhId == this.peerOhId &&
           other.peerOhPublicKey == this.peerOhPublicKey &&
           other.lastSeen == this.lastSeen &&
-          other.ratchetState == this.ratchetState);
+          other.ratchetState == this.ratchetState &&
+          other.pendingRgb == this.pendingRgb);
 }
 
 class ChannelsCompanion extends UpdateCompanion<Channel> {
@@ -823,6 +863,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
   final Value<String?> peerOhPublicKey;
   final Value<DateTime?> lastSeen;
   final Value<String?> ratchetState;
+  final Value<String?> pendingRgb;
   final Value<int> rowid;
   const ChannelsCompanion({
     this.uuid = const Value.absent(),
@@ -835,6 +876,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     this.peerOhPublicKey = const Value.absent(),
     this.lastSeen = const Value.absent(),
     this.ratchetState = const Value.absent(),
+    this.pendingRgb = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   ChannelsCompanion.insert({
@@ -848,6 +890,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     this.peerOhPublicKey = const Value.absent(),
     this.lastSeen = const Value.absent(),
     this.ratchetState = const Value.absent(),
+    this.pendingRgb = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : uuid = Value(uuid),
        label = Value(label),
@@ -864,6 +907,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     Expression<String>? peerOhPublicKey,
     Expression<DateTime>? lastSeen,
     Expression<String>? ratchetState,
+    Expression<String>? pendingRgb,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -877,6 +921,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
       if (peerOhPublicKey != null) 'peer_oh_public_key': peerOhPublicKey,
       if (lastSeen != null) 'last_seen': lastSeen,
       if (ratchetState != null) 'ratchet_state': ratchetState,
+      if (pendingRgb != null) 'pending_rgb': pendingRgb,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -892,6 +937,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     Value<String?>? peerOhPublicKey,
     Value<DateTime?>? lastSeen,
     Value<String?>? ratchetState,
+    Value<String?>? pendingRgb,
     Value<int>? rowid,
   }) {
     return ChannelsCompanion(
@@ -905,6 +951,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
       peerOhPublicKey: peerOhPublicKey ?? this.peerOhPublicKey,
       lastSeen: lastSeen ?? this.lastSeen,
       ratchetState: ratchetState ?? this.ratchetState,
+      pendingRgb: pendingRgb ?? this.pendingRgb,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -942,6 +989,9 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     if (ratchetState.present) {
       map['ratchet_state'] = Variable<String>(ratchetState.value);
     }
+    if (pendingRgb.present) {
+      map['pending_rgb'] = Variable<String>(pendingRgb.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -961,6 +1011,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
           ..write('peerOhPublicKey: $peerOhPublicKey, ')
           ..write('lastSeen: $lastSeen, ')
           ..write('ratchetState: $ratchetState, ')
+          ..write('pendingRgb: $pendingRgb, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -2532,6 +2583,273 @@ class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
   }
 }
 
+class $SessionTagsTable extends SessionTags
+    with TableInfo<$SessionTagsTable, SessionTag> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $SessionTagsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _tagMeta = const VerificationMeta('tag');
+  @override
+  late final GeneratedColumn<String> tag = GeneratedColumn<String>(
+    'tag',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _channelIdMeta = const VerificationMeta(
+    'channelId',
+  );
+  @override
+  late final GeneratedColumn<String> channelId = GeneratedColumn<String>(
+    'channel_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES channels (uuid)',
+    ),
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [tag, channelId, createdAt];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'session_tags';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<SessionTag> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('tag')) {
+      context.handle(
+        _tagMeta,
+        tag.isAcceptableOrUnknown(data['tag']!, _tagMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_tagMeta);
+    }
+    if (data.containsKey('channel_id')) {
+      context.handle(
+        _channelIdMeta,
+        channelId.isAcceptableOrUnknown(data['channel_id']!, _channelIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_channelIdMeta);
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {tag};
+  @override
+  SessionTag map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return SessionTag(
+      tag: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}tag'],
+      )!,
+      channelId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}channel_id'],
+      )!,
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}created_at'],
+      )!,
+    );
+  }
+
+  @override
+  $SessionTagsTable createAlias(String alias) {
+    return $SessionTagsTable(attachedDatabase, alias);
+  }
+}
+
+class SessionTag extends DataClass implements Insertable<SessionTag> {
+  final String tag;
+  final String channelId;
+  final DateTime createdAt;
+  const SessionTag({
+    required this.tag,
+    required this.channelId,
+    required this.createdAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['tag'] = Variable<String>(tag);
+    map['channel_id'] = Variable<String>(channelId);
+    map['created_at'] = Variable<DateTime>(createdAt);
+    return map;
+  }
+
+  SessionTagsCompanion toCompanion(bool nullToAbsent) {
+    return SessionTagsCompanion(
+      tag: Value(tag),
+      channelId: Value(channelId),
+      createdAt: Value(createdAt),
+    );
+  }
+
+  factory SessionTag.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return SessionTag(
+      tag: serializer.fromJson<String>(json['tag']),
+      channelId: serializer.fromJson<String>(json['channelId']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'tag': serializer.toJson<String>(tag),
+      'channelId': serializer.toJson<String>(channelId),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+    };
+  }
+
+  SessionTag copyWith({String? tag, String? channelId, DateTime? createdAt}) =>
+      SessionTag(
+        tag: tag ?? this.tag,
+        channelId: channelId ?? this.channelId,
+        createdAt: createdAt ?? this.createdAt,
+      );
+  SessionTag copyWithCompanion(SessionTagsCompanion data) {
+    return SessionTag(
+      tag: data.tag.present ? data.tag.value : this.tag,
+      channelId: data.channelId.present ? data.channelId.value : this.channelId,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SessionTag(')
+          ..write('tag: $tag, ')
+          ..write('channelId: $channelId, ')
+          ..write('createdAt: $createdAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(tag, channelId, createdAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is SessionTag &&
+          other.tag == this.tag &&
+          other.channelId == this.channelId &&
+          other.createdAt == this.createdAt);
+}
+
+class SessionTagsCompanion extends UpdateCompanion<SessionTag> {
+  final Value<String> tag;
+  final Value<String> channelId;
+  final Value<DateTime> createdAt;
+  final Value<int> rowid;
+  const SessionTagsCompanion({
+    this.tag = const Value.absent(),
+    this.channelId = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  SessionTagsCompanion.insert({
+    required String tag,
+    required String channelId,
+    required DateTime createdAt,
+    this.rowid = const Value.absent(),
+  }) : tag = Value(tag),
+       channelId = Value(channelId),
+       createdAt = Value(createdAt);
+  static Insertable<SessionTag> custom({
+    Expression<String>? tag,
+    Expression<String>? channelId,
+    Expression<DateTime>? createdAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (tag != null) 'tag': tag,
+      if (channelId != null) 'channel_id': channelId,
+      if (createdAt != null) 'created_at': createdAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  SessionTagsCompanion copyWith({
+    Value<String>? tag,
+    Value<String>? channelId,
+    Value<DateTime>? createdAt,
+    Value<int>? rowid,
+  }) {
+    return SessionTagsCompanion(
+      tag: tag ?? this.tag,
+      channelId: channelId ?? this.channelId,
+      createdAt: createdAt ?? this.createdAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (tag.present) {
+      map['tag'] = Variable<String>(tag.value);
+    }
+    if (channelId.present) {
+      map['channel_id'] = Variable<String>(channelId.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SessionTagsCompanion(')
+          ..write('tag: $tag, ')
+          ..write('channelId: $channelId, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -2542,6 +2860,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $OutboundHandlesTable outboundHandles = $OutboundHandlesTable(
     this,
   );
+  late final $SessionTagsTable sessionTags = $SessionTagsTable(this);
   late final Index idxMessagesConvMessageId = Index(
     'idx_messages_conv_message_id',
     'CREATE UNIQUE INDEX idx_messages_conv_message_id ON messages (conversation_id, message_id)',
@@ -2556,6 +2875,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     messages,
     peers,
     outboundHandles,
+    sessionTags,
     idxMessagesConvMessageId,
   ];
 }
@@ -2746,6 +3066,7 @@ typedef $$ChannelsTableCreateCompanionBuilder =
       Value<String?> peerOhPublicKey,
       Value<DateTime?> lastSeen,
       Value<String?> ratchetState,
+      Value<String?> pendingRgb,
       Value<int> rowid,
     });
 typedef $$ChannelsTableUpdateCompanionBuilder =
@@ -2760,6 +3081,7 @@ typedef $$ChannelsTableUpdateCompanionBuilder =
       Value<String?> peerOhPublicKey,
       Value<DateTime?> lastSeen,
       Value<String?> ratchetState,
+      Value<String?> pendingRgb,
       Value<int> rowid,
     });
 
@@ -2783,6 +3105,24 @@ final class $$ChannelsTableReferences
     );
 
     final cache = $_typedResult.readTableOrNull(_messagesRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+
+  static MultiTypedResultKey<$SessionTagsTable, List<SessionTag>>
+  _sessionTagsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
+    db.sessionTags,
+    aliasName: $_aliasNameGenerator(db.channels.uuid, db.sessionTags.channelId),
+  );
+
+  $$SessionTagsTableProcessedTableManager get sessionTagsRefs {
+    final manager = $$SessionTagsTableTableManager(
+      $_db,
+      $_db.sessionTags,
+    ).filter((f) => f.channelId.uuid.sqlEquals($_itemColumn<String>('uuid')!));
+
+    final cache = $_typedResult.readTableOrNull(_sessionTagsRefsTable($_db));
     return ProcessedTableManager(
       manager.$state.copyWith(prefetchedData: cache),
     );
@@ -2848,6 +3188,11 @@ class $$ChannelsTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
+  ColumnFilters<String> get pendingRgb => $composableBuilder(
+    column: $table.pendingRgb,
+    builder: (column) => ColumnFilters(column),
+  );
+
   Expression<bool> messagesRefs(
     Expression<bool> Function($$MessagesTableFilterComposer f) f,
   ) {
@@ -2864,6 +3209,31 @@ class $$ChannelsTableFilterComposer
           }) => $$MessagesTableFilterComposer(
             $db: $db,
             $table: $db.messages,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<bool> sessionTagsRefs(
+    Expression<bool> Function($$SessionTagsTableFilterComposer f) f,
+  ) {
+    final $$SessionTagsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.uuid,
+      referencedTable: $db.sessionTags,
+      getReferencedColumn: (t) => t.channelId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$SessionTagsTableFilterComposer(
+            $db: $db,
+            $table: $db.sessionTags,
             $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
             joinBuilder: joinBuilder,
             $removeJoinBuilderFromRootComposer:
@@ -2932,6 +3302,11 @@ class $$ChannelsTableOrderingComposer
     column: $table.ratchetState,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get pendingRgb => $composableBuilder(
+    column: $table.pendingRgb,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$ChannelsTableAnnotationComposer
@@ -2985,6 +3360,11 @@ class $$ChannelsTableAnnotationComposer
     builder: (column) => column,
   );
 
+  GeneratedColumn<String> get pendingRgb => $composableBuilder(
+    column: $table.pendingRgb,
+    builder: (column) => column,
+  );
+
   Expression<T> messagesRefs<T extends Object>(
     Expression<T> Function($$MessagesTableAnnotationComposer a) f,
   ) {
@@ -3009,6 +3389,31 @@ class $$ChannelsTableAnnotationComposer
     );
     return f(composer);
   }
+
+  Expression<T> sessionTagsRefs<T extends Object>(
+    Expression<T> Function($$SessionTagsTableAnnotationComposer a) f,
+  ) {
+    final $$SessionTagsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.uuid,
+      referencedTable: $db.sessionTags,
+      getReferencedColumn: (t) => t.channelId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$SessionTagsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.sessionTags,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
 }
 
 class $$ChannelsTableTableManager
@@ -3024,7 +3429,7 @@ class $$ChannelsTableTableManager
           $$ChannelsTableUpdateCompanionBuilder,
           (Channel, $$ChannelsTableReferences),
           Channel,
-          PrefetchHooks Function({bool messagesRefs})
+          PrefetchHooks Function({bool messagesRefs, bool sessionTagsRefs})
         > {
   $$ChannelsTableTableManager(_$AppDatabase db, $ChannelsTable table)
     : super(
@@ -3049,6 +3454,7 @@ class $$ChannelsTableTableManager
                 Value<String?> peerOhPublicKey = const Value.absent(),
                 Value<DateTime?> lastSeen = const Value.absent(),
                 Value<String?> ratchetState = const Value.absent(),
+                Value<String?> pendingRgb = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ChannelsCompanion(
                 uuid: uuid,
@@ -3061,6 +3467,7 @@ class $$ChannelsTableTableManager
                 peerOhPublicKey: peerOhPublicKey,
                 lastSeen: lastSeen,
                 ratchetState: ratchetState,
+                pendingRgb: pendingRgb,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -3075,6 +3482,7 @@ class $$ChannelsTableTableManager
                 Value<String?> peerOhPublicKey = const Value.absent(),
                 Value<DateTime?> lastSeen = const Value.absent(),
                 Value<String?> ratchetState = const Value.absent(),
+                Value<String?> pendingRgb = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ChannelsCompanion.insert(
                 uuid: uuid,
@@ -3087,6 +3495,7 @@ class $$ChannelsTableTableManager
                 peerOhPublicKey: peerOhPublicKey,
                 lastSeen: lastSeen,
                 ratchetState: ratchetState,
+                pendingRgb: pendingRgb,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
@@ -3097,30 +3506,63 @@ class $$ChannelsTableTableManager
                 ),
               )
               .toList(),
-          prefetchHooksCallback: ({messagesRefs = false}) {
-            return PrefetchHooks(
-              db: db,
-              explicitlyWatchedTables: [if (messagesRefs) db.messages],
-              addJoins: null,
-              getPrefetchedDataCallback: (items) async {
-                return [
-                  if (messagesRefs)
-                    await $_getPrefetchedData<Channel, $ChannelsTable, Message>(
-                      currentTable: table,
-                      referencedTable: $$ChannelsTableReferences
-                          ._messagesRefsTable(db),
-                      managerFromTypedResult: (p0) =>
-                          $$ChannelsTableReferences(db, table, p0).messagesRefs,
-                      referencedItemsForCurrentItem: (item, referencedItems) =>
-                          referencedItems.where(
-                            (e) => e.conversationId == item.uuid,
-                          ),
-                      typedResults: items,
-                    ),
-                ];
+          prefetchHooksCallback:
+              ({messagesRefs = false, sessionTagsRefs = false}) {
+                return PrefetchHooks(
+                  db: db,
+                  explicitlyWatchedTables: [
+                    if (messagesRefs) db.messages,
+                    if (sessionTagsRefs) db.sessionTags,
+                  ],
+                  addJoins: null,
+                  getPrefetchedDataCallback: (items) async {
+                    return [
+                      if (messagesRefs)
+                        await $_getPrefetchedData<
+                          Channel,
+                          $ChannelsTable,
+                          Message
+                        >(
+                          currentTable: table,
+                          referencedTable: $$ChannelsTableReferences
+                              ._messagesRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$ChannelsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).messagesRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.conversationId == item.uuid,
+                              ),
+                          typedResults: items,
+                        ),
+                      if (sessionTagsRefs)
+                        await $_getPrefetchedData<
+                          Channel,
+                          $ChannelsTable,
+                          SessionTag
+                        >(
+                          currentTable: table,
+                          referencedTable: $$ChannelsTableReferences
+                              ._sessionTagsRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$ChannelsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).sessionTagsRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.channelId == item.uuid,
+                              ),
+                          typedResults: items,
+                        ),
+                    ];
+                  },
+                );
               },
-            );
-          },
         ),
       );
 }
@@ -3137,7 +3579,7 @@ typedef $$ChannelsTableProcessedTableManager =
       $$ChannelsTableUpdateCompanionBuilder,
       (Channel, $$ChannelsTableReferences),
       Channel,
-      PrefetchHooks Function({bool messagesRefs})
+      PrefetchHooks Function({bool messagesRefs, bool sessionTagsRefs})
     >;
 typedef $$MessagesTableCreateCompanionBuilder =
     MessagesCompanion Function({
@@ -4034,6 +4476,287 @@ typedef $$OutboundHandlesTableProcessedTableManager =
       OutboundHandle,
       PrefetchHooks Function()
     >;
+typedef $$SessionTagsTableCreateCompanionBuilder =
+    SessionTagsCompanion Function({
+      required String tag,
+      required String channelId,
+      required DateTime createdAt,
+      Value<int> rowid,
+    });
+typedef $$SessionTagsTableUpdateCompanionBuilder =
+    SessionTagsCompanion Function({
+      Value<String> tag,
+      Value<String> channelId,
+      Value<DateTime> createdAt,
+      Value<int> rowid,
+    });
+
+final class $$SessionTagsTableReferences
+    extends BaseReferences<_$AppDatabase, $SessionTagsTable, SessionTag> {
+  $$SessionTagsTableReferences(super.$_db, super.$_table, super.$_typedResult);
+
+  static $ChannelsTable _channelIdTable(_$AppDatabase db) =>
+      db.channels.createAlias(
+        $_aliasNameGenerator(db.sessionTags.channelId, db.channels.uuid),
+      );
+
+  $$ChannelsTableProcessedTableManager get channelId {
+    final $_column = $_itemColumn<String>('channel_id')!;
+
+    final manager = $$ChannelsTableTableManager(
+      $_db,
+      $_db.channels,
+    ).filter((f) => f.uuid.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_channelIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$SessionTagsTableFilterComposer
+    extends Composer<_$AppDatabase, $SessionTagsTable> {
+  $$SessionTagsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get tag => $composableBuilder(
+    column: $table.tag,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$ChannelsTableFilterComposer get channelId {
+    final $$ChannelsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.channelId,
+      referencedTable: $db.channels,
+      getReferencedColumn: (t) => t.uuid,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$ChannelsTableFilterComposer(
+            $db: $db,
+            $table: $db.channels,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$SessionTagsTableOrderingComposer
+    extends Composer<_$AppDatabase, $SessionTagsTable> {
+  $$SessionTagsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get tag => $composableBuilder(
+    column: $table.tag,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$ChannelsTableOrderingComposer get channelId {
+    final $$ChannelsTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.channelId,
+      referencedTable: $db.channels,
+      getReferencedColumn: (t) => t.uuid,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$ChannelsTableOrderingComposer(
+            $db: $db,
+            $table: $db.channels,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$SessionTagsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $SessionTagsTable> {
+  $$SessionTagsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get tag =>
+      $composableBuilder(column: $table.tag, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  $$ChannelsTableAnnotationComposer get channelId {
+    final $$ChannelsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.channelId,
+      referencedTable: $db.channels,
+      getReferencedColumn: (t) => t.uuid,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$ChannelsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.channels,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$SessionTagsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $SessionTagsTable,
+          SessionTag,
+          $$SessionTagsTableFilterComposer,
+          $$SessionTagsTableOrderingComposer,
+          $$SessionTagsTableAnnotationComposer,
+          $$SessionTagsTableCreateCompanionBuilder,
+          $$SessionTagsTableUpdateCompanionBuilder,
+          (SessionTag, $$SessionTagsTableReferences),
+          SessionTag,
+          PrefetchHooks Function({bool channelId})
+        > {
+  $$SessionTagsTableTableManager(_$AppDatabase db, $SessionTagsTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$SessionTagsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$SessionTagsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$SessionTagsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> tag = const Value.absent(),
+                Value<String> channelId = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => SessionTagsCompanion(
+                tag: tag,
+                channelId: channelId,
+                createdAt: createdAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String tag,
+                required String channelId,
+                required DateTime createdAt,
+                Value<int> rowid = const Value.absent(),
+              }) => SessionTagsCompanion.insert(
+                tag: tag,
+                channelId: channelId,
+                createdAt: createdAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable(table),
+                  $$SessionTagsTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: ({channelId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (channelId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.channelId,
+                                referencedTable: $$SessionTagsTableReferences
+                                    ._channelIdTable(db),
+                                referencedColumn: $$SessionTagsTableReferences
+                                    ._channelIdTable(db)
+                                    .uuid,
+                              )
+                              as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ),
+      );
+}
+
+typedef $$SessionTagsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $SessionTagsTable,
+      SessionTag,
+      $$SessionTagsTableFilterComposer,
+      $$SessionTagsTableOrderingComposer,
+      $$SessionTagsTableAnnotationComposer,
+      $$SessionTagsTableCreateCompanionBuilder,
+      $$SessionTagsTableUpdateCompanionBuilder,
+      (SessionTag, $$SessionTagsTableReferences),
+      SessionTag,
+      PrefetchHooks Function({bool channelId})
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -4048,4 +4771,6 @@ class $AppDatabaseManager {
       $$PeersTableTableManager(_db, _db.peers);
   $$OutboundHandlesTableTableManager get outboundHandles =>
       $$OutboundHandlesTableTableManager(_db, _db.outboundHandles);
+  $$SessionTagsTableTableManager get sessionTags =>
+      $$SessionTagsTableTableManager(_db, _db.sessionTags);
 }

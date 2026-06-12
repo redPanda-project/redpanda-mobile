@@ -313,7 +313,7 @@ void main() {
       await client.sendMessage(channel.id, 'No reply path');
       await waitFor(() => frames.isNotEmpty);
 
-      final (_, __, ___, payload, ____) = await peelAll(frames.single.$2, hops);
+      final (_, _, _, payload, _) = await peelAll(frames.single.$2, hops);
       final bobSession = await RatchetSession.create(
         channelKey: channel.encryptionKey,
         isChannelCreator: false,
@@ -431,7 +431,7 @@ void main() {
 
       expect(frames.single.$1, 142);
       expect(client.lastSendViaRgb, isFalse);
-      final (cmd, ohId, tag, _, __) = await peelAll(frames.single.$2, hops);
+      final (cmd, ohId, tag, _, _) = await peelAll(frames.single.$2, hops);
       expect(cmd, GarlicBuilder.cmdDeliver, reason: 'untagged forward path');
       expect(ohId, equals(peerOhId));
       expect(tag, isNull);

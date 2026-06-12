@@ -17,8 +17,12 @@ class FakeRedPandaClient implements RedPandaClient {
   final Map<String, List<int>> channelKeys = {};
   final Map<String, bool> channelCreatorRoles = {};
   final Map<String, String> restoredRatchetStates = {};
+  final Map<String, Map<String, int>> restoredSessionTags = {};
+  final Map<String, String> restoredPendingRgbs = {};
   final ratchetStateController =
       StreamController<RatchetStateUpdate>.broadcast();
+  final garlicSessionController =
+      StreamController<GarlicSessionUpdate>.broadcast();
 
   @override
   Future<String> sendMessage(
@@ -50,17 +54,29 @@ class FakeRedPandaClient implements RedPandaClient {
     String? peerOhEndpoint,
     required bool isChannelCreator,
     String? ratchetState,
+    Map<String, int>? sessionTags,
+    String? pendingRgbHex,
   }) {
     channelKeys[channelId] = encryptionKey;
     channelCreatorRoles[channelId] = isChannelCreator;
     if (ratchetState != null) {
       restoredRatchetStates[channelId] = ratchetState;
     }
+    if (sessionTags != null) {
+      restoredSessionTags[channelId] = sessionTags;
+    }
+    if (pendingRgbHex != null) {
+      restoredPendingRgbs[channelId] = pendingRgbHex;
+    }
   }
 
   @override
   Stream<RatchetStateUpdate> get ratchetStateUpdates =>
       ratchetStateController.stream;
+
+  @override
+  Stream<GarlicSessionUpdate> get garlicSessionUpdates =>
+      garlicSessionController.stream;
 
   @override
   Stream<DecryptedMessage> get incomingMessages => incomingController.stream;
@@ -86,6 +102,7 @@ class FakeRedPandaClient implements RedPandaClient {
     await incomingController.close();
     await updateController.close();
     await ratchetStateController.close();
+    await garlicSessionController.close();
   }
 
   @override

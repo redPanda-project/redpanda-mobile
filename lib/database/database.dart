@@ -37,8 +37,25 @@ class Channels extends Table {
   // in the QR code or any backup that leaves the device.
   TextColumn get ratchetState => text().nullable()();
 
+  // MS05: latest unused ReverseGarlicBlock received from the channel
+  // partner (serialized, hex). Single-use — cleared once a reply used it.
+  // Only the newest RGB is kept (each incoming message carries a fresh one).
+  TextColumn get pendingRgb => text().nullable()();
+
   @override
   Set<Column> get primaryKey => {uuid};
+}
+
+// MS05: outstanding reverse-garlic session tags issued with our RGBs.
+// A fetched reply is only accepted when its tag is found here (single-use);
+// losing a row silently discards the matching reply, hence persistent.
+class SessionTags extends Table {
+  TextColumn get tag => text()(); // 16 bytes, hex (32 chars)
+  TextColumn get channelId => text().references(Channels, #uuid)();
+  DateTimeColumn get createdAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {tag};
 }
 
 // Dedup is scoped per conversation: the sender-chosen message_id is only
@@ -102,7 +119,9 @@ class OutboundHandles extends Table {
   IntColumn get lastCursor => integer().withDefault(const Constant(0))();
 }
 
-@DriftDatabase(tables: [Users, Channels, Messages, Peers, OutboundHandles])
+@DriftDatabase(
+  tables: [Users, Channels, Messages, Peers, OutboundHandles, SessionTags],
+)
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
@@ -110,7 +129,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 11;
+  int get schemaVersion => 12;
 
   @override
   MigrationStrategy get migration {
@@ -212,6 +231,16 @@ class AppDatabase extends _$AppDatabase {
           // candidates) — non-destructive. DBs older than v3 receive the
           // column through createTable(peers) above (current schema).
           await m.addColumn(peers, peers.encryptionPublicKey);
+        }
+        if (from < 12 && to >= 12) {
+          // MS05: reverse-garlic session state — non-destructive. The
+          // session_tags table is new; the pending RGB column only needs
+          // adding for DBs whose channels table predates this version (DBs
+          // below v9 were recreated above with the current schema).
+          await m.createTable(sessionTags);
+          if (from >= 9) {
+            await m.addColumn(channels, channels.pendingRgb);
+          }
         }
       },
     );
