@@ -141,9 +141,9 @@ class MessageSyncService {
   /// like the ratchet state, this never leaves the device.
   Future<void> handleGarlicSessionUpdate(GarlicSessionUpdate update) async {
     await _db.transaction(() async {
-      await (_db.delete(_db.sessionTags)
-            ..where((t) => t.channelId.equals(update.channelId)))
-          .go();
+      await (_db.delete(
+        _db.sessionTags,
+      )..where((t) => t.channelId.equals(update.channelId))).go();
       for (final entry in update.sessionTags.entries) {
         await _db
             .into(_db.sessionTags)
