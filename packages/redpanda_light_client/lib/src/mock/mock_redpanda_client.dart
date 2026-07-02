@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:redpanda_light_client/src/client_facade.dart';
 import 'package:redpanda_light_client/src/crypto/ratchet.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
+import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
@@ -91,10 +92,15 @@ class MockRedPandaClient implements RedPandaClient {
     String? peerOhEndpoint,
     required bool isChannelCreator,
     String? ratchetState,
+    Map<String, int>? sessionTags,
+    String? pendingRgbHex,
   }) {
     // Mock: no-op
   }
 
   @override
   Stream<RatchetStateUpdate> get ratchetStateUpdates => const Stream.empty();
+
+  @override
+  Stream<GarlicSessionUpdate> get garlicSessionUpdates => const Stream.empty();
 }

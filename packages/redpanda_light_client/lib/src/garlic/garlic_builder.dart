@@ -54,9 +54,14 @@ class GarlicHop {
 /// Layer plaintexts start with a command byte:
 ///
 /// ```
-/// CMD_FORWARD (0x01): [1 cmd][20 inner next_hop][12 nonce][32 eph_pub][4 ct_len][ct+tag]
-/// CMD_DELIVER (0x02): [1 cmd][20 oh_id][4 payload_len][payload][optional padding]
+/// CMD_FORWARD        (0x01): [1 cmd][20 inner next_hop][12 nonce][32 eph_pub][4 ct_len][ct+tag]
+/// CMD_DELIVER        (0x02): [1 cmd][20 oh_id][4 payload_len][payload][optional padding]
+/// CMD_DELIVER_TAGGED (0x03): [1 cmd][20 oh_id][16 session_tag][4 payload_len][payload][opt. padding]
 /// ```
+///
+/// `CMD_DELIVER_TAGGED` (MS05, Decisions Backend-MS05) is the reverse-garlic
+/// deliver: the final hop deposits payload plus 16-byte session tag into the
+/// OH mailbox so the fetching client can correlate the reply.
 ///
 /// FORWARD plaintexts carry the next layer's body without own padding — the
 /// relay re-pads to 2048 bytes when it rebuilds the peeled packet.
@@ -77,6 +82,14 @@ class GarlicBuilder {
 
   /// Layer command: final hop — deposit the payload into the OH mailbox.
   static const int cmdDeliver = 0x02;
+
+  /// Layer command (MS05): final hop — deposit payload plus session tag
+  /// into the OH mailbox (reverse-garlic reply).
+  static const int cmdDeliverTagged = 0x03;
+
+  /// Reverse-garlic session tags are exactly this many bytes (backend
+  /// `FlaschenpostV2.SESSION_TAG_LEN`).
+  static const int sessionTagLength = 16;
 
   /// Layer body prefix: [12 nonce][32 ephemeral_pub][4 ciphertext_len] (48).
   static const int bodyHeaderLength =
@@ -101,12 +114,18 @@ class GarlicBuilder {
   /// Fixed bytes of the DELIVER plaintext: cmd + oh_id + payload_len (25).
   static const int deliverHeaderLength = 1 + GarlicHop.nodeIdLength + 4;
 
+  /// Fixed bytes of the DELIVER_TAGGED plaintext:
+  /// cmd + oh_id + session_tag + payload_len (41).
+  static const int taggedDeliverHeaderLength =
+      deliverHeaderLength + sessionTagLength;
+
   /// Maximum deliver payload for a path of [hopCount] hops.
-  /// 3 hops: 1764 bytes (master spec, Decision 6).
-  static int maxPayloadLength(int hopCount) =>
+  /// 3 hops: 1764 bytes untagged (master spec MS04, Decision 6),
+  /// 1748 bytes tagged (master spec MS05, Decision 7).
+  static int maxPayloadLength(int hopCount, {bool tagged = false}) =>
       maxCiphertextLength -
       CryptoUtils.gcmTagLength -
-      deliverHeaderLength -
+      (tagged ? taggedDeliverHeaderLength : deliverHeaderLength) -
       (hopCount - 1) * forwardLayerOverhead;
 
   /// Builds a layered 2048-byte garlic packet along [hops]: CMD_FORWARD
@@ -114,12 +133,17 @@ class GarlicBuilder {
   /// mailbox [ohId]) for the last hop. The packet is handed to the connected
   /// full node, which routes it to `hops[0]` by KademliaId.
   ///
-  /// Throws [ArgumentError] for an empty path, a non-20-byte [ohId] or a
-  /// [payload] exceeding [maxPayloadLength] for the path length.
+  /// With a 16-byte [sessionTag] (MS05 reverse-garlic reply), the innermost
+  /// layer is CMD_DELIVER_TAGGED instead, depositing payload plus tag.
+  ///
+  /// Throws [ArgumentError] for an empty path, a non-20-byte [ohId], a
+  /// malformed [sessionTag] or a [payload] exceeding [maxPayloadLength]
+  /// for the path length.
   static Future<Uint8List> build({
     required List<GarlicHop> hops,
     required List<int> ohId,
     required List<int> payload,
+    List<int>? sessionTag,
   }) async {
     if (hops.isEmpty) {
       throw ArgumentError.value(hops.length, 'hops', 'need at least one hop');
@@ -131,19 +155,30 @@ class GarlicBuilder {
         'oh_id must be ${GarlicHop.nodeIdLength} bytes',
       );
     }
-    if (payload.length > maxPayloadLength(hops.length)) {
+    if (sessionTag != null && sessionTag.length != sessionTagLength) {
+      throw ArgumentError.value(
+        sessionTag.length,
+        'sessionTag',
+        'session_tag must be $sessionTagLength bytes',
+      );
+    }
+    if (payload.length >
+        maxPayloadLength(hops.length, tagged: sessionTag != null)) {
       throw ArgumentError.value(
         payload.length,
         'payload',
-        'payload exceeds ${maxPayloadLength(hops.length)} bytes '
-            'for ${hops.length} hops',
+        'payload exceeds '
+            '${maxPayloadLength(hops.length, tagged: sessionTag != null)} '
+            'bytes for ${hops.length} hops',
       );
     }
 
-    // Innermost layer (last hop): CMD_DELIVER with explicit payload_len.
+    // Innermost layer (last hop): CMD_DELIVER / CMD_DELIVER_TAGGED with
+    // explicit payload_len.
     final deliver = BytesBuilder()
-      ..addByte(cmdDeliver)
+      ..addByte(sessionTag != null ? cmdDeliverTagged : cmdDeliver)
       ..add(ohId)
+      ..add(sessionTag ?? const [])
       ..add(_uint32be(payload.length))
       ..add(payload);
     var body = await encryptLayer(

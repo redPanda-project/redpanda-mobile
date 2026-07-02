@@ -199,6 +199,32 @@ void main() {
       },
     );
 
+    test('passes persisted session tags and pending RGB (MS05)', () async {
+      await insertChannel('channel-1');
+      await insertChannel('channel-2');
+      await db
+          .into(db.sessionTags)
+          .insert(
+            SessionTagsCompanion.insert(
+              tag: 'aa' * 16,
+              channelId: 'channel-1',
+              createdAt: DateTime.fromMillisecondsSinceEpoch(1700000000000),
+            ),
+          );
+      await (db.update(db.channels)..where((c) => c.uuid.equals('channel-1')))
+          .write(ChannelsCompanion(pendingRgb: drift.Value('bb' * 40)));
+
+      await service.restorePersistedState();
+
+      expect(
+        client.restoredSessionTags['channel-1'],
+        equals({'aa' * 16: 1700000000000}),
+      );
+      expect(client.restoredPendingRgbs['channel-1'], equals('bb' * 40));
+      expect(client.restoredSessionTags, isNot(contains('channel-2')));
+      expect(client.restoredPendingRgbs, isNot(contains('channel-2')));
+    });
+
     test('skips expired OHs', () async {
       await db
           .into(db.outboundHandles)
@@ -259,6 +285,40 @@ void main() {
 
       final channel = await db.select(db.channels).getSingle();
       expect(channel.ratchetState, equals('{"v":1,"advanced":true}'));
+    });
+
+    test('persists garlic session snapshots as replacements (MS05)', () async {
+      await insertChannel('channel-1');
+      service.start();
+
+      client.garlicSessionController.add(
+        const GarlicSessionUpdate(
+          channelId: 'channel-1',
+          sessionTags: {'aa11': 1000, 'bb22': 2000},
+          pendingRgbHex: 'cafe',
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      var tags = await db.select(db.sessionTags).get();
+      expect(tags.map((t) => t.tag).toSet(), equals({'aa11', 'bb22'}));
+      var channel = await db.select(db.channels).getSingle();
+      expect(channel.pendingRgb, equals('cafe'));
+
+      // A later snapshot REPLACES the channel's state: the consumed tag
+      // disappears and the pending RGB is cleared.
+      client.garlicSessionController.add(
+        const GarlicSessionUpdate(
+          channelId: 'channel-1',
+          sessionTags: {'bb22': 2000},
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      tags = await db.select(db.sessionTags).get();
+      expect(tags.map((t) => t.tag).toList(), equals(['bb22']));
+      channel = await db.select(db.channels).getSingle();
+      expect(channel.pendingRgb, isNull);
     });
   });
 }

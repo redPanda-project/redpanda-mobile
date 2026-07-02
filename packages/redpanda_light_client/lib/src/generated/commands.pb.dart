@@ -1191,12 +1191,14 @@ class MailItem extends $pb.GeneratedMessage {
     $fixnum.Int64? receivedAtMs,
     $core.List<$core.int>? payload,
     $fixnum.Int64? sequenceId,
+    $core.List<$core.int>? sessionTag,
   }) {
     final result = create();
     if (messageId != null) result.messageId = messageId;
     if (receivedAtMs != null) result.receivedAtMs = receivedAtMs;
     if (payload != null) result.payload = payload;
     if (sequenceId != null) result.sequenceId = sequenceId;
+    if (sessionTag != null) result.sessionTag = sessionTag;
     return result;
   }
 
@@ -1219,6 +1221,8 @@ class MailItem extends $pb.GeneratedMessage {
     ..a<$fixnum.Int64>(
         4, _omitFieldNames ? '' : 'sequenceId', $pb.PbFieldType.OU6,
         defaultOrMaker: $fixnum.Int64.ZERO)
+    ..a<$core.List<$core.int>>(
+        5, _omitFieldNames ? '' : 'sessionTag', $pb.PbFieldType.OY)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1258,6 +1262,17 @@ class MailItem extends $pb.GeneratedMessage {
   $fixnum.Int64 get sequenceId => $_getI64(3);
   @$pb.TagNumber(4)
   set sequenceId($fixnum.Int64 value) => $_setInt64(3, value);
+
+  /// MS05: 16-byte session tag from a reverse-garlic reply
+  /// (CMD_DELIVER_TAGGED). Empty for direct messages and untagged delivers.
+  @$pb.TagNumber(5)
+  $core.List<$core.int> get sessionTag => $_getN(4);
+  @$pb.TagNumber(5)
+  set sessionTag($core.List<$core.int> value) => $_setBytes(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasSessionTag() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearSessionTag() => $_clearField(5);
 }
 
 // --- FetchResponse ---

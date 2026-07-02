@@ -14,11 +14,15 @@ import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
 import 'package:redpanda_light_client/src/crypto/ratchet.dart';
 import 'package:redpanda_light_client/src/logging/logger.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
+import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
+import 'package:redpanda_light_client/src/domain/reverse_garlic_block.dart';
 import 'package:redpanda_light_client/src/domain/send_exceptions.dart';
 import 'package:redpanda_light_client/src/garlic/garlic_builder.dart';
 import 'package:redpanda_light_client/src/garlic/hop_selector.dart';
+import 'package:redpanda_light_client/src/garlic/rgb_builder.dart';
+import 'package:redpanda_light_client/src/garlic/session_tag_store.dart';
 import 'package:redpanda_light_client/src/generated/commands.pb.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
@@ -92,9 +96,32 @@ class RedPandaLightClient implements RedPandaClient {
   /// Selects garlic relay hops from the peer repository (MS04).
   late final HopSelector _hopSelector;
 
+  /// Builds Reverse Garlic Blocks for outgoing messages (MS05).
+  late final RgbBuilder _rgbBuilder;
+
+  /// Outstanding session tags issued with our RGBs (MS05): single-use
+  /// correlation of tagged replies fetched from our OH mailboxes.
+  final SessionTagStore _sessionTagStore = SessionTagStore();
+
+  /// Latest unused RGB received from the channel partner, per channel id
+  /// (MS05). Replaced by every newer one — each message carries a fresh RGB
+  /// (OQ 2: one per message), so only the newest is worth keeping.
+  final Map<String, ReverseGarlicBlock> _pendingRgbs = {};
+
+  /// Channels whose persisted garlic session state was already restored;
+  /// re-registrations via addChannelKeys never overwrite live state.
+  final Set<String> _restoredGarlicSessions = {};
+
+  final _garlicSessionController =
+      StreamController<GarlicSessionUpdate>.broadcast();
+
   /// Hop count of the most recent sendMessage (0 = direct MS02b deposit).
   /// Diagnostic only — used by tests to assert the garlic path was taken.
   int lastSendHopCount = 0;
+
+  /// True when the most recent sendMessage traveled a reverse-garlic reply
+  /// path (CMD_DELIVER_TAGGED over the partner's RGB hops). Diagnostic only.
+  bool lastSendViaRgb = false;
 
   RedPandaLightClient({
     required this.selfNodeId,
@@ -112,6 +139,7 @@ class RedPandaLightClient implements RedPandaClient {
       _peerRepository,
       candidateFilter: hopCandidateFilter,
     );
+    _rgbBuilder = RgbBuilder(_hopSelector);
     _peerRepository.load().then((_) {
       _peerRepository.addAll(seeds);
       // Fast boot: Trigger immediate check after load
@@ -585,9 +613,12 @@ class RedPandaLightClient implements RedPandaClient {
     _putResponses.clear();
     _registerResponses.clear();
     _ratchetSessions.clear();
+    _pendingRgbs.clear();
+    _restoredGarlicSessions.clear();
     await _incomingMessageController.close();
     await _ohMailboxUpdateController.close();
     await _ratchetStateController.close();
+    await _garlicSessionController.close();
     _updateStatus(ConnectionStatus.disconnected);
   }
 
@@ -669,6 +700,8 @@ class RedPandaLightClient implements RedPandaClient {
     String? peerOhEndpoint,
     required bool isChannelCreator,
     String? ratchetState,
+    Map<String, int>? sessionTags,
+    String? pendingRgbHex,
   }) {
     _channelEncryptionKeys[channelId] = encryptionKey;
     if (peerOhId != null) {
@@ -677,6 +710,7 @@ class RedPandaLightClient implements RedPandaClient {
     if (peerOhEndpoint != null) {
       _channelPeerOhEndpoints[channelId] = peerOhEndpoint;
     }
+    _restoreGarlicSession(channelId, sessionTags, pendingRgbHex);
     // A live session is always at least as advanced as any persisted state,
     // so re-registrations (e.g. on every chat-screen open) never replace it.
     _ratchetSessions.putIfAbsent(channelId, () async {
@@ -696,6 +730,50 @@ class RedPandaLightClient implements RedPandaClient {
       );
     });
   }
+
+  /// Restores persisted reverse-garlic session state (MS05). Applied once
+  /// per channel; live state is always at least as advanced as anything
+  /// persisted, so re-registrations never overwrite it.
+  void _restoreGarlicSession(
+    String channelId,
+    Map<String, int>? sessionTags,
+    String? pendingRgbHex,
+  ) {
+    if (!_restoredGarlicSessions.add(channelId)) return;
+    sessionTags?.forEach((tagHex, createdAtMs) {
+      _sessionTagStore.store(tagHex, channelId, createdAtMs: createdAtMs);
+    });
+    if (pendingRgbHex != null) {
+      try {
+        _pendingRgbs[channelId] = ReverseGarlicBlock.deserialize(
+          _hexDecode(pendingRgbHex),
+        );
+      } on FormatException catch (e) {
+        RpLog.info(
+          'RedPandaLightClient: discarding unreadable persisted RGB for '
+          'channel $channelId ($e)',
+        );
+      }
+    }
+  }
+
+  /// Publishes the garlic session state of [channelId] (outstanding tags +
+  /// pending RGB) so the app layer can persist it (on-device only).
+  void _emitGarlicSession(String channelId) {
+    if (_garlicSessionController.isClosed) return;
+    final rgb = _pendingRgbs[channelId];
+    _garlicSessionController.add(
+      GarlicSessionUpdate(
+        channelId: channelId,
+        sessionTags: _sessionTagStore.tagsForChannel(channelId),
+        pendingRgbHex: rgb != null ? _hexEncode(rgb.serialize()) : null,
+      ),
+    );
+  }
+
+  @override
+  Stream<GarlicSessionUpdate> get garlicSessionUpdates =>
+      _garlicSessionController.stream;
 
   /// Publishes the advanced ratchet state of [channelId] so the app layer
   /// can persist it (on-device only).
@@ -768,13 +846,20 @@ class RedPandaLightClient implements RedPandaClient {
       );
     }
 
-    // Build the inner ChannelMessage (message_id + timestamp + content) and
-    // encrypt it into a v4 payload with the channel ratchet (MS03b): the
-    // AES-GCM key is the per-message key MK_n, not the static K_enc.
+    // MS05: attach a fresh Reverse Garlic Block when this channel has an own
+    // OH mailbox to reply to — one RGB per message (master spec MS05, OQ 2),
+    // so the partner always holds a fresh return path.
+    final rgb = _buildOwnRgb(channelId);
+
+    // Build the inner ChannelMessage (message_id + timestamp + content +
+    // optional reply path) and encrypt it into a v4 payload with the channel
+    // ratchet (MS03b): the AES-GCM key is the per-message key MK_n, not the
+    // static K_enc.
     final channelMessage = ChannelMessage(
       messageId: messageIdBytes,
       timestampMs: DateTime.now().millisecondsSinceEpoch,
       content: content,
+      replyPath: rgb?.serialize(),
     );
     final session = await _ratchetSessions[channelId]!;
     final payload = await session.encrypt(channelMessage, channelId);
@@ -792,6 +877,38 @@ class RedPandaLightClient implements RedPandaClient {
     if (activePeer == null) {
       // No connected Full Node — the retry queue will try again later.
       throw StateError('sendMessage: no active peer available');
+    }
+
+    lastSendViaRgb = false;
+
+    // MS05: reply over the partner's reverse garlic block when a valid one
+    // is pending — the reply reaches their OH mailbox without us needing to
+    // know (or pick a path to) it.
+    final pendingRgb = _pendingRgbs[channelId];
+    if (pendingRgb != null) {
+      if (pendingRgb.isExpired()) {
+        // OQ 3: expired RGB → discard it and fall back to the forward path.
+        _pendingRgbs.remove(channelId);
+        _emitGarlicSession(channelId);
+        RpLog.info(
+          'RedPandaLightClient: sendMessage() pending RGB for channel '
+          '$channelId expired, falling back to the forward path',
+        );
+      } else if (payload.length <=
+          GarlicBuilder.maxPayloadLength(
+            pendingRgb.hops.length,
+            tagged: true,
+          )) {
+        await _sendViaRgb(activePeer, pendingRgb, payload, channelId);
+        _pendingRgbs.remove(channelId); // single-use
+        _emitGarlicSession(channelId);
+        return messageIdHex;
+      } else {
+        RpLog.info(
+          'RedPandaLightClient: sendMessage() payload of ${payload.length} '
+          'bytes exceeds the tagged reply budget, using the forward path',
+        );
+      }
     }
 
     // MS04: route via a multi-hop garlic path when relay hops are available.
@@ -850,6 +967,65 @@ class RedPandaLightClient implements RedPandaClient {
     }
 
     return messageIdHex;
+  }
+
+  /// Builds a fresh Reverse Garlic Block for [channelId] (MS05) and registers
+  /// its session tag, or returns null when the channel has no own OH mailbox
+  /// or no eligible return hops are known (the message then travels without
+  /// a reply path and the partner falls back to the forward path).
+  ReverseGarlicBlock? _buildOwnRgb(String channelId) {
+    final ownOh = _registeredOHs
+        .where((oh) => oh.channelId == channelId)
+        .firstOrNull;
+    if (ownOh == null) return null;
+
+    // The mailbox host never becomes a return relay (mirrors the MS04
+    // peerOhEndpoint exclusion on the forward path).
+    final rgb = _rgbBuilder.build(
+      ohId: ownOh.ohId,
+      hopCount: defaultHopCount,
+      excludeAddresses: {?ownOh.serverEndpoint},
+    );
+    if (rgb == null) {
+      RpLog.info(
+        'RedPandaLightClient: sendMessage() no eligible return hops known, '
+        'sending without a reply path',
+      );
+      return null;
+    }
+    if (rgb.hops.length < defaultHopCount) {
+      RpLog.info(
+        'RedPandaLightClient: sendMessage() reply path has only '
+        '${rgb.hops.length} of $defaultHopCount hops — reduced privacy',
+      );
+    }
+    _sessionTagStore.store(rgb.sessionTagHex, channelId);
+    _emitGarlicSession(channelId);
+    return rgb;
+  }
+
+  /// Builds the tagged reply onion over the partner's RGB hops and hands it
+  /// to the connected node (command 142). Fire-and-forget like the forward
+  /// garlic path; the inner message_id deduplicates re-sends.
+  Future<void> _sendViaRgb(
+    ActivePeer submitVia,
+    ReverseGarlicBlock rgb,
+    Uint8List payload,
+    String channelId,
+  ) async {
+    final packet = await GarlicBuilder.build(
+      hops: rgb.hops,
+      ohId: rgb.ohId,
+      payload: payload,
+      sessionTag: rgb.sessionTag,
+    );
+    submitVia.sendCommand(142, packet);
+    lastSendHopCount = rgb.hops.length;
+    lastSendViaRgb = true;
+    RpLog.debug(
+      'RedPandaLightClient: sendMessage() submitted a tagged reverse-garlic '
+      'reply over ${rgb.hops.length} hops for channel $channelId',
+    );
   }
 
   /// Picks up to [defaultHopCount] garlic relay hops for [channelId],
@@ -1234,7 +1410,28 @@ class RedPandaLightClient implements RedPandaClient {
     final messages = <DecryptedMessage>[];
     RatchetSession? session;
     var ratchetAdvanced = false;
+    var garlicStateChanged = false;
     for (final item in response.items) {
+      // MS05: a non-empty session tag marks a reverse-garlic reply. It must
+      // match an outstanding tag of THIS channel; unknown, already consumed
+      // or foreign tags are dropped unread (single-use discipline, master
+      // spec MS05, Decision 5 — the server-side dedup only covers 5-minute
+      // replays).
+      final viaSessionTag = item.sessionTag.isNotEmpty;
+      final String? tagHex;
+      if (viaSessionTag) {
+        tagHex = _hexEncode(item.sessionTag);
+        final tagChannel = _sessionTagStore.lookup(tagHex);
+        if (tagChannel == null || tagChannel != oh.channelId) {
+          RpLog.info(
+            'RedPandaLightClient: dropping tagged mail item — session tag '
+            '${tagChannel == null ? 'unknown or already consumed' : 'belongs to another channel'}',
+          );
+          continue;
+        }
+      } else {
+        tagHex = null;
+      }
       try {
         final ChannelMessage channelMessage;
         if (item.payload.isNotEmpty &&
@@ -1249,6 +1446,17 @@ class RedPandaLightClient implements RedPandaClient {
             oh.channelId!,
           );
         }
+        // Consume the tag only for an accepted reply: a transiently
+        // undecryptable item is re-delivered on the next fetch and must
+        // still find its tag, while a replayed ciphertext fails decryption
+        // and can never resurrect an already consumed tag.
+        if (tagHex != null) {
+          _sessionTagStore.consume(tagHex);
+          garlicStateChanged = true;
+        }
+        if (_storeReplyPath(oh.channelId!, channelMessage.replyPath)) {
+          garlicStateChanged = true;
+        }
         messages.add(
           DecryptedMessage(
             id: _hexEncode(channelMessage.messageId),
@@ -1256,6 +1464,7 @@ class RedPandaLightClient implements RedPandaClient {
             receivedAtMs: item.receivedAtMs.toInt(),
             senderTimestampMs: channelMessage.timestampMs,
             channelId: oh.channelId,
+            viaSessionTag: viaSessionTag,
           ),
         );
       } catch (e) {
@@ -1264,6 +1473,9 @@ class RedPandaLightClient implements RedPandaClient {
     }
     if (ratchetAdvanced && session != null) {
       _emitRatchetState(oh.channelId!, session);
+    }
+    if (garlicStateChanged) {
+      _emitGarlicSession(oh.channelId!);
     }
 
     // Acknowledge the fetched batch so the Full Node can delete it.
@@ -1288,6 +1500,32 @@ class RedPandaLightClient implements RedPandaClient {
     }
 
     return messages;
+  }
+
+  /// Parses and keeps an incoming reply path (MS05): the freshest unexpired
+  /// RGB per channel replaces any older pending one (each message carries a
+  /// fresh RGB, so the newest has the longest remaining lifetime). Returns
+  /// true when the pending RGB changed.
+  bool _storeReplyPath(String channelId, Uint8List? replyPath) {
+    if (replyPath == null || replyPath.isEmpty) return false;
+    try {
+      final rgb = ReverseGarlicBlock.deserialize(replyPath);
+      if (rgb.isExpired()) {
+        RpLog.info(
+          'RedPandaLightClient: ignoring already expired reply path for '
+          'channel $channelId',
+        );
+        return false;
+      }
+      _pendingRgbs[channelId] = rgb;
+      return true;
+    } on FormatException catch (e) {
+      RpLog.info(
+        'RedPandaLightClient: ignoring unreadable reply path for channel '
+        '$channelId: $e',
+      );
+      return false;
+    }
   }
 
   /// Sends an AckFetchRequest for [oh] confirming receipt of all mail items
@@ -1386,6 +1624,10 @@ class RedPandaLightClient implements RedPandaClient {
           } catch (e) {
             RpLog.info('RedPandaLightClient: Polling error: $e');
           }
+        }
+        // MS05: prune session tags whose RGB expired long ago (48h).
+        for (final channelId in _sessionTagStore.cleanup()) {
+          _emitGarlicSession(channelId);
         }
       } finally {
         _pollInProgress = false;

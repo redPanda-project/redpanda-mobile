@@ -18,8 +18,8 @@ void main() {
       await db.close();
     });
 
-    test('schema version is 11', () {
-      expect(db.schemaVersion, equals(11));
+    test('schema version is 12', () {
+      expect(db.schemaVersion, equals(12));
     });
 
     test('dedup is scoped per conversation: same id in two channels', () async {
@@ -317,5 +317,50 @@ void main() {
         await legacy.close();
       },
     );
+
+    test('v11 → v12 migration adds session_tags and pendingRgb without losing '
+        'data (MS05)', () async {
+      // Reshape a fresh database into the v11 layout.
+      final legacy = createTestDatabase();
+      await legacy.customStatement('DROP TABLE session_tags;');
+      await legacy.customStatement(
+        'ALTER TABLE channels DROP COLUMN pending_rgb;',
+      );
+      await legacy.customStatement(
+        "INSERT INTO channels (uuid, label, encryption_key, auth_public_key) "
+        "VALUES ('kept-id', 'Kept Channel', '${'aa' * 32}', '${'bb' * 32}');",
+      );
+
+      await legacy.migration.onUpgrade(legacy.createMigrator(), 11, 12);
+
+      // MS05 is non-destructive: existing channels survive.
+      final channel = await legacy.select(legacy.channels).getSingle();
+      expect(channel.uuid, equals('kept-id'));
+      expect(channel.pendingRgb, isNull);
+
+      // The new column and table are writable.
+      await (legacy.update(legacy.channels)
+            ..where((c) => c.uuid.equals('kept-id')))
+          .write(ChannelsCompanion(pendingRgb: drift.Value('cd' * 40)));
+      expect(
+        (await legacy.select(legacy.channels).getSingle()).pendingRgb,
+        equals('cd' * 40),
+      );
+
+      await legacy
+          .into(legacy.sessionTags)
+          .insert(
+            SessionTagsCompanion.insert(
+              tag: 'ef' * 16,
+              channelId: 'kept-id',
+              createdAt: DateTime(2026, 6, 13),
+            ),
+          );
+      final tag = await legacy.select(legacy.sessionTags).getSingle();
+      expect(tag.tag, equals('ef' * 16));
+      expect(tag.channelId, equals('kept-id'));
+
+      await legacy.close();
+    });
   });
 }

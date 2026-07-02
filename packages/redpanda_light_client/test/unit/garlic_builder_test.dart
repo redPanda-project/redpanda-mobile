@@ -50,6 +50,12 @@ void main() {
       // Decision 6: max. 1764-byte deliver payload over 3 hops.
       expect(GarlicBuilder.maxPayloadLength(3), 1764);
       expect(GarlicBuilder.maxPayloadLength(1), 1934);
+      // MS05 Decisions 1+7: CMD_DELIVER_TAGGED (0x03), 41-byte header,
+      // max. 1748-byte tagged reply payload over 3 hops.
+      expect(GarlicBuilder.cmdDeliverTagged, 0x03);
+      expect(GarlicBuilder.sessionTagLength, 16);
+      expect(GarlicBuilder.taggedDeliverHeaderLength, 41);
+      expect(GarlicBuilder.maxPayloadLength(3, tagged: true), 1748);
     });
 
     test('three relays peel their layers and the last one sees CMD_DELIVER '
@@ -106,6 +112,62 @@ void main() {
       expect(plaintext.sublist(25, 28), equals(payload));
     });
 
+    test('tagged deliver (MS05): the last relay sees CMD_DELIVER_TAGGED with '
+        'oh_id, session_tag and payload', () async {
+      final payload = List<int>.generate(99, (i) => (3 * i) & 0xff);
+      final sessionTag = List<int>.generate(16, (i) => 0xF0 + i);
+      var packet = await GarlicBuilder.build(
+        hops: [h1.asGarlicHop, h2.asGarlicHop, h3.asGarlicHop],
+        ohId: ohId,
+        payload: payload,
+        sessionTag: sessionTag,
+      );
+
+      // Relays H1/H2 peel ordinary CMD_FORWARD layers — the reverse path
+      // is invisible to them (no reverse special-casing, MS05 Decision 4).
+      for (final hop in [h1, h2]) {
+        final plaintext = await ParsedPacket.parse(
+          packet,
+        ).decryptLayer(hop.keys.privateKey);
+        expect(plaintext[0], GarlicBuilder.cmdForward);
+        packet = GarlicBuilder.buildPacket(
+          plaintext.sublist(1, 21),
+          plaintext.sublist(21),
+        );
+      }
+
+      // H3: [1 cmd=0x03][20 oh_id][16 session_tag][4 payload_len][payload].
+      final plaintext = await ParsedPacket.parse(
+        packet,
+      ).decryptLayer(h3.keys.privateKey);
+      expect(plaintext[0], GarlicBuilder.cmdDeliverTagged);
+      expect(plaintext.sublist(1, 21), equals(ohId));
+      expect(plaintext.sublist(21, 37), equals(sessionTag));
+      final payloadLen = ByteData.sublistView(plaintext).getUint32(37);
+      expect(payloadLen, payload.length);
+      expect(plaintext.sublist(41, 41 + payloadLen), equals(payload));
+    });
+
+    test(
+      'the maximum tagged 3-hop payload (1748 bytes) fits exactly',
+      () async {
+        final payload = List<int>.filled(
+          GarlicBuilder.maxPayloadLength(3, tagged: true),
+          7,
+        );
+        final packet = await GarlicBuilder.build(
+          hops: [h1.asGarlicHop, h2.asGarlicHop, h3.asGarlicHop],
+          ohId: ohId,
+          payload: payload,
+          sessionTag: List<int>.filled(16, 1),
+        );
+        expect(
+          ParsedPacket.parse(packet).ciphertextLength,
+          GarlicBuilder.maxCiphertextLength,
+        );
+      },
+    );
+
     test('the maximum 3-hop payload (1764 bytes) still fits exactly', () async {
       final payload = List<int>.filled(GarlicBuilder.maxPayloadLength(3), 9);
       final packet = await buildThreeHop(payload);
@@ -144,6 +206,43 @@ void main() {
     test('payload above the path budget is rejected', () async {
       final tooBig = List<int>.filled(GarlicBuilder.maxPayloadLength(3) + 1, 0);
       await expectLater(buildThreeHop(tooBig), throwsArgumentError);
+    });
+
+    test(
+      'tagged payload above the smaller tagged budget is rejected',
+      () async {
+        final tooBig = List<int>.filled(
+          GarlicBuilder.maxPayloadLength(3, tagged: true) + 1,
+          0,
+        );
+        await expectLater(
+          GarlicBuilder.build(
+            hops: [h1.asGarlicHop, h2.asGarlicHop, h3.asGarlicHop],
+            ohId: ohId,
+            payload: tooBig,
+            sessionTag: List<int>.filled(16, 1),
+          ),
+          throwsArgumentError,
+        );
+      },
+    );
+
+    test('session tags must be exactly 16 bytes', () async {
+      for (final badTag in [
+        <int>[],
+        List<int>.filled(15, 1),
+        List<int>.filled(17, 1),
+      ]) {
+        await expectLater(
+          GarlicBuilder.build(
+            hops: [h1.asGarlicHop],
+            ohId: ohId,
+            payload: [1],
+            sessionTag: badTag,
+          ),
+          throwsArgumentError,
+        );
+      }
     });
 
     test('empty hop list and malformed oh_id are rejected', () async {

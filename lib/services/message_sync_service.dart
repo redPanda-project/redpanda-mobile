@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:drift/drift.dart' show Value;
+import 'package:drift/drift.dart' show InsertMode, Value;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hex/hex.dart';
@@ -26,10 +26,14 @@ class MessageSyncService {
   StreamSubscription<DecryptedMessage>? _messageSub;
   StreamSubscription<OhMailboxUpdate>? _updateSub;
   StreamSubscription<RatchetStateUpdate>? _ratchetSub;
+  StreamSubscription<GarlicSessionUpdate>? _garlicSub;
 
   /// Serializes ratchet-state DB writes so they are applied in emission
   /// order — a slow earlier write must not overwrite a newer state.
   Future<void> _ratchetPersistPending = Future.value();
+
+  /// Same ordering guarantee for garlic-session snapshots (MS05).
+  Future<void> _garlicPersistPending = Future.value();
 
   MessageSyncService(
     this._client,
@@ -71,15 +75,26 @@ class MessageSyncService {
             ),
           );
     });
+    _garlicSub ??= _client.garlicSessionUpdates.listen((update) {
+      _garlicPersistPending = _garlicPersistPending
+          .then((_) => handleGarlicSessionUpdate(update))
+          .catchError(
+            (Object e) => debugPrint(
+              'MessageSyncService: failed to persist garlic session: $e',
+            ),
+          );
+    });
   }
 
   Future<void> stop() async {
     await _messageSub?.cancel();
     await _updateSub?.cancel();
     await _ratchetSub?.cancel();
+    await _garlicSub?.cancel();
     _messageSub = null;
     _updateSub = null;
     _ratchetSub = null;
+    _garlicSub = null;
   }
 
   /// Persists a fetched message unless it was already stored (dedup via
@@ -121,11 +136,43 @@ class MessageSyncService {
         .write(ChannelsCompanion(ratchetState: Value(update.stateJson)));
   }
 
+  /// Persists a reverse-garlic session snapshot (MS05): replaces the
+  /// channel's outstanding session tags and pending RGB. On-device only —
+  /// like the ratchet state, this never leaves the device.
+  Future<void> handleGarlicSessionUpdate(GarlicSessionUpdate update) async {
+    await _db.transaction(() async {
+      await (_db.delete(
+        _db.sessionTags,
+      )..where((t) => t.channelId.equals(update.channelId))).go();
+      for (final entry in update.sessionTags.entries) {
+        await _db
+            .into(_db.sessionTags)
+            .insert(
+              SessionTagsCompanion.insert(
+                tag: entry.key,
+                channelId: update.channelId,
+                createdAt: DateTime.fromMillisecondsSinceEpoch(entry.value),
+              ),
+              mode: InsertMode.insertOrReplace,
+            );
+      }
+      await (_db.update(_db.channels)
+            ..where((c) => c.uuid.equals(update.channelId)))
+          .write(ChannelsCompanion(pendingRgb: Value(update.pendingRgbHex)));
+    });
+  }
+
   /// Restores channel keys and persisted OH registrations into the network
   /// client so polling resumes from the persisted cursor after a restart.
   Future<void> restorePersistedState() async {
     final channels = await _db.select(_db.channels).get();
+    final allTags = await _db.select(_db.sessionTags).get();
     for (final channel in channels) {
+      final sessionTags = {
+        for (final tag in allTags)
+          if (tag.channelId == channel.uuid)
+            tag.tag: tag.createdAt.millisecondsSinceEpoch,
+      };
       _client.addChannelKeys(
         channel.uuid,
         HEX.decode(channel.encryptionKey),
@@ -136,6 +183,8 @@ class MessageSyncService {
         // a device that joined via QR code holds only the public key.
         isChannelCreator: channel.authPrivateKey != null,
         ratchetState: channel.ratchetState,
+        sessionTags: sessionTags.isEmpty ? null : sessionTags,
+        pendingRgbHex: channel.pendingRgb,
       );
     }
 

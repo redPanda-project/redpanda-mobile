@@ -7,11 +7,17 @@ import 'dart:typed_data';
 ///
 /// ```
 /// ChannelMessage {
-///   bytes  message_id = 1;  // 16 random bytes, stable across retries
+///   bytes  message_id   = 1;  // 16 random bytes, stable across retries
 ///   int64  timestamp_ms = 2;
 ///   string content      = 3;
+///   bytes  reply_path   = 5;  // MS05: serialized ReverseGarlicBlock (optional)
 /// }
 /// ```
+///
+/// Field 5 matches the master-spec MS05 protobuf sketch (`reply_path = 5`);
+/// field 4 stays unused (the master sketch reserves 3/4 for iv/timestamp,
+/// which this client carries elsewhere). `reply_path` is opaque bytes here —
+/// the RGB layout lives in `domain/reverse_garlic_block.dart`.
 ///
 /// This is a hand-rolled encoder/decoder that is **wire-compatible with
 /// proto3** for exactly these three fields. We do not run `protoc` against a
@@ -42,10 +48,15 @@ class ChannelMessage {
   /// The plaintext message content.
   final String content;
 
+  /// MS05: serialized ReverseGarlicBlock the sender attached so the receiver
+  /// can reply via reverse garlic. Null/empty when no reply path travels.
+  final Uint8List? replyPath;
+
   const ChannelMessage({
     required this.messageId,
     required this.timestampMs,
     required this.content,
+    this.replyPath,
   });
 
   /// Encodes this message to its proto3-compatible binary representation.
@@ -73,6 +84,14 @@ class ChannelMessage {
       out.add(contentBytes);
     }
 
+    // field 5: reply_path (length-delimited, MS05)
+    final replyPathBytes = replyPath;
+    if (replyPathBytes != null && replyPathBytes.isNotEmpty) {
+      out.addByte(0x2A); // (5 << 3) | 2
+      _writeVarint(out, replyPathBytes.length);
+      out.add(replyPathBytes);
+    }
+
     return out.toBytes();
   }
 
@@ -87,6 +106,7 @@ class ChannelMessage {
     Uint8List messageId = Uint8List(0);
     int timestampMs = 0;
     String content = '';
+    Uint8List? replyPath;
 
     int readVarint() {
       var result = 0;
@@ -140,6 +160,19 @@ class ChannelMessage {
           content = utf8.decode(data.sublist(offset, offset + len));
           offset += len;
           break;
+        case 5: // reply_path (MS05)
+          if (wireType != 2) {
+            throw const FormatException('ChannelMessage: bad wire type for #5');
+          }
+          final replyLen = readVarint();
+          if (offset + replyLen > data.length) {
+            throw const FormatException('ChannelMessage: truncated reply_path');
+          }
+          replyPath = Uint8List.fromList(
+            data.sublist(offset, offset + replyLen),
+          );
+          offset += replyLen;
+          break;
         default:
           // Unknown field — skip according to wire type.
           _skipField(
@@ -157,6 +190,7 @@ class ChannelMessage {
       messageId: Uint8List.fromList(messageId),
       timestampMs: timestampMs,
       content: content,
+      replyPath: replyPath,
     );
   }
 

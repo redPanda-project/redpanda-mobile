@@ -68,6 +68,13 @@ class CmdAddChannelKeys extends IsolateCommand {
   /// initialize a fresh ratchet from the channel key.
   final String? ratchetState;
 
+  /// MS05: persisted outstanding session tags (tag hex → createdAtMs) to
+  /// restore; applied only on the first registration of the channel.
+  final Map<String, int>? sessionTags;
+
+  /// MS05: persisted pending ReverseGarlicBlock (serialized, hex) to restore.
+  final String? pendingRgbHex;
+
   CmdAddChannelKeys(
     this.channelId,
     this.encryptionKey, {
@@ -75,6 +82,8 @@ class CmdAddChannelKeys extends IsolateCommand {
     this.peerOhEndpoint,
     required this.isChannelCreator,
     this.ratchetState,
+    this.sessionTags,
+    this.pendingRgbHex,
   });
 }
 
@@ -186,6 +195,25 @@ class EventRatchetStateUpdate extends IsolateEvent {
   final String channelId;
   final String stateJson;
   EventRatchetStateUpdate({required this.channelId, required this.stateJson});
+}
+
+/// Reverse-garlic session state (MS05) forwarded from the isolate so the
+/// main isolate can persist outstanding session tags and the pending RGB.
+/// Carries only isolate-sendable primitives.
+class EventGarlicSessionUpdate extends IsolateEvent {
+  final String channelId;
+
+  /// Outstanding session tags: tag (hex) → createdAtMs.
+  final Map<String, int> sessionTags;
+
+  /// Serialized pending ReverseGarlicBlock (hex), or null when none.
+  final String? pendingRgbHex;
+
+  EventGarlicSessionUpdate({
+    required this.channelId,
+    required this.sessionTags,
+    this.pendingRgbHex,
+  });
 }
 
 /// OH state change (cursor advanced, renewal, mailbox overflow) forwarded
