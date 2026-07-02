@@ -1,3 +1,6 @@
 tags:
   e2e:
-    timeout: 120s
+    # Must cover the slowest E2E suite (MS05 reverse garlic, ~2-6 min under
+    # concurrent load): this tag timeout overrides the @Timeout annotations
+    # in the test files.
+    timeout: 10m

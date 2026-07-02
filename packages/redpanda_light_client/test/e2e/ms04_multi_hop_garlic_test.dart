@@ -39,8 +39,10 @@ void main() async {
     final launchers = <RedPandaNodeLauncher>[];
     late RedPandaLightClient alice;
     late RedPandaLightClient bob;
+    ServerSocket? topologyLock;
 
     setUp(() async {
+      topologyLock = await acquireTopologyLock();
       // Entry node first (the relays dial 127.0.0.1:59558 at boot).
       for (final port in [entryPort, ...relayPorts]) {
         final launcher = RedPandaNodeLauncher(port: port);
@@ -85,6 +87,8 @@ void main() async {
         await launcher.stop();
       }
       launchers.clear();
+      await topologyLock?.close();
+      topologyLock = null;
     });
 
     /// Polls until Alice knows all three relays incl. their X25519 keys
