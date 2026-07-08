@@ -5,6 +5,8 @@ import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
+import 'package:redpanda_light_client/src/domain/routing_ack.dart';
+import 'package:redpanda_light_client/src/garlic/node_scorer.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/peer_stats_snapshot.dart';
 import 'package:redpanda_light_client/src/logging/logger.dart';
@@ -103,4 +105,18 @@ class MockRedPandaClient implements RedPandaClient {
 
   @override
   Stream<GarlicSessionUpdate> get garlicSessionUpdates => const Stream.empty();
+
+  @override
+  Stream<RoutingAckUpdate> get routingAckUpdates => const Stream.empty();
+
+  @override
+  Stream<ChannelAckUpdate> get channelAckUpdates => const Stream.empty();
+
+  @override
+  Stream<List<NodeScore>> get nodeScoreUpdates => const Stream.empty();
+
+  @override
+  void restoreNodeScores(List<NodeScore> scores) {
+    // Mock: no-op
+  }
 }

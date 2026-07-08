@@ -1,4 +1,5 @@
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
+import 'package:redpanda_light_client/src/garlic/node_scorer.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
@@ -104,6 +105,13 @@ class CmdRestoreOutboundHandle extends IsolateCommand {
     this.serverEndpoint,
     this.lastCursor = 0,
   });
+}
+
+/// Feeds persisted node scores (MS06) back into the isolate on startup.
+/// [NodeScore] carries only primitives and is isolate-sendable.
+class CmdRestoreNodeScores extends IsolateCommand {
+  final List<NodeScore> scores;
+  CmdRestoreNodeScores(this.scores);
 }
 
 // --- Events (Isolate -> Main) ---
@@ -214,6 +222,46 @@ class EventGarlicSessionUpdate extends IsolateEvent {
     required this.sessionTags,
     this.pendingRgbHex,
   });
+}
+
+/// Routing-layer delivery feedback (MS06) forwarded from the isolate:
+/// an R-ACK arrived for an outgoing message, or none arrived within the
+/// ack timeout. Carries only isolate-sendable primitives.
+class EventRoutingAckUpdate extends IsolateEvent {
+  final String channelId;
+  final String messageIdHex;
+
+  /// RoutingAck status; null when [timedOut].
+  final int? status;
+  final int? latencyMs;
+  final bool timedOut;
+  EventRoutingAckUpdate({
+    required this.channelId,
+    required this.messageIdHex,
+    this.status,
+    this.latencyMs,
+    this.timedOut = false,
+  });
+}
+
+/// Application-layer delivery confirmation (Channel-ACK, MS06) forwarded
+/// from the isolate.
+class EventChannelAckUpdate extends IsolateEvent {
+  final String channelId;
+  final String messageIdHex;
+  final int timestampMs;
+  EventChannelAckUpdate({
+    required this.channelId,
+    required this.messageIdHex,
+    required this.timestampMs,
+  });
+}
+
+/// Node score snapshot (MS06) forwarded from the isolate for on-device
+/// persistence into the `node_scores` table.
+class EventNodeScores extends IsolateEvent {
+  final List<NodeScore> scores;
+  EventNodeScores(this.scores);
 }
 
 /// OH state change (cursor advanced, renewal, mailbox overflow) forwarded

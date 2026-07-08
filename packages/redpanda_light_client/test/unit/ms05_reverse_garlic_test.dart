@@ -222,15 +222,33 @@ void main() {
         );
         continue;
       }
-      final tagged = plaintext[0] == GarlicBuilder.cmdDeliverTagged;
+      final cmd = plaintext[0];
       final ohId = Uint8List.fromList(plaintext.sublist(1, 21));
-      final tag = tagged ? Uint8List.fromList(plaintext.sublist(21, 37)) : null;
-      final lenOffset = tagged ? 37 : 21;
+      Uint8List? tag;
+      int lenOffset;
+      if (cmd == GarlicBuilder.cmdDeliverTagged) {
+        tag = Uint8List.fromList(plaintext.sublist(21, 37));
+        lenOffset = 37;
+      } else if (cmd == GarlicBuilder.cmdDeliverAcked) {
+        // [1 cmd][20 oh_id][1 tag_len][tag][return_path][4 payload_len]...
+        final tagLen = plaintext[21];
+        var offset = 22;
+        if (tagLen != 0) {
+          tag = Uint8List.fromList(plaintext.sublist(offset, offset + tagLen));
+          offset += tagLen;
+        }
+        // The return-path block: [20 ackOh][16 tag][1 hopCount][hops×52].
+        final returnHopCount = plaintext[offset + 36];
+        offset += 37 + returnHopCount * 52;
+        lenOffset = offset;
+      } else {
+        lenOffset = 21;
+      }
       final payloadLen = ByteData.sublistView(plaintext).getUint32(lenOffset);
       final payload = Uint8List.fromList(
         plaintext.sublist(lenOffset + 4, lenOffset + 4 + payloadLen),
       );
-      return (plaintext[0], ohId, tag, payload, path);
+      return (cmd, ohId, tag, payload, path);
     }
   }
 
@@ -258,14 +276,17 @@ void main() {
       await client.sendMessage(channel.id, 'Hello with reply path!');
       await waitFor(() => frames.isNotEmpty);
 
-      // Forward path: a normal garlic packet with an untagged deliver.
+      // Forward path: a garlic packet whose innermost layer is an acked
+      // deliver (MS06 — the channel has an own OH, so an R-ACK is requested)
+      // with no session tag on the forward direction.
       expect(frames.single.$1, 142);
       expect(client.lastSendViaRgb, isFalse);
+      expect(client.lastSendAckRequested, isTrue);
       final (cmd, ohId, tag, payload, _) = await peelAll(
         frames.single.$2,
         hops,
       );
-      expect(cmd, GarlicBuilder.cmdDeliver);
+      expect(cmd, GarlicBuilder.cmdDeliverAcked);
       expect(ohId, equals(peerOhId));
       expect(tag, isNull);
 

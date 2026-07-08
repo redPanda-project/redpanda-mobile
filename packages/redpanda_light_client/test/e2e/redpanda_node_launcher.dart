@@ -8,6 +8,14 @@ class RedPandaNodeLauncher {
   final List<String> seeds;
   final String _workingDir;
 
+  // Node stdout/stderr are piped to the test console. The subscriptions are
+  // cancelled on stop(): a leaked subscription keeps the child's stdio pipes
+  // attached, which prevents the dart test runner process from exiting even
+  // after all tests finished — the classic "flutter test hangs forever after
+  // the last test" failure that let a run sit for hours in CI.
+  StreamSubscription<List<int>>? _stdoutSub;
+  StreamSubscription<List<int>>? _stderrSub;
+
   RedPandaNodeLauncher({required this.port, this.seeds = const []})
     : _workingDir = Directory.systemTemp
           .createTempSync('redpanda_node_$port')
@@ -59,9 +67,11 @@ class RedPandaNodeLauncher {
       environment: env,
     );
 
-    // Stream output to console for debugging
-    _process!.stdout.listen((event) => stdout.add(event));
-    _process!.stderr.listen((event) => stderr.add(event));
+    // Stream output to console for debugging. Keep the subscriptions so
+    // stop() can cancel them (see the field doc) and drain the pipes so a
+    // chatty node can never block on a full stdout buffer.
+    _stdoutSub = _process!.stdout.listen((event) => stdout.add(event));
+    _stderrSub = _process!.stderr.listen((event) => stderr.add(event));
 
     // Wait for the port to be open (up to 60 seconds)
     print('Waiting for port $port to open...');
@@ -96,8 +106,30 @@ class RedPandaNodeLauncher {
   }
 
   Future<void> stop() async {
-    _process?.kill();
+    final process = _process;
     _process = null;
+    if (process != null) {
+      // Graceful first (lets the JVM shutdown hook free the ports), then a
+      // hard kill if it lingers — a SIGTERM the JVM ignores must never leave
+      // a node running that holds a port or keeps the runner alive.
+      process.kill();
+      try {
+        await process.exitCode.timeout(const Duration(seconds: 5));
+      } on TimeoutException {
+        process.kill(ProcessSignal.sigkill);
+        // Reap the exit so the OS pipes are fully released before we return.
+        await process.exitCode
+            .timeout(const Duration(seconds: 5))
+            .catchError((_) => -1);
+      }
+    }
+    // Cancel AFTER the process exited so the final output is drained and the
+    // inherited stdio pipes are closed — otherwise the dart test runner can
+    // hang waiting for them at the end of the suite.
+    await _stdoutSub?.cancel();
+    await _stderrSub?.cancel();
+    _stdoutSub = null;
+    _stderrSub = null;
     try {
       Directory(_workingDir).deleteSync(recursive: true);
     } catch (e) {

@@ -77,7 +77,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 1));
   }
 
-  group('ChatScreen message status icons (MS02)', () {
+  group('ChatScreen message status icons (MS06 lifecycle)', () {
     testWidgets('pending message shows a clock icon', (tester) async {
       await insertMessage('pending msg', MessageStatus.pending);
 
@@ -90,13 +90,40 @@ void main() {
       await unmount(tester);
     });
 
-    testWidgets('sent message shows a checkmark icon', (tester) async {
+    testWidgets('sent message shows an upward arrow icon', (tester) async {
       await insertMessage('sent msg', MessageStatus.sent);
 
       await tester.pumpWidget(app());
       await tester.pump();
 
+      expect(find.byIcon(Icons.arrow_upward), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('routed message (R-ACK) shows a single checkmark', (
+      tester,
+    ) async {
+      await insertMessage('routed msg', MessageStatus.routed);
+
+      await tester.pumpWidget(app());
+      await tester.pump();
+
       expect(find.byIcon(Icons.check), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('delivered message (Channel-ACK) shows a blue double check', (
+      tester,
+    ) async {
+      await insertMessage('delivered msg', MessageStatus.delivered);
+
+      await tester.pumpWidget(app());
+      await tester.pump();
+
+      final icon = tester.widget<Icon>(find.byIcon(Icons.done_all));
+      expect(icon.color, equals(Colors.blue));
 
       await unmount(tester);
     });

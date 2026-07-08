@@ -3,6 +3,8 @@ import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
+import 'package:redpanda_light_client/src/domain/routing_ack.dart';
+import 'package:redpanda_light_client/src/garlic/node_scorer.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/peer_stats_snapshot.dart';
 
@@ -104,4 +106,22 @@ abstract class RedPandaClient {
   /// on-device and feed them back via [addChannelKeys] after a restart — a
   /// lost session tag silently discards the matching reply (single-use).
   Stream<GarlicSessionUpdate> get garlicSessionUpdates;
+
+  /// Routing-layer delivery feedback (MS06): an R-ACK arrived for an
+  /// outgoing message (update its status to `routed`, or `failed` on
+  /// HANDLE_EXPIRED), or none arrived within the ack timeout ([timedOut] —
+  /// re-send over fresh hops).
+  Stream<RoutingAckUpdate> get routingAckUpdates;
+
+  /// Application-layer delivery confirmations (MS06): the channel partner
+  /// received and decrypted an outgoing message (status `delivered`).
+  Stream<ChannelAckUpdate> get channelAckUpdates;
+
+  /// Node score snapshots (MS06). The app layer persists them into the
+  /// `node_scores` table and feeds them back via [restoreNodeScores] after
+  /// a restart.
+  Stream<List<NodeScore>> get nodeScoreUpdates;
+
+  /// Restores persisted node scores on startup. Live in-memory scores win.
+  void restoreNodeScores(List<NodeScore> scores);
 }

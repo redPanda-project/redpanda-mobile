@@ -23,6 +23,10 @@ class FakeRedPandaClient implements RedPandaClient {
       StreamController<RatchetStateUpdate>.broadcast();
   final garlicSessionController =
       StreamController<GarlicSessionUpdate>.broadcast();
+  final routingAckController = StreamController<RoutingAckUpdate>.broadcast();
+  final channelAckController = StreamController<ChannelAckUpdate>.broadcast();
+  final nodeScoreController = StreamController<List<NodeScore>>.broadcast();
+  final List<NodeScore> restoredNodeScores = [];
 
   @override
   Future<String> sendMessage(
@@ -79,6 +83,20 @@ class FakeRedPandaClient implements RedPandaClient {
       garlicSessionController.stream;
 
   @override
+  Stream<RoutingAckUpdate> get routingAckUpdates => routingAckController.stream;
+
+  @override
+  Stream<ChannelAckUpdate> get channelAckUpdates => channelAckController.stream;
+
+  @override
+  Stream<List<NodeScore>> get nodeScoreUpdates => nodeScoreController.stream;
+
+  @override
+  void restoreNodeScores(List<NodeScore> scores) {
+    restoredNodeScores.addAll(scores);
+  }
+
+  @override
   Stream<DecryptedMessage> get incomingMessages => incomingController.stream;
 
   @override
@@ -103,6 +121,9 @@ class FakeRedPandaClient implements RedPandaClient {
     await updateController.close();
     await ratchetStateController.close();
     await garlicSessionController.close();
+    await routingAckController.close();
+    await channelAckController.close();
+    await nodeScoreController.close();
   }
 
   @override

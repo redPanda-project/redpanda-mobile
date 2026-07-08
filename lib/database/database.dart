@@ -88,6 +88,22 @@ class Messages extends Table {
   DateTimeColumn get lastRetryAt => dateTime().nullable()();
 }
 
+// MS06: R-ACK-based reliability of known full nodes (garlic hop candidates).
+// Written from NodeScore snapshots emitted by the network isolate and fed
+// back on startup so scores survive app restarts. The row class is renamed
+// to avoid clashing with the light client's NodeScore domain class.
+@DataClassName('NodeScoreRow')
+class NodeScores extends Table {
+  TextColumn get nodeId => text()(); // 20-byte KademliaId, hex (40 chars)
+  IntColumn get successCount => integer().withDefault(const Constant(0))();
+  IntColumn get failureCount => integer().withDefault(const Constant(0))();
+  IntColumn get avgLatencyMs => integer().withDefault(const Constant(0))();
+  DateTimeColumn get lastUpdated => dateTime().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {nodeId};
+}
+
 class Peers extends Table {
   TextColumn get address => text()();
   TextColumn get nodeId => text().nullable()();
@@ -120,7 +136,15 @@ class OutboundHandles extends Table {
 }
 
 @DriftDatabase(
-  tables: [Users, Channels, Messages, Peers, OutboundHandles, SessionTags],
+  tables: [
+    Users,
+    Channels,
+    Messages,
+    Peers,
+    OutboundHandles,
+    SessionTags,
+    NodeScores,
+  ],
 )
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
@@ -129,7 +153,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 12;
+  int get schemaVersion => 13;
 
   @override
   MigrationStrategy get migration {
@@ -241,6 +265,10 @@ class AppDatabase extends _$AppDatabase {
           if (from >= 9) {
             await m.addColumn(channels, channels.pendingRgb);
           }
+        }
+        if (from < 13 && to >= 13) {
+          // MS06: persisted R-ACK node scores — non-destructive.
+          await m.createTable(nodeScores);
         }
       },
     );

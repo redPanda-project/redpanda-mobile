@@ -2850,6 +2850,392 @@ class SessionTagsCompanion extends UpdateCompanion<SessionTag> {
   }
 }
 
+class $NodeScoresTable extends NodeScores
+    with TableInfo<$NodeScoresTable, NodeScoreRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $NodeScoresTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _nodeIdMeta = const VerificationMeta('nodeId');
+  @override
+  late final GeneratedColumn<String> nodeId = GeneratedColumn<String>(
+    'node_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _successCountMeta = const VerificationMeta(
+    'successCount',
+  );
+  @override
+  late final GeneratedColumn<int> successCount = GeneratedColumn<int>(
+    'success_count',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  static const VerificationMeta _failureCountMeta = const VerificationMeta(
+    'failureCount',
+  );
+  @override
+  late final GeneratedColumn<int> failureCount = GeneratedColumn<int>(
+    'failure_count',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  static const VerificationMeta _avgLatencyMsMeta = const VerificationMeta(
+    'avgLatencyMs',
+  );
+  @override
+  late final GeneratedColumn<int> avgLatencyMs = GeneratedColumn<int>(
+    'avg_latency_ms',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  static const VerificationMeta _lastUpdatedMeta = const VerificationMeta(
+    'lastUpdated',
+  );
+  @override
+  late final GeneratedColumn<DateTime> lastUpdated = GeneratedColumn<DateTime>(
+    'last_updated',
+    aliasedName,
+    true,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    nodeId,
+    successCount,
+    failureCount,
+    avgLatencyMs,
+    lastUpdated,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'node_scores';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<NodeScoreRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('node_id')) {
+      context.handle(
+        _nodeIdMeta,
+        nodeId.isAcceptableOrUnknown(data['node_id']!, _nodeIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_nodeIdMeta);
+    }
+    if (data.containsKey('success_count')) {
+      context.handle(
+        _successCountMeta,
+        successCount.isAcceptableOrUnknown(
+          data['success_count']!,
+          _successCountMeta,
+        ),
+      );
+    }
+    if (data.containsKey('failure_count')) {
+      context.handle(
+        _failureCountMeta,
+        failureCount.isAcceptableOrUnknown(
+          data['failure_count']!,
+          _failureCountMeta,
+        ),
+      );
+    }
+    if (data.containsKey('avg_latency_ms')) {
+      context.handle(
+        _avgLatencyMsMeta,
+        avgLatencyMs.isAcceptableOrUnknown(
+          data['avg_latency_ms']!,
+          _avgLatencyMsMeta,
+        ),
+      );
+    }
+    if (data.containsKey('last_updated')) {
+      context.handle(
+        _lastUpdatedMeta,
+        lastUpdated.isAcceptableOrUnknown(
+          data['last_updated']!,
+          _lastUpdatedMeta,
+        ),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {nodeId};
+  @override
+  NodeScoreRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return NodeScoreRow(
+      nodeId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}node_id'],
+      )!,
+      successCount: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}success_count'],
+      )!,
+      failureCount: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}failure_count'],
+      )!,
+      avgLatencyMs: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}avg_latency_ms'],
+      )!,
+      lastUpdated: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}last_updated'],
+      ),
+    );
+  }
+
+  @override
+  $NodeScoresTable createAlias(String alias) {
+    return $NodeScoresTable(attachedDatabase, alias);
+  }
+}
+
+class NodeScoreRow extends DataClass implements Insertable<NodeScoreRow> {
+  final String nodeId;
+  final int successCount;
+  final int failureCount;
+  final int avgLatencyMs;
+  final DateTime? lastUpdated;
+  const NodeScoreRow({
+    required this.nodeId,
+    required this.successCount,
+    required this.failureCount,
+    required this.avgLatencyMs,
+    this.lastUpdated,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['node_id'] = Variable<String>(nodeId);
+    map['success_count'] = Variable<int>(successCount);
+    map['failure_count'] = Variable<int>(failureCount);
+    map['avg_latency_ms'] = Variable<int>(avgLatencyMs);
+    if (!nullToAbsent || lastUpdated != null) {
+      map['last_updated'] = Variable<DateTime>(lastUpdated);
+    }
+    return map;
+  }
+
+  NodeScoresCompanion toCompanion(bool nullToAbsent) {
+    return NodeScoresCompanion(
+      nodeId: Value(nodeId),
+      successCount: Value(successCount),
+      failureCount: Value(failureCount),
+      avgLatencyMs: Value(avgLatencyMs),
+      lastUpdated: lastUpdated == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastUpdated),
+    );
+  }
+
+  factory NodeScoreRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return NodeScoreRow(
+      nodeId: serializer.fromJson<String>(json['nodeId']),
+      successCount: serializer.fromJson<int>(json['successCount']),
+      failureCount: serializer.fromJson<int>(json['failureCount']),
+      avgLatencyMs: serializer.fromJson<int>(json['avgLatencyMs']),
+      lastUpdated: serializer.fromJson<DateTime?>(json['lastUpdated']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'nodeId': serializer.toJson<String>(nodeId),
+      'successCount': serializer.toJson<int>(successCount),
+      'failureCount': serializer.toJson<int>(failureCount),
+      'avgLatencyMs': serializer.toJson<int>(avgLatencyMs),
+      'lastUpdated': serializer.toJson<DateTime?>(lastUpdated),
+    };
+  }
+
+  NodeScoreRow copyWith({
+    String? nodeId,
+    int? successCount,
+    int? failureCount,
+    int? avgLatencyMs,
+    Value<DateTime?> lastUpdated = const Value.absent(),
+  }) => NodeScoreRow(
+    nodeId: nodeId ?? this.nodeId,
+    successCount: successCount ?? this.successCount,
+    failureCount: failureCount ?? this.failureCount,
+    avgLatencyMs: avgLatencyMs ?? this.avgLatencyMs,
+    lastUpdated: lastUpdated.present ? lastUpdated.value : this.lastUpdated,
+  );
+  NodeScoreRow copyWithCompanion(NodeScoresCompanion data) {
+    return NodeScoreRow(
+      nodeId: data.nodeId.present ? data.nodeId.value : this.nodeId,
+      successCount: data.successCount.present
+          ? data.successCount.value
+          : this.successCount,
+      failureCount: data.failureCount.present
+          ? data.failureCount.value
+          : this.failureCount,
+      avgLatencyMs: data.avgLatencyMs.present
+          ? data.avgLatencyMs.value
+          : this.avgLatencyMs,
+      lastUpdated: data.lastUpdated.present
+          ? data.lastUpdated.value
+          : this.lastUpdated,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('NodeScoreRow(')
+          ..write('nodeId: $nodeId, ')
+          ..write('successCount: $successCount, ')
+          ..write('failureCount: $failureCount, ')
+          ..write('avgLatencyMs: $avgLatencyMs, ')
+          ..write('lastUpdated: $lastUpdated')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    nodeId,
+    successCount,
+    failureCount,
+    avgLatencyMs,
+    lastUpdated,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is NodeScoreRow &&
+          other.nodeId == this.nodeId &&
+          other.successCount == this.successCount &&
+          other.failureCount == this.failureCount &&
+          other.avgLatencyMs == this.avgLatencyMs &&
+          other.lastUpdated == this.lastUpdated);
+}
+
+class NodeScoresCompanion extends UpdateCompanion<NodeScoreRow> {
+  final Value<String> nodeId;
+  final Value<int> successCount;
+  final Value<int> failureCount;
+  final Value<int> avgLatencyMs;
+  final Value<DateTime?> lastUpdated;
+  final Value<int> rowid;
+  const NodeScoresCompanion({
+    this.nodeId = const Value.absent(),
+    this.successCount = const Value.absent(),
+    this.failureCount = const Value.absent(),
+    this.avgLatencyMs = const Value.absent(),
+    this.lastUpdated = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  NodeScoresCompanion.insert({
+    required String nodeId,
+    this.successCount = const Value.absent(),
+    this.failureCount = const Value.absent(),
+    this.avgLatencyMs = const Value.absent(),
+    this.lastUpdated = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : nodeId = Value(nodeId);
+  static Insertable<NodeScoreRow> custom({
+    Expression<String>? nodeId,
+    Expression<int>? successCount,
+    Expression<int>? failureCount,
+    Expression<int>? avgLatencyMs,
+    Expression<DateTime>? lastUpdated,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (nodeId != null) 'node_id': nodeId,
+      if (successCount != null) 'success_count': successCount,
+      if (failureCount != null) 'failure_count': failureCount,
+      if (avgLatencyMs != null) 'avg_latency_ms': avgLatencyMs,
+      if (lastUpdated != null) 'last_updated': lastUpdated,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  NodeScoresCompanion copyWith({
+    Value<String>? nodeId,
+    Value<int>? successCount,
+    Value<int>? failureCount,
+    Value<int>? avgLatencyMs,
+    Value<DateTime?>? lastUpdated,
+    Value<int>? rowid,
+  }) {
+    return NodeScoresCompanion(
+      nodeId: nodeId ?? this.nodeId,
+      successCount: successCount ?? this.successCount,
+      failureCount: failureCount ?? this.failureCount,
+      avgLatencyMs: avgLatencyMs ?? this.avgLatencyMs,
+      lastUpdated: lastUpdated ?? this.lastUpdated,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (nodeId.present) {
+      map['node_id'] = Variable<String>(nodeId.value);
+    }
+    if (successCount.present) {
+      map['success_count'] = Variable<int>(successCount.value);
+    }
+    if (failureCount.present) {
+      map['failure_count'] = Variable<int>(failureCount.value);
+    }
+    if (avgLatencyMs.present) {
+      map['avg_latency_ms'] = Variable<int>(avgLatencyMs.value);
+    }
+    if (lastUpdated.present) {
+      map['last_updated'] = Variable<DateTime>(lastUpdated.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('NodeScoresCompanion(')
+          ..write('nodeId: $nodeId, ')
+          ..write('successCount: $successCount, ')
+          ..write('failureCount: $failureCount, ')
+          ..write('avgLatencyMs: $avgLatencyMs, ')
+          ..write('lastUpdated: $lastUpdated, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -2861,6 +3247,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     this,
   );
   late final $SessionTagsTable sessionTags = $SessionTagsTable(this);
+  late final $NodeScoresTable nodeScores = $NodeScoresTable(this);
   late final Index idxMessagesConvMessageId = Index(
     'idx_messages_conv_message_id',
     'CREATE UNIQUE INDEX idx_messages_conv_message_id ON messages (conversation_id, message_id)',
@@ -2876,6 +3263,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     peers,
     outboundHandles,
     sessionTags,
+    nodeScores,
     idxMessagesConvMessageId,
   ];
 }
@@ -4757,6 +5145,214 @@ typedef $$SessionTagsTableProcessedTableManager =
       SessionTag,
       PrefetchHooks Function({bool channelId})
     >;
+typedef $$NodeScoresTableCreateCompanionBuilder =
+    NodeScoresCompanion Function({
+      required String nodeId,
+      Value<int> successCount,
+      Value<int> failureCount,
+      Value<int> avgLatencyMs,
+      Value<DateTime?> lastUpdated,
+      Value<int> rowid,
+    });
+typedef $$NodeScoresTableUpdateCompanionBuilder =
+    NodeScoresCompanion Function({
+      Value<String> nodeId,
+      Value<int> successCount,
+      Value<int> failureCount,
+      Value<int> avgLatencyMs,
+      Value<DateTime?> lastUpdated,
+      Value<int> rowid,
+    });
+
+class $$NodeScoresTableFilterComposer
+    extends Composer<_$AppDatabase, $NodeScoresTable> {
+  $$NodeScoresTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get nodeId => $composableBuilder(
+    column: $table.nodeId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get successCount => $composableBuilder(
+    column: $table.successCount,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get failureCount => $composableBuilder(
+    column: $table.failureCount,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get avgLatencyMs => $composableBuilder(
+    column: $table.avgLatencyMs,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get lastUpdated => $composableBuilder(
+    column: $table.lastUpdated,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$NodeScoresTableOrderingComposer
+    extends Composer<_$AppDatabase, $NodeScoresTable> {
+  $$NodeScoresTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get nodeId => $composableBuilder(
+    column: $table.nodeId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get successCount => $composableBuilder(
+    column: $table.successCount,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get failureCount => $composableBuilder(
+    column: $table.failureCount,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get avgLatencyMs => $composableBuilder(
+    column: $table.avgLatencyMs,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get lastUpdated => $composableBuilder(
+    column: $table.lastUpdated,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$NodeScoresTableAnnotationComposer
+    extends Composer<_$AppDatabase, $NodeScoresTable> {
+  $$NodeScoresTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get nodeId =>
+      $composableBuilder(column: $table.nodeId, builder: (column) => column);
+
+  GeneratedColumn<int> get successCount => $composableBuilder(
+    column: $table.successCount,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get failureCount => $composableBuilder(
+    column: $table.failureCount,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get avgLatencyMs => $composableBuilder(
+    column: $table.avgLatencyMs,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get lastUpdated => $composableBuilder(
+    column: $table.lastUpdated,
+    builder: (column) => column,
+  );
+}
+
+class $$NodeScoresTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $NodeScoresTable,
+          NodeScoreRow,
+          $$NodeScoresTableFilterComposer,
+          $$NodeScoresTableOrderingComposer,
+          $$NodeScoresTableAnnotationComposer,
+          $$NodeScoresTableCreateCompanionBuilder,
+          $$NodeScoresTableUpdateCompanionBuilder,
+          (
+            NodeScoreRow,
+            BaseReferences<_$AppDatabase, $NodeScoresTable, NodeScoreRow>,
+          ),
+          NodeScoreRow,
+          PrefetchHooks Function()
+        > {
+  $$NodeScoresTableTableManager(_$AppDatabase db, $NodeScoresTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$NodeScoresTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$NodeScoresTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$NodeScoresTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> nodeId = const Value.absent(),
+                Value<int> successCount = const Value.absent(),
+                Value<int> failureCount = const Value.absent(),
+                Value<int> avgLatencyMs = const Value.absent(),
+                Value<DateTime?> lastUpdated = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => NodeScoresCompanion(
+                nodeId: nodeId,
+                successCount: successCount,
+                failureCount: failureCount,
+                avgLatencyMs: avgLatencyMs,
+                lastUpdated: lastUpdated,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String nodeId,
+                Value<int> successCount = const Value.absent(),
+                Value<int> failureCount = const Value.absent(),
+                Value<int> avgLatencyMs = const Value.absent(),
+                Value<DateTime?> lastUpdated = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => NodeScoresCompanion.insert(
+                nodeId: nodeId,
+                successCount: successCount,
+                failureCount: failureCount,
+                avgLatencyMs: avgLatencyMs,
+                lastUpdated: lastUpdated,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$NodeScoresTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $NodeScoresTable,
+      NodeScoreRow,
+      $$NodeScoresTableFilterComposer,
+      $$NodeScoresTableOrderingComposer,
+      $$NodeScoresTableAnnotationComposer,
+      $$NodeScoresTableCreateCompanionBuilder,
+      $$NodeScoresTableUpdateCompanionBuilder,
+      (
+        NodeScoreRow,
+        BaseReferences<_$AppDatabase, $NodeScoresTable, NodeScoreRow>,
+      ),
+      NodeScoreRow,
+      PrefetchHooks Function()
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -4773,4 +5369,6 @@ class $AppDatabaseManager {
       $$OutboundHandlesTableTableManager(_db, _db.outboundHandles);
   $$SessionTagsTableTableManager get sessionTags =>
       $$SessionTagsTableTableManager(_db, _db.sessionTags);
+  $$NodeScoresTableTableManager get nodeScores =>
+      $$NodeScoresTableTableManager(_db, _db.nodeScores);
 }
