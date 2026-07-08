@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:redpanda_light_client/src/crypto/crypto_utils.dart';
+import 'package:redpanda_light_client/src/garlic/return_path.dart';
 
 /// A relay hop for a Flaschenpost v2 garlic path: the node's 20-byte
 /// KademliaId and its 32-byte X25519 encryption public key.
@@ -57,11 +58,17 @@ class GarlicHop {
 /// CMD_FORWARD        (0x01): [1 cmd][20 inner next_hop][12 nonce][32 eph_pub][4 ct_len][ct+tag]
 /// CMD_DELIVER        (0x02): [1 cmd][20 oh_id][4 payload_len][payload][optional padding]
 /// CMD_DELIVER_TAGGED (0x03): [1 cmd][20 oh_id][16 session_tag][4 payload_len][payload][opt. padding]
+/// CMD_DELIVER_ACKED  (0x04): [1 cmd][20 oh_id][1 tag_len (0|16)][tag][return_path][4 payload_len][payload]
 /// ```
 ///
 /// `CMD_DELIVER_TAGGED` (MS05, Decisions Backend-MS05) is the reverse-garlic
 /// deliver: the final hop deposits payload plus 16-byte session tag into the
 /// OH mailbox so the fetching client can correlate the reply.
+///
+/// `CMD_DELIVER_ACKED` (MS06, Decisions Backend-MS06) additionally carries a
+/// return-path block of hop descriptors; the node with the final deposit
+/// decision builds an R-ACK onion over it. The length-prefixed session tag
+/// lets untagged forward sends and tagged RGB replies use the same command.
 ///
 /// FORWARD plaintexts carry the next layer's body without own padding — the
 /// relay re-pads to 2048 bytes when it rebuilds the peeled packet.
@@ -86,6 +93,10 @@ class GarlicBuilder {
   /// Layer command (MS05): final hop — deposit payload plus session tag
   /// into the OH mailbox (reverse-garlic reply).
   static const int cmdDeliverTagged = 0x03;
+
+  /// Layer command (MS06): like deliver/deliver-tagged, but carries a
+  /// return-path block — the depositing node sends an R-ACK back over it.
+  static const int cmdDeliverAcked = 0x04;
 
   /// Reverse-garlic session tags are exactly this many bytes (backend
   /// `FlaschenpostV2.SESSION_TAG_LEN`).
@@ -128,6 +139,25 @@ class GarlicBuilder {
       (tagged ? taggedDeliverHeaderLength : deliverHeaderLength) -
       (hopCount - 1) * forwardLayerOverhead;
 
+  /// Fixed bytes of the DELIVER_ACKED plaintext before the return path:
+  /// cmd + oh_id + tag_len byte + tag (0|16) + payload_len (26 + tag).
+  static int ackedDeliverHeaderLength({required bool tagged}) =>
+      1 + GarlicHop.nodeIdLength + 1 + (tagged ? sessionTagLength : 0) + 4;
+
+  /// Maximum DELIVER_ACKED payload for [hopCount] forward hops and a return
+  /// path with [returnHopCount] hops. Tagged, 3 forward + 3 return hops:
+  /// **1554 bytes** (master spec MS06, Decision 6).
+  static int maxAckedPayloadLength(
+    int hopCount, {
+    required bool tagged,
+    required int returnHopCount,
+  }) =>
+      maxCiphertextLength -
+      CryptoUtils.gcmTagLength -
+      ackedDeliverHeaderLength(tagged: tagged) -
+      ReturnPathBlock.serializedLength(returnHopCount) -
+      (hopCount - 1) * forwardLayerOverhead;
+
   /// Builds a layered 2048-byte garlic packet along [hops]: CMD_FORWARD
   /// layers for all but the last hop and a CMD_DELIVER layer (to the OH
   /// mailbox [ohId]) for the last hop. The packet is handed to the connected
@@ -136,14 +166,20 @@ class GarlicBuilder {
   /// With a 16-byte [sessionTag] (MS05 reverse-garlic reply), the innermost
   /// layer is CMD_DELIVER_TAGGED instead, depositing payload plus tag.
   ///
+  /// With a [returnPath] (MS06), the innermost layer is CMD_DELIVER_ACKED:
+  /// the depositing node sends an R-ACK back over the contained hop
+  /// descriptors. The length-prefixed tag makes the tagged and untagged
+  /// variants one command.
+  ///
   /// Throws [ArgumentError] for an empty path, a non-20-byte [ohId], a
   /// malformed [sessionTag] or a [payload] exceeding [maxPayloadLength]
-  /// for the path length.
+  /// (or [maxAckedPayloadLength] with a return path) for the path length.
   static Future<Uint8List> build({
     required List<GarlicHop> hops,
     required List<int> ohId,
     required List<int> payload,
     List<int>? sessionTag,
+    ReturnPathBlock? returnPath,
   }) async {
     if (hops.isEmpty) {
       throw ArgumentError.value(hops.length, 'hops', 'need at least one hop');
@@ -162,23 +198,38 @@ class GarlicBuilder {
         'session_tag must be $sessionTagLength bytes',
       );
     }
-    if (payload.length >
-        maxPayloadLength(hops.length, tagged: sessionTag != null)) {
+    final maxPayload = returnPath != null
+        ? maxAckedPayloadLength(
+            hops.length,
+            tagged: sessionTag != null,
+            returnHopCount: returnPath.hops.length,
+          )
+        : maxPayloadLength(hops.length, tagged: sessionTag != null);
+    if (payload.length > maxPayload) {
       throw ArgumentError.value(
         payload.length,
         'payload',
-        'payload exceeds '
-            '${maxPayloadLength(hops.length, tagged: sessionTag != null)} '
-            'bytes for ${hops.length} hops',
+        'payload exceeds $maxPayload bytes for ${hops.length} hops',
       );
     }
 
-    // Innermost layer (last hop): CMD_DELIVER / CMD_DELIVER_TAGGED with
-    // explicit payload_len.
-    final deliver = BytesBuilder()
-      ..addByte(sessionTag != null ? cmdDeliverTagged : cmdDeliver)
-      ..add(ohId)
-      ..add(sessionTag ?? const [])
+    // Innermost layer (last hop): CMD_DELIVER / CMD_DELIVER_TAGGED /
+    // CMD_DELIVER_ACKED with explicit payload_len.
+    final deliver = BytesBuilder();
+    if (returnPath != null) {
+      deliver
+        ..addByte(cmdDeliverAcked)
+        ..add(ohId)
+        ..addByte(sessionTag?.length ?? 0)
+        ..add(sessionTag ?? const [])
+        ..add(returnPath.serialize());
+    } else {
+      deliver
+        ..addByte(sessionTag != null ? cmdDeliverTagged : cmdDeliver)
+        ..add(ohId)
+        ..add(sessionTag ?? const []);
+    }
+    deliver
       ..add(_uint32be(payload.length))
       ..add(payload);
     var body = await encryptLayer(

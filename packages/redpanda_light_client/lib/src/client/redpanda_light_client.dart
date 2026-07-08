@@ -8,6 +8,7 @@ import 'package:fixnum/fixnum.dart' as fixnum;
 
 import 'package:redpanda_light_client/src/client_facade.dart';
 import 'package:redpanda_light_client/src/crypto/channel_message.dart';
+import 'package:redpanda_light_client/src/crypto/crypto_utils.dart';
 import 'package:redpanda_light_client/src/crypto/message_crypto_v3.dart';
 import 'package:redpanda_light_client/src/crypto/message_crypto_v4.dart';
 import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
@@ -18,9 +19,13 @@ import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/domain/reverse_garlic_block.dart';
+import 'package:redpanda_light_client/src/domain/routing_ack.dart';
 import 'package:redpanda_light_client/src/domain/send_exceptions.dart';
+import 'package:redpanda_light_client/src/garlic/ack_tag_store.dart';
 import 'package:redpanda_light_client/src/garlic/garlic_builder.dart';
 import 'package:redpanda_light_client/src/garlic/hop_selector.dart';
+import 'package:redpanda_light_client/src/garlic/node_scorer.dart';
+import 'package:redpanda_light_client/src/garlic/return_path.dart';
 import 'package:redpanda_light_client/src/garlic/rgb_builder.dart';
 import 'package:redpanda_light_client/src/garlic/session_tag_store.dart';
 import 'package:redpanda_light_client/src/generated/commands.pb.dart';
@@ -123,6 +128,25 @@ class RedPandaLightClient implements RedPandaClient {
   /// path (CMD_DELIVER_TAGGED over the partner's RGB hops). Diagnostic only.
   bool lastSendViaRgb = false;
 
+  /// True when the most recent sendMessage requested an R-ACK
+  /// (CMD_DELIVER_ACKED with return path, MS06). Diagnostic only.
+  bool lastSendAckRequested = false;
+
+  /// Outstanding R-ACK expectations: ack tag → message + hops (MS06).
+  final AckTagStore _ackTagStore = AckTagStore();
+
+  /// R-ACK-based node reliability (MS06); feeds the hop selector.
+  final NodeScorer _nodeScorer = NodeScorer();
+
+  /// No R-ACK within this window counts as a routing failure (MS06). Three
+  /// polling cycles: the R-ACK has to travel its return path and wait for
+  /// our next mailbox fetch, so the spec's 60 s would misfire routinely.
+  static const Duration ackTimeout = Duration(seconds: 90);
+
+  final _routingAckController = StreamController<RoutingAckUpdate>.broadcast();
+  final _channelAckController = StreamController<ChannelAckUpdate>.broadcast();
+  final _nodeScoreController = StreamController<List<NodeScore>>.broadcast();
+
   RedPandaLightClient({
     required this.selfNodeId,
     required this.selfKeys,
@@ -138,6 +162,7 @@ class RedPandaLightClient implements RedPandaClient {
     _hopSelector = HopSelector(
       _peerRepository,
       candidateFilter: hopCandidateFilter,
+      nodeScorer: _nodeScorer,
     );
     _rgbBuilder = RgbBuilder(_hopSelector);
     _peerRepository.load().then((_) {
@@ -771,6 +796,33 @@ class RedPandaLightClient implements RedPandaClient {
     );
   }
 
+  /// Routing-layer delivery feedback (R-ACK received / timed out, MS06).
+  @override
+  Stream<RoutingAckUpdate> get routingAckUpdates =>
+      _routingAckController.stream;
+
+  /// Application-layer delivery confirmations (Channel-ACK, MS06).
+  @override
+  Stream<ChannelAckUpdate> get channelAckUpdates =>
+      _channelAckController.stream;
+
+  /// Node score snapshots for on-device persistence (MS06). Emitted after
+  /// every score change; the app layer upserts them into `node_scores`.
+  @override
+  Stream<List<NodeScore>> get nodeScoreUpdates => _nodeScoreController.stream;
+
+  /// Restores persisted node scores (startup). Live in-memory scores win.
+  @override
+  void restoreNodeScores(List<NodeScore> scores) {
+    _nodeScorer.restore(scores);
+  }
+
+  void _emitNodeScores() {
+    if (!_nodeScoreController.isClosed) {
+      _nodeScoreController.add(_nodeScorer.snapshot());
+    }
+  }
+
   @override
   Stream<GarlicSessionUpdate> get garlicSessionUpdates =>
       _garlicSessionController.stream;
@@ -880,6 +932,7 @@ class RedPandaLightClient implements RedPandaClient {
     }
 
     lastSendViaRgb = false;
+    lastSendAckRequested = false;
 
     // MS05: reply over the partner's reverse garlic block when a valid one
     // is pending — the reply reaches their OH mailbox without us needing to
@@ -899,7 +952,13 @@ class RedPandaLightClient implements RedPandaClient {
             pendingRgb.hops.length,
             tagged: true,
           )) {
-        await _sendViaRgb(activePeer, pendingRgb, payload, channelId);
+        await _sendViaRgb(
+          activePeer,
+          pendingRgb,
+          payload,
+          channelId,
+          messageIdHex: messageIdHex,
+        );
         _pendingRgbs.remove(channelId); // single-use
         _emitGarlicSession(channelId);
         return messageIdHex;
@@ -916,7 +975,14 @@ class RedPandaLightClient implements RedPandaClient {
     if (peerOhId != null && peerOhId.length == GarlicHop.nodeIdLength) {
       final hops = _selectGarlicHops(channelId, activePeer);
       if (hops.isNotEmpty) {
-        await _sendViaGarlic(activePeer, hops, peerOhId, payload, channelId);
+        await _sendViaGarlic(
+          activePeer,
+          hops,
+          peerOhId,
+          payload,
+          channelId,
+          messageIdHex: messageIdHex,
+        );
         return messageIdHex;
       }
       RpLog.info(
@@ -1005,26 +1071,98 @@ class RedPandaLightClient implements RedPandaClient {
   }
 
   /// Builds the tagged reply onion over the partner's RGB hops and hands it
-  /// to the connected node (command 142). Fire-and-forget like the forward
-  /// garlic path; the inner message_id deduplicates re-sends.
+  /// to the connected node (command 142). The inner message_id deduplicates
+  /// re-sends. With an own OH (MS06) the innermost layer requests an R-ACK.
   Future<void> _sendViaRgb(
     ActivePeer submitVia,
     ReverseGarlicBlock rgb,
     Uint8List payload,
-    String channelId,
-  ) async {
+    String channelId, {
+    String? messageIdHex,
+  }) async {
+    final returnPath = messageIdHex != null
+        ? _buildReturnPath(
+            channelId,
+            submitVia,
+            messageIdHex: messageIdHex,
+            forwardHops: rgb.hops,
+            payloadLength: payload.length,
+            tagged: true,
+          )
+        : null;
     final packet = await GarlicBuilder.build(
       hops: rgb.hops,
       ohId: rgb.ohId,
       payload: payload,
       sessionTag: rgb.sessionTag,
+      returnPath: returnPath,
     );
     submitVia.sendCommand(142, packet);
     lastSendHopCount = rgb.hops.length;
     lastSendViaRgb = true;
+    lastSendAckRequested = returnPath != null;
     RpLog.debug(
       'RedPandaLightClient: sendMessage() submitted a tagged reverse-garlic '
-      'reply over ${rgb.hops.length} hops for channel $channelId',
+      'reply over ${rgb.hops.length} hops for channel $channelId'
+      '${returnPath != null ? ' (R-ACK requested)' : ''}',
+    );
+  }
+
+  /// Builds the MS06 return-path block for an outgoing message when this
+  /// channel has an own OH mailbox to receive the R-ACK, registers the ack
+  /// tag, and returns it — or null when no own OH exists, no messageId is
+  /// tracked, or the payload would no longer fit the acked budget (the send
+  /// then degrades to the un-acked pre-MS06 format).
+  ReturnPathBlock? _buildReturnPath(
+    String channelId,
+    ActivePeer submitVia, {
+    required String messageIdHex,
+    required List<GarlicHop> forwardHops,
+    required int payloadLength,
+    required bool tagged,
+  }) {
+    final ownOh = _registeredOHs
+        .where((oh) => oh.channelId == channelId)
+        .firstOrNull;
+    if (ownOh == null) return null;
+
+    // Return hops: same selector and exclusions as the RGB (the ack OH host
+    // never relays its own acks; the submit node sees us directly).
+    final returnHops = _hopSelector.selectHops(
+      count: defaultHopCount,
+      excludeAddresses: {?ownOh.serverEndpoint, submitVia.address},
+      excludeNodeIds: {?submitVia.discoveredNodeId},
+    );
+    final withinBudget =
+        payloadLength <=
+        GarlicBuilder.maxAckedPayloadLength(
+          forwardHops.length,
+          tagged: tagged,
+          returnHopCount: returnHops.length,
+        );
+    if (!withinBudget) {
+      RpLog.info(
+        'RedPandaLightClient: sendMessage() payload of $payloadLength bytes '
+        'exceeds the acked budget — sending without an R-ACK request',
+      );
+      return null;
+    }
+
+    final ackTag = CryptoUtils.randomBytes(GarlicBuilder.sessionTagLength);
+    final ackTagHex = _hexEncode(ackTag);
+    _ackTagStore.store(
+      ackTagHex,
+      channelId: channelId,
+      messageIdHex: messageIdHex,
+      hopNodeIdsHex: [
+        for (final hop in forwardHops) _hexEncode(hop.nodeId),
+        for (final hop in returnHops) _hexEncode(hop.nodeId),
+      ],
+    );
+    return ReturnPathBlock(
+      ackOhId: ownOh.ohId,
+      ackSessionTag: ackTag,
+      hops: returnHops,
     );
   }
 
@@ -1047,16 +1185,18 @@ class RedPandaLightClient implements RedPandaClient {
   /// Builds the layered Flaschenpost v2 packet and hands it to the connected
   /// node (command 142), which routes it to the first hop by KademliaId.
   ///
-  /// There is no deliver confirmation on the garlic path (R-ACK lands in
-  /// MS06), so the message counts as handed off once submitted; a re-send is
-  /// deduplicated at the receiver via the inner message_id.
+  /// With an own OH mailbox (MS06) the innermost layer is CMD_DELIVER_ACKED
+  /// carrying a return path — the depositing node confirms with an R-ACK.
+  /// Without one the send stays fire-and-forget; a re-send is deduplicated
+  /// at the receiver via the inner message_id either way.
   Future<void> _sendViaGarlic(
     ActivePeer submitVia,
     List<GarlicHop> hops,
     List<int> peerOhId,
     Uint8List payload,
-    String channelId,
-  ) async {
+    String channelId, {
+    String? messageIdHex,
+  }) async {
     if (payload.length > GarlicBuilder.maxPayloadLength(hops.length)) {
       // The fixed 2048-byte packet cannot carry this payload over the
       // selected path — re-sending the same content can never succeed.
@@ -1075,16 +1215,29 @@ class RedPandaLightClient implements RedPandaClient {
       );
     }
 
+    final returnPath = messageIdHex != null
+        ? _buildReturnPath(
+            channelId,
+            submitVia,
+            messageIdHex: messageIdHex,
+            forwardHops: hops,
+            payloadLength: payload.length,
+            tagged: false,
+          )
+        : null;
     final packet = await GarlicBuilder.build(
       hops: hops,
       ohId: peerOhId,
       payload: payload,
+      returnPath: returnPath,
     );
     submitVia.sendCommand(142, packet);
     lastSendHopCount = hops.length;
+    lastSendAckRequested = returnPath != null;
     RpLog.debug(
       'RedPandaLightClient: sendMessage() submitted a ${packet.length}-byte '
-      'flaschenpost v2 over ${hops.length} hops for channel $channelId',
+      'flaschenpost v2 over ${hops.length} hops for channel $channelId'
+      '${returnPath != null ? ' (R-ACK requested)' : ''}',
     );
   }
 
@@ -1408,6 +1561,7 @@ class RedPandaLightClient implements RedPandaClient {
     // Dispatch on the envelope version byte: v4 (MS03b) goes through the
     // channel ratchet, v3 (pre-MS03b transition) through the static K_enc.
     final messages = <DecryptedMessage>[];
+    final ackedMessageIds = <Uint8List>[];
     RatchetSession? session;
     var ratchetAdvanced = false;
     var garlicStateChanged = false;
@@ -1421,6 +1575,14 @@ class RedPandaLightClient implements RedPandaClient {
       final String? tagHex;
       if (viaSessionTag) {
         tagHex = _hexEncode(item.sessionTag);
+        // MS06: an outstanding ack tag marks this item as an R-ACK for one
+        // of our sends — a plaintext RoutingAck, never channel-encrypted
+        // (master spec MS06, Decision 3: correlation via ack_session_tag).
+        final ackEntry = _ackTagStore.consume(tagHex);
+        if (ackEntry != null) {
+          _handleRoutingAck(ackEntry, item.payload);
+          continue;
+        }
         final tagChannel = _sessionTagStore.lookup(tagHex);
         if (tagChannel == null || tagChannel != oh.channelId) {
           RpLog.info(
@@ -1454,6 +1616,20 @@ class RedPandaLightClient implements RedPandaClient {
           _sessionTagStore.consume(tagHex);
           garlicStateChanged = true;
         }
+        // MS06: a Channel-ACK confirms the partner received our message —
+        // surface it as a status update, never as a chat message.
+        if (channelMessage.isChannelAck) {
+          if (!_channelAckController.isClosed) {
+            _channelAckController.add(
+              ChannelAckUpdate(
+                channelId: oh.channelId!,
+                messageIdHex: _hexEncode(channelMessage.ackMessageId!),
+                timestampMs: channelMessage.timestampMs,
+              ),
+            );
+          }
+          continue;
+        }
         if (_storeReplyPath(oh.channelId!, channelMessage.replyPath)) {
           garlicStateChanged = true;
         }
@@ -1467,6 +1643,9 @@ class RedPandaLightClient implements RedPandaClient {
             viaSessionTag: viaSessionTag,
           ),
         );
+        // MS06 (OQ 1): acknowledge on receipt — a Channel-ACK is queued for
+        // every accepted regular message and sent after the loop.
+        ackedMessageIds.add(Uint8List.fromList(channelMessage.messageId));
       } catch (e) {
         RpLog.info('RedPandaLightClient: failed to decrypt mail item: $e');
       }
@@ -1476,6 +1655,16 @@ class RedPandaLightClient implements RedPandaClient {
     }
     if (garlicStateChanged) {
       _emitGarlicSession(oh.channelId!);
+    }
+
+    // MS06 (OQ 1): confirm receipt to the sender — fire-and-forget, a lost
+    // ACK only leaves their message at `routed` instead of `delivered`.
+    for (final ackedId in ackedMessageIds) {
+      unawaited(
+        _sendChannelAck(oh.channelId!, ackedId).catchError((Object e) {
+          RpLog.info('RedPandaLightClient: failed to send channel ack: $e');
+        }),
+      );
     }
 
     // Acknowledge the fetched batch so the Full Node can delete it.
@@ -1526,6 +1715,100 @@ class RedPandaLightClient implements RedPandaClient {
       );
       return false;
     }
+  }
+
+  /// Processes a fetched R-ACK (MS06): scores the involved hops and
+  /// forwards the delivery status to the app layer. The arriving R-ACK
+  /// proves the forward and return path both worked, so the hops are
+  /// credited regardless of the deposit status — the status describes the
+  /// recipient's mailbox, not the route.
+  void _handleRoutingAck(AckTagEntry entry, List<int> payload) {
+    final RoutingAck ack;
+    try {
+      ack = RoutingAck.decode(payload);
+    } on FormatException catch (e) {
+      RpLog.info('RedPandaLightClient: dropping malformed R-ACK: $e');
+      return;
+    }
+    final latencyMs = (DateTime.now().millisecondsSinceEpoch - entry.sentAtMs)
+        .clamp(0, 1 << 31);
+    _nodeScorer.recordSuccess(entry.hopNodeIdsHex, latencyMs);
+    _emitNodeScores();
+    if (!_routingAckController.isClosed) {
+      _routingAckController.add(
+        RoutingAckUpdate.ack(
+          channelId: entry.channelId,
+          messageIdHex: entry.messageIdHex,
+          status: ack.status,
+          latencyMs: latencyMs,
+        ),
+      );
+    }
+    RpLog.debug(
+      'RedPandaLightClient: R-ACK for message ${entry.messageIdHex} '
+      '(status ${ack.status}, ${latencyMs}ms)',
+    );
+  }
+
+  /// Sends a Channel-ACK (MS06) for a received message: an empty
+  /// ChannelMessage whose ack_message_id references the acknowledged
+  /// message, ratchet-encrypted like any other message.
+  ///
+  /// Travels the forward garlic path (or the direct deposit as fallback) and
+  /// deliberately does **not** consume the pending RGB — that stays reserved
+  /// for the user's actual reply — and requests no R-ACK of its own (ACKs
+  /// stay lightweight; a lost ACK is repaired by the next one).
+  Future<void> _sendChannelAck(String channelId, Uint8List ackedId) async {
+    final sessionFuture = _ratchetSessions[channelId];
+    if (sessionFuture == null) return;
+
+    final random = Random.secure();
+    final ackMessage = ChannelMessage(
+      messageId: Uint8List.fromList(
+        List<int>.generate(16, (_) => random.nextInt(256)),
+      ),
+      timestampMs: DateTime.now().millisecondsSinceEpoch,
+      content: '',
+      ackMessageId: ackedId,
+    );
+    final session = await sessionFuture;
+    final payload = await session.encrypt(ackMessage, channelId);
+    _emitRatchetState(channelId, session);
+
+    final activePeer = _peers.values
+        .where((p) => p.isHandshakeVerified)
+        .firstOrNull;
+    if (activePeer == null) {
+      RpLog.info(
+        'RedPandaLightClient: no active peer to send a channel ack over',
+      );
+      return;
+    }
+
+    final peerOhId = _channelPeerOhIds[channelId];
+    if (peerOhId != null && peerOhId.length == GarlicHop.nodeIdLength) {
+      final hops = _selectGarlicHops(channelId, activePeer);
+      if (hops.isNotEmpty &&
+          payload.length <= GarlicBuilder.maxPayloadLength(hops.length)) {
+        final packet = await GarlicBuilder.build(
+          hops: hops,
+          ohId: peerOhId,
+          payload: payload,
+        );
+        activePeer.sendCommand(142, packet);
+        return;
+      }
+    }
+
+    // Direct fallback without want_response: best effort, never interferes
+    // with the deposit-response queue of regular sends.
+    final flaschenpost = FlaschenpostPut()
+      ..content = payload
+      ..ohId = peerOhId ?? Uint8List(0);
+    activePeer.sendCommand(
+      141,
+      Uint8List.fromList(flaschenpost.writeToBuffer()),
+    );
   }
 
   /// Sends an AckFetchRequest for [oh] confirming receipt of all mail items
@@ -1628,6 +1911,27 @@ class RedPandaLightClient implements RedPandaClient {
         // MS05: prune session tags whose RGB expired long ago (48h).
         for (final channelId in _sessionTagStore.cleanup()) {
           _emitGarlicSession(channelId);
+        }
+        // MS06: sends whose R-ACK never arrived — score the involved hops
+        // down and tell the app layer so it can re-send over fresh hops.
+        final expired = _ackTagStore.takeExpired(ackTimeout);
+        for (final entry in expired) {
+          _nodeScorer.recordFailure(entry.hopNodeIdsHex);
+          if (!_routingAckController.isClosed) {
+            _routingAckController.add(
+              RoutingAckUpdate.timeout(
+                channelId: entry.channelId,
+                messageIdHex: entry.messageIdHex,
+              ),
+            );
+          }
+          RpLog.info(
+            'RedPandaLightClient: no R-ACK for message '
+            '${entry.messageIdHex} within ${ackTimeout.inSeconds}s',
+          );
+        }
+        if (expired.isNotEmpty) {
+          _emitNodeScores();
         }
       } finally {
         _pollInProgress = false;

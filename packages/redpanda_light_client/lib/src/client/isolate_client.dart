@@ -12,7 +12,9 @@ import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
+import 'package:redpanda_light_client/src/domain/routing_ack.dart';
 import 'package:redpanda_light_client/src/domain/send_exceptions.dart';
+import 'package:redpanda_light_client/src/garlic/node_scorer.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
@@ -49,6 +51,10 @@ class RedPandaIsolateClient implements RedPandaClient {
 
   final _garlicSessionController =
       StreamController<GarlicSessionUpdate>.broadcast();
+
+  final _routingAckController = StreamController<RoutingAckUpdate>.broadcast();
+  final _channelAckController = StreamController<ChannelAckUpdate>.broadcast();
+  final _nodeScoreController = StreamController<List<NodeScore>>.broadcast();
 
   // Pending OH registrations awaiting their isolate response, by requestId.
   final Map<int, Completer<OHRegistration>> _pendingOhRegistrations = {};
@@ -185,6 +191,30 @@ class RedPandaIsolateClient implements RedPandaClient {
           pendingRgbHex: event.pendingRgbHex,
         ),
       );
+    } else if (event is EventRoutingAckUpdate) {
+      _routingAckController.add(
+        event.timedOut
+            ? RoutingAckUpdate.timeout(
+                channelId: event.channelId,
+                messageIdHex: event.messageIdHex,
+              )
+            : RoutingAckUpdate.ack(
+                channelId: event.channelId,
+                messageIdHex: event.messageIdHex,
+                status: event.status!,
+                latencyMs: event.latencyMs!,
+              ),
+      );
+    } else if (event is EventChannelAckUpdate) {
+      _channelAckController.add(
+        ChannelAckUpdate(
+          channelId: event.channelId,
+          messageIdHex: event.messageIdHex,
+          timestampMs: event.timestampMs,
+        ),
+      );
+    } else if (event is EventNodeScores) {
+      _nodeScoreController.add(event.scores);
     } else if (event is EventLog) {
       RpLog.debug('[Isolate] ${event.message}');
     }
@@ -344,6 +374,22 @@ class RedPandaIsolateClient implements RedPandaClient {
   Stream<GarlicSessionUpdate> get garlicSessionUpdates =>
       _garlicSessionController.stream;
 
+  @override
+  Stream<RoutingAckUpdate> get routingAckUpdates =>
+      _routingAckController.stream;
+
+  @override
+  Stream<ChannelAckUpdate> get channelAckUpdates =>
+      _channelAckController.stream;
+
+  @override
+  Stream<List<NodeScore>> get nodeScoreUpdates => _nodeScoreController.stream;
+
+  @override
+  void restoreNodeScores(List<NodeScore> scores) {
+    _send(CmdRestoreNodeScores(scores));
+  }
+
   // Lifecycle hooks proxied
   void onPause() {
     _send(CmdLifecyclePause());
@@ -420,6 +466,31 @@ void _isolateEntryPoint(SendPort mainSendPort) {
             mailboxOverflow: update.mailboxOverflow,
           ),
         );
+      });
+
+      // Forward routing/channel ACK feedback and node scores (MS06)
+      client!.routingAckUpdates.listen((update) {
+        mainSendPort.send(
+          EventRoutingAckUpdate(
+            channelId: update.channelId,
+            messageIdHex: update.messageIdHex,
+            status: update.status,
+            latencyMs: update.latencyMs,
+            timedOut: update.timedOut,
+          ),
+        );
+      });
+      client!.channelAckUpdates.listen((update) {
+        mainSendPort.send(
+          EventChannelAckUpdate(
+            channelId: update.channelId,
+            messageIdHex: update.messageIdHex,
+            timestampMs: update.timestampMs,
+          ),
+        );
+      });
+      client!.nodeScoreUpdates.listen((scores) {
+        mainSendPort.send(EventNodeScores(scores));
       });
 
       // Send periodic peer stats snapshots to main thread
@@ -513,6 +584,8 @@ void _isolateEntryPoint(SendPort mainSendPort) {
           sessionTags: message.sessionTags,
           pendingRgbHex: message.pendingRgbHex,
         );
+      } else if (message is CmdRestoreNodeScores) {
+        client!.restoreNodeScores(message.scores);
       } else if (message is CmdRestoreOutboundHandle) {
         await client!.restoreOutboundHandle(
           OHRegistration(

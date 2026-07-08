@@ -27,6 +27,9 @@ class MessageSyncService {
   StreamSubscription<OhMailboxUpdate>? _updateSub;
   StreamSubscription<RatchetStateUpdate>? _ratchetSub;
   StreamSubscription<GarlicSessionUpdate>? _garlicSub;
+  StreamSubscription<RoutingAckUpdate>? _routingAckSub;
+  StreamSubscription<ChannelAckUpdate>? _channelAckSub;
+  StreamSubscription<List<NodeScore>>? _nodeScoreSub;
 
   /// Serializes ratchet-state DB writes so they are applied in emission
   /// order — a slow earlier write must not overwrite a newer state.
@@ -34,6 +37,9 @@ class MessageSyncService {
 
   /// Same ordering guarantee for garlic-session snapshots (MS05).
   Future<void> _garlicPersistPending = Future.value();
+
+  /// Same ordering guarantee for node-score snapshots (MS06).
+  Future<void> _nodeScorePersistPending = Future.value();
 
   MessageSyncService(
     this._client,
@@ -84,6 +90,31 @@ class MessageSyncService {
             ),
           );
     });
+    _routingAckSub ??= _client.routingAckUpdates.listen(
+      (update) => unawaited(
+        handleRoutingAckUpdate(update).catchError(
+          (Object e) =>
+              debugPrint('MessageSyncService: failed to apply routing ack: $e'),
+        ),
+      ),
+    );
+    _channelAckSub ??= _client.channelAckUpdates.listen(
+      (update) => unawaited(
+        handleChannelAckUpdate(update).catchError(
+          (Object e) =>
+              debugPrint('MessageSyncService: failed to apply channel ack: $e'),
+        ),
+      ),
+    );
+    _nodeScoreSub ??= _client.nodeScoreUpdates.listen((scores) {
+      _nodeScorePersistPending = _nodeScorePersistPending
+          .then((_) => handleNodeScores(scores))
+          .catchError(
+            (Object e) => debugPrint(
+              'MessageSyncService: failed to persist node scores: $e',
+            ),
+          );
+    });
   }
 
   Future<void> stop() async {
@@ -91,10 +122,16 @@ class MessageSyncService {
     await _updateSub?.cancel();
     await _ratchetSub?.cancel();
     await _garlicSub?.cancel();
+    await _routingAckSub?.cancel();
+    await _channelAckSub?.cancel();
+    await _nodeScoreSub?.cancel();
     _messageSub = null;
     _updateSub = null;
     _ratchetSub = null;
     _garlicSub = null;
+    _routingAckSub = null;
+    _channelAckSub = null;
+    _nodeScoreSub = null;
   }
 
   /// Persists a fetched message unless it was already stored (dedup via
@@ -162,6 +199,87 @@ class MessageSyncService {
     });
   }
 
+  /// Applies routing-layer delivery feedback (MS06): an R-ACK confirms the
+  /// message reached the recipient's OH mailbox (`routed`); HANDLE_EXPIRED,
+  /// MAILBOX_FULL or a timeout re-queue the message for a retry over fresh
+  /// hops (the node scorer already penalized the old ones on timeout).
+  Future<void> handleRoutingAckUpdate(RoutingAckUpdate update) async {
+    if (update.timedOut) {
+      debugPrint(
+        'MessageSyncService: no R-ACK for ${update.messageIdHex} — '
+        're-queueing for fresh hops',
+      );
+      await _messages.requeueSentByNetworkId(
+        update.channelId,
+        update.messageIdHex,
+      );
+      return;
+    }
+    switch (update.status) {
+      case RoutingAck.statusStored:
+        await _messages.markRoutedByNetworkId(
+          update.channelId,
+          update.messageIdHex,
+        );
+        break;
+      case RoutingAck.statusMailboxFull:
+        // Reject-new (MS02b): retrying immediately cannot succeed; the
+        // normal backoff applies via the re-queue.
+        debugPrint(
+          'MessageSyncService: recipient mailbox full for '
+          '${update.messageIdHex}',
+        );
+        await _messages.requeueSentByNetworkId(
+          update.channelId,
+          update.messageIdHex,
+        );
+        break;
+      case RoutingAck.statusHandleExpired:
+      case RoutingAck.statusRejected:
+      default:
+        debugPrint(
+          'MessageSyncService: deposit failed for ${update.messageIdHex} '
+          '(status ${update.status})',
+        );
+        await _messages.requeueSentByNetworkId(
+          update.channelId,
+          update.messageIdHex,
+        );
+        break;
+    }
+  }
+
+  /// Applies an application-layer delivery confirmation (Channel-ACK, MS06).
+  Future<void> handleChannelAckUpdate(ChannelAckUpdate update) async {
+    await _messages.markDeliveredByNetworkId(
+      update.channelId,
+      update.messageIdHex,
+    );
+  }
+
+  /// Persists a node-score snapshot (MS06) so hop selection keeps its
+  /// R-ACK history across app restarts.
+  Future<void> handleNodeScores(List<NodeScore> scores) async {
+    await _db.transaction(() async {
+      for (final score in scores) {
+        await _db
+            .into(_db.nodeScores)
+            .insert(
+              NodeScoresCompanion.insert(
+                nodeId: score.nodeIdHex,
+                successCount: Value(score.successCount),
+                failureCount: Value(score.failureCount),
+                avgLatencyMs: Value(score.avgLatencyMs),
+                lastUpdated: Value(
+                  DateTime.fromMillisecondsSinceEpoch(score.lastUpdatedMs),
+                ),
+              ),
+              mode: InsertMode.insertOrReplace,
+            );
+      }
+    });
+  }
+
   /// Restores channel keys and persisted OH registrations into the network
   /// client so polling resumes from the persisted cursor after a restart.
   Future<void> restorePersistedState() async {
@@ -193,6 +311,21 @@ class MessageSyncService {
       await _client.restoreOutboundHandle(
         await _outboundHandles.toRegistration(handle),
       );
+    }
+
+    // MS06: feed persisted node scores back into the hop selection.
+    final scores = await _db.select(_db.nodeScores).get();
+    if (scores.isNotEmpty) {
+      _client.restoreNodeScores([
+        for (final score in scores)
+          NodeScore(
+            nodeIdHex: score.nodeId,
+            successCount: score.successCount,
+            failureCount: score.failureCount,
+            avgLatencyMs: score.avgLatencyMs,
+            lastUpdatedMs: score.lastUpdated?.millisecondsSinceEpoch ?? 0,
+          ),
+      ]);
     }
   }
 

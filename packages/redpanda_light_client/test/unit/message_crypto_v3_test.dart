@@ -73,12 +73,31 @@ void main() {
       expect(ChannelMessage.decode(sampleMessage().encode()).replyPath, isNull);
     });
 
+    test('ack_message_id (MS06, field 6) roundtrips and stays absent when '
+        'unset', () {
+      final ackedId = Uint8List.fromList(List<int>.generate(16, (i) => i));
+      final ackMsg = ChannelMessage(
+        messageId: Uint8List.fromList([9, 9, 9]),
+        timestampMs: 3,
+        content: '',
+        ackMessageId: ackedId,
+      );
+      final decoded = ChannelMessage.decode(ackMsg.encode());
+      expect(decoded.ackMessageId, equals(ackedId));
+      expect(decoded.isChannelAck, isTrue);
+
+      expect(
+        ChannelMessage.decode(sampleMessage().encode()).ackMessageId,
+        isNull,
+      );
+    });
+
     test('skips unknown fields (forward compatibility)', () {
       final msg = sampleMessage();
       final encoded = msg.encode();
-      // Append an unknown field #6, varint wire type: tag (6<<3|0)=0x30, val 7
-      // (field #5 became reply_path in MS05).
-      final withUnknown = Uint8List.fromList([...encoded, 0x30, 0x07]);
+      // Append an unknown field #9, varint wire type: tag (9<<3|0)=0x48, val 7
+      // (fields 5 and 6 are now reply_path / ack_message_id).
+      final withUnknown = Uint8List.fromList([...encoded, 0x48, 0x07]);
       final decoded = ChannelMessage.decode(withUnknown);
       expect(decoded.content, equals(msg.content));
       expect(decoded.messageId, equals(msg.messageId));

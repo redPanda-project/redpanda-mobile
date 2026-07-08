@@ -4,8 +4,6 @@ import 'package:redpanda/database/database.dart';
 import 'package:redpanda/shared/providers.dart';
 
 /// Message status values stored in [Messages.status].
-///
-/// 2 (routed) and 3 (delivered) are reserved for MS06 (Two-Layer ACK).
 class MessageStatus {
   MessageStatus._();
 
@@ -15,7 +13,19 @@ class MessageStatus {
   /// Handed to a connected Full Node.
   static const int sent = 1;
 
+  /// MS06: R-ACK received — the message reached the recipient's OH mailbox.
+  static const int routed = 2;
+
+  /// MS06: Channel-ACK received — the recipient's client has the message.
+  static const int delivered = 3;
+
   /// Incoming message fetched from our OH mailbox.
+  ///
+  /// Note: the master-spec lifecycle reserves 4 for a future Read-ACK; this
+  /// app has used 4 for incoming messages since MS01. Incoming and outgoing
+  /// rows never mix status semantics (the UI only renders status icons for
+  /// own messages), so the double use is safe — a Read-ACK would need a new
+  /// value (6) if it ever lands.
   static const int received = 4;
 
   /// Given up after [SendRetryQueue.maxRetries] failed attempts.
@@ -136,6 +146,78 @@ class MessageRepository {
   Future<void> updateMessageStatus(int id, int status) async {
     await (_db.update(_db.messages)..where((t) => t.id.equals(id))).write(
       MessagesCompanion(status: drift.Value(status)),
+    );
+  }
+
+  /// MS06: marks the outgoing message with network id [messageIdHex] in
+  /// [conversationId] as routed (R-ACK received). Only upgrades — a message
+  /// already delivered (or failed after the ack raced the last retry) keeps
+  /// its later status; failed is upgraded too, because the R-ACK proves the
+  /// message reached the mailbox after all.
+  Future<void> markRoutedByNetworkId(
+    String conversationId,
+    String messageIdHex,
+  ) async {
+    await (_db.update(_db.messages)..where(
+          (t) =>
+              t.conversationId.equals(conversationId) &
+              t.messageId.equals(messageIdHex) &
+              t.status.isIn(const [
+                MessageStatus.pending,
+                MessageStatus.sent,
+                MessageStatus.failed,
+              ]),
+        ))
+        .write(
+          const MessagesCompanion(status: drift.Value(MessageStatus.routed)),
+        );
+  }
+
+  /// MS06: marks the outgoing message as delivered (Channel-ACK received).
+  /// Delivered is terminal evidence the partner has the message, so every
+  /// earlier state — including failed — is upgraded.
+  Future<void> markDeliveredByNetworkId(
+    String conversationId,
+    String messageIdHex,
+  ) async {
+    await (_db.update(_db.messages)..where(
+          (t) =>
+              t.conversationId.equals(conversationId) &
+              t.messageId.equals(messageIdHex) &
+              t.status.isNotIn(const [MessageStatus.received]),
+        ))
+        .write(
+          const MessagesCompanion(status: drift.Value(MessageStatus.delivered)),
+        );
+  }
+
+  /// MS06: re-queues a sent message whose R-ACK timed out (or whose ack
+  /// reported HANDLE_EXPIRED) for a retry over fresh hops. Increments
+  /// retryCount and stamps lastRetryAt so the normal backoff applies;
+  /// touches only messages still in `sent` — a late Channel-ACK or R-ACK
+  /// must not resurrect an already confirmed message.
+  Future<void> requeueSentByNetworkId(
+    String conversationId,
+    String messageIdHex,
+  ) async {
+    final msg =
+        await (_db.select(_db.messages)
+              ..where(
+                (t) =>
+                    t.conversationId.equals(conversationId) &
+                    t.messageId.equals(messageIdHex) &
+                    t.status.equals(MessageStatus.sent),
+              )
+              ..limit(1))
+            .getSingleOrNull();
+    if (msg == null) return;
+
+    await (_db.update(_db.messages)..where((t) => t.id.equals(msg.id))).write(
+      MessagesCompanion(
+        status: const drift.Value(MessageStatus.pending),
+        retryCount: drift.Value(msg.retryCount + 1),
+        lastRetryAt: drift.Value(DateTime.now()),
+      ),
     );
   }
 

@@ -18,8 +18,8 @@ void main() {
       await db.close();
     });
 
-    test('schema version is 12', () {
-      expect(db.schemaVersion, equals(12));
+    test('schema version is 13', () {
+      expect(db.schemaVersion, equals(13));
     });
 
     test('dedup is scoped per conversation: same id in two channels', () async {

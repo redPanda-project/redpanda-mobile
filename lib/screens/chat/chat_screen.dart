@@ -80,13 +80,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 
-  /// Status icon for own outgoing messages (MS02: pending/sent/failed).
+  /// Status icon for own outgoing messages (MS06 lifecycle: pending → sent
+  /// → routed (R-ACK) → delivered (Channel-ACK), or failed).
   Widget? _statusIcon(int status) {
     switch (status) {
       case MessageStatus.pending:
         return const Icon(Icons.access_time, size: 14, color: Colors.grey);
       case MessageStatus.sent:
+        return const Icon(Icons.arrow_upward, size: 14, color: Colors.grey);
+      case MessageStatus.routed:
         return const Icon(Icons.check, size: 14, color: Colors.grey);
+      case MessageStatus.delivered:
+        return const Icon(Icons.done_all, size: 14, color: Colors.blue);
       case MessageStatus.failed:
         return const Icon(Icons.close, size: 14, color: Colors.red);
       default:

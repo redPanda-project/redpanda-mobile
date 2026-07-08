@@ -1,6 +1,9 @@
+import 'dart:math';
+
 import 'package:hex/hex.dart';
 
 import 'package:redpanda_light_client/src/garlic/garlic_builder.dart';
+import 'package:redpanda_light_client/src/garlic/node_scorer.dart';
 import 'package:redpanda_light_client/src/models/peer_stats.dart';
 import 'package:redpanda_light_client/src/peer_repository.dart';
 
@@ -15,14 +18,26 @@ import 'package:redpanda_light_client/src/peer_repository.dart';
 ///   list may differ from the address we dialed),
 /// - diversity: random selection that prefers distinct KademliaId prefixes
 ///   (first byte) where the candidate set allows it.
+///
+/// MS06: with a [NodeScorer], reliably delivering nodes are preferred —
+/// candidates are ordered by score plus random jitter (scores steer, they
+/// never fully determine, so paths stay diverse) and nodes below the avoid
+/// threshold are dropped when enough other candidates exist.
 class HopSelector {
   final PeerRepository _peerRepository;
+
+  /// Optional R-ACK-based node scoring (MS06); null selects unscored.
+  final NodeScorer? nodeScorer;
+
+  /// Jitter added to the score when ordering candidates, so a small score
+  /// difference does not deterministically pin the same hops every time.
+  static const double scoreJitter = 0.25;
 
   /// Optional additional candidate predicate. Used by tests to pin the
   /// candidate set (e.g. to local nodes in E2E); null accepts all.
   final bool Function(PeerStats peer)? candidateFilter;
 
-  HopSelector(this._peerRepository, {this.candidateFilter});
+  HopSelector(this._peerRepository, {this.candidateFilter, this.nodeScorer});
 
   /// Picks up to [count] distinct hops. Returns fewer (possibly zero) hops
   /// when not enough eligible candidates are known — the caller decides how
@@ -53,6 +68,30 @@ class HopSelector {
     }
 
     candidates.shuffle();
+
+    // MS06: drop unreliable nodes when the candidate set allows it, then
+    // order by score plus jitter (highest first) so proven nodes are
+    // preferred without pinning the same path every time.
+    final scorer = nodeScorer;
+    if (scorer != null) {
+      final reliable = candidates
+          .where((peer) => !scorer.shouldAvoid(peer.nodeId!))
+          .toList();
+      if (reliable.length >= count) {
+        candidates
+          ..clear()
+          ..addAll(reliable);
+      }
+      final random = Random();
+      final jittered = <String, double>{
+        for (final peer in candidates)
+          peer.nodeId!:
+              scorer.score(peer.nodeId!) + random.nextDouble() * scoreJitter,
+      };
+      candidates.sort(
+        (a, b) => jittered[b.nodeId!]!.compareTo(jittered[a.nodeId!]!),
+      );
+    }
 
     // Greedy diversity pass: prefer candidates whose KademliaId first byte
     // differs from already selected hops; top up with the remainder if the

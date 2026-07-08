@@ -7,12 +7,18 @@ import 'dart:typed_data';
 ///
 /// ```
 /// ChannelMessage {
-///   bytes  message_id   = 1;  // 16 random bytes, stable across retries
-///   int64  timestamp_ms = 2;
-///   string content      = 3;
-///   bytes  reply_path   = 5;  // MS05: serialized ReverseGarlicBlock (optional)
+///   bytes  message_id     = 1;  // 16 random bytes, stable across retries
+///   int64  timestamp_ms   = 2;
+///   string content        = 3;
+///   bytes  reply_path     = 5;  // MS05: serialized ReverseGarlicBlock (optional)
+///   bytes  ack_message_id = 6;  // MS06: Channel-ACK for this message id (optional)
 /// }
 /// ```
+///
+/// A message with a non-empty `ack_message_id` is a **Channel-ACK**
+/// (Frontend MS06): it confirms receipt of the referenced message and
+/// carries no content; the receiver updates the message status instead of
+/// showing it.
 ///
 /// Field 5 matches the master-spec MS05 protobuf sketch (`reply_path = 5`);
 /// field 4 stays unused (the master sketch reserves 3/4 for iv/timestamp,
@@ -52,12 +58,20 @@ class ChannelMessage {
   /// can reply via reverse garlic. Null/empty when no reply path travels.
   final Uint8List? replyPath;
 
+  /// MS06: the message id this message acknowledges (Channel-ACK).
+  /// Null/empty for regular messages.
+  final Uint8List? ackMessageId;
+
   const ChannelMessage({
     required this.messageId,
     required this.timestampMs,
     required this.content,
     this.replyPath,
+    this.ackMessageId,
   });
+
+  /// True when this message is a Channel-ACK (MS06).
+  bool get isChannelAck => ackMessageId != null && ackMessageId!.isNotEmpty;
 
   /// Encodes this message to its proto3-compatible binary representation.
   Uint8List encode() {
@@ -92,6 +106,14 @@ class ChannelMessage {
       out.add(replyPathBytes);
     }
 
+    // field 6: ack_message_id (length-delimited, MS06)
+    final ackBytes = ackMessageId;
+    if (ackBytes != null && ackBytes.isNotEmpty) {
+      out.addByte(0x32); // (6 << 3) | 2
+      _writeVarint(out, ackBytes.length);
+      out.add(ackBytes);
+    }
+
     return out.toBytes();
   }
 
@@ -107,6 +129,7 @@ class ChannelMessage {
     int timestampMs = 0;
     String content = '';
     Uint8List? replyPath;
+    Uint8List? ackMessageId;
 
     int readVarint() {
       var result = 0;
@@ -173,6 +196,21 @@ class ChannelMessage {
           );
           offset += replyLen;
           break;
+        case 6: // ack_message_id (MS06)
+          if (wireType != 2) {
+            throw const FormatException('ChannelMessage: bad wire type for #6');
+          }
+          final ackLen = readVarint();
+          if (offset + ackLen > data.length) {
+            throw const FormatException(
+              'ChannelMessage: truncated ack_message_id',
+            );
+          }
+          ackMessageId = Uint8List.fromList(
+            data.sublist(offset, offset + ackLen),
+          );
+          offset += ackLen;
+          break;
         default:
           // Unknown field — skip according to wire type.
           _skipField(
@@ -191,6 +229,7 @@ class ChannelMessage {
       timestampMs: timestampMs,
       content: content,
       replyPath: replyPath,
+      ackMessageId: ackMessageId,
     );
   }
 
