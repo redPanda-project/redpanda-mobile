@@ -221,6 +221,17 @@ void main() async {
           for (var i = 0; i < 30 && epochs[who]! < epoch; i++) {
             await client.fetchMessages(ohs[who]!);
             if (epochs[who]! >= epoch) break;
+            // A box lost in the garlic network stays pending until its
+            // R-ACK arrives; re-send it like the app's periodic retry does
+            // (fetching Alice's mailbox consumes the confirmations).
+            if (i > 0 && i % 3 == 0) {
+              await alice.fetchMessages(ohs['Alice']!);
+              try {
+                await alice.retryPendingRotations(groupId);
+              } on GroupSendException catch (_) {
+                // Still undeliverable — keep polling.
+              }
+            }
             await Future.delayed(const Duration(seconds: 2));
           }
           expect(

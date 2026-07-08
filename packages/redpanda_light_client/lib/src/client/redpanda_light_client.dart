@@ -1137,6 +1137,7 @@ class RedPandaLightClient implements RedPandaClient {
     required int payloadLength,
     required bool tagged,
     String? memberIdHex,
+    bool isRotation = false,
   }) {
     final ownOh = _registeredOHs
         .where((oh) => oh.channelId == channelId)
@@ -1176,6 +1177,7 @@ class RedPandaLightClient implements RedPandaClient {
         for (final hop in returnHops) _hexEncode(hop.nodeId),
       ],
       memberIdHex: memberIdHex,
+      isRotation: isRotation,
     );
     return ReturnPathBlock(
       ackOhId: ownOh.ohId,
@@ -1789,6 +1791,24 @@ class RedPandaLightClient implements RedPandaClient {
         .clamp(0, 1 << 31);
     _nodeScorer.recordSuccess(entry.hopNodeIdsHex, latencyMs);
     _emitNodeScores();
+    // MS08: the R-ACK of a sealed rotation box confirms its deposit — clear
+    // the box from the pending store (Decision 10). Not a message status,
+    // so nothing is forwarded to the app's routing-ack stream.
+    if (entry.isRotation) {
+      final group = _groups[entry.channelId];
+      final memberIdHex = entry.memberIdHex;
+      if (group != null &&
+          memberIdHex != null &&
+          ack.status == RoutingAck.statusStored &&
+          group.pendingRotations.remove(memberIdHex) != null) {
+        _emitGroupState(group);
+        RpLog.debug(
+          'RedPandaLightClient: rotation box for $memberIdHex confirmed '
+          'delivered (${latencyMs}ms)',
+        );
+      }
+      return;
+    }
     if (!_routingAckController.isClosed) {
       _routingAckController.add(
         RoutingAckUpdate.ack(
@@ -2054,12 +2074,14 @@ class RedPandaLightClient implements RedPandaClient {
   /// Sends [payload] to one member's group OH: multi-hop garlic when relay
   /// hops are available (with an optional R-ACK request correlated to the
   /// member), otherwise a direct fire-and-forget deposit.
-  Future<void> _sendToGroupMember(
+  /// Returns true when the delivery requested an R-ACK.
+  Future<bool> _sendToGroupMember(
     _GroupState group,
     GroupMemberInfo member,
     Uint8List payload,
     ActivePeer submitVia, {
     String? messageIdHex,
+    bool isRotation = false,
   }) async {
     final ohId = member.ohId;
     if (ohId == null || ohId.length != GarlicHop.nodeIdLength) {
@@ -2085,6 +2107,7 @@ class RedPandaLightClient implements RedPandaClient {
               payloadLength: payload.length,
               tagged: false,
               memberIdHex: member.memberIdHex,
+              isRotation: isRotation,
             )
           : null;
       final packet = await GarlicBuilder.build(
@@ -2094,7 +2117,7 @@ class RedPandaLightClient implements RedPandaClient {
         returnPath: returnPath,
       );
       submitVia.sendCommand(142, packet);
-      return;
+      return returnPath != null;
     }
 
     // Direct fallback, fire-and-forget (mirrors the channel-ACK fallback):
@@ -2106,6 +2129,7 @@ class RedPandaLightClient implements RedPandaClient {
       141,
       Uint8List.fromList(flaschenpost.writeToBuffer()),
     );
+    return false;
   }
 
   @override
@@ -2198,9 +2222,14 @@ class RedPandaLightClient implements RedPandaClient {
     await _deliverPendingRotations(group);
   }
 
-  /// Delivers the pending sealed rotation boxes of [group]; successfully
-  /// submitted boxes are removed. Throws [GroupSendException] when boxes
-  /// remain (retry via [retryPendingRotations]).
+  /// Delivers the pending sealed rotation boxes of [group] with an R-ACK
+  /// request per box: a box stays pending until its R-ACK confirms the
+  /// deposit (Decision 10 — a member without its rotation is stuck
+  /// buffering, so submission alone must not count as delivered). Only
+  /// when no R-ACK could be requested (no own OH / no return hops) does a
+  /// submission remove the box — better than re-sending forever. Throws
+  /// [GroupSendException] when boxes could not even be submitted (retry
+  /// via [retryPendingRotations]; the app also retries periodically).
   Future<void> _deliverPendingRotations(_GroupState group) async {
     if (group.pendingRotations.isEmpty) return;
     final activePeer = _peers.values
@@ -2226,14 +2255,19 @@ class RedPandaLightClient implements RedPandaClient {
         continue;
       }
       try {
-        await _sendToGroupMember(
+        final acked = await _sendToGroupMember(
           group,
           member,
           group.pendingRotations[memberIdHex]!,
           activePeer,
+          messageIdHex: 'rotation',
+          isRotation: true,
         );
-        group.pendingRotations.remove(memberIdHex);
-        changed = true;
+        if (!acked) {
+          // No R-ACK to wait for — treat the submission as delivered.
+          group.pendingRotations.remove(memberIdHex);
+          changed = true;
+        }
       } catch (e) {
         RpLog.info(
           'RedPandaLightClient: rotation box for $memberIdHex '
@@ -2809,6 +2843,9 @@ class RedPandaLightClient implements RedPandaClient {
         final expired = _ackTagStore.takeExpired(ackTimeout);
         for (final entry in expired) {
           _nodeScorer.recordFailure(entry.hopNodeIdsHex);
+          // MS08: an unconfirmed rotation box simply stays pending — the
+          // periodic retry re-sends it; no message status to update.
+          if (entry.isRotation) continue;
           if (!_routingAckController.isClosed) {
             _routingAckController.add(
               RoutingAckUpdate.timeout(
