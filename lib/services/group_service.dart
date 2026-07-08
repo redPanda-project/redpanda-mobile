@@ -26,6 +26,12 @@ class GroupService {
   final OutboundHandleRepository _outboundHandles;
 
   StreamSubscription<GroupHandshakeEvent>? _handshakeSub;
+  Timer? _rotationRetryTimer;
+
+  /// How often undelivered sealed rotation boxes are retried. Decision 10
+  /// relies on rotations arriving reliably — a member without its rotation
+  /// is stuck buffering.
+  static const Duration rotationRetryInterval = Duration(minutes: 1);
 
   GroupService(this._client, this._groups, this._outboundHandles);
 
@@ -38,11 +44,38 @@ class GroupService {
         ),
       ),
     );
+    _rotationRetryTimer ??= Timer.periodic(
+      rotationRetryInterval,
+      (_) => unawaited(
+        retryPendingRotations().catchError(
+          (Object e) =>
+              debugPrint('GroupService: rotation retry pass failed: $e'),
+        ),
+      ),
+    );
   }
 
   Future<void> stop() async {
     await _handshakeSub?.cancel();
     _handshakeSub = null;
+    _rotationRetryTimer?.cancel();
+    _rotationRetryTimer = null;
+  }
+
+  /// Re-sends sealed rotation boxes that could not be delivered yet
+  /// (periodic; also invoked once on startup after the restore).
+  Future<void> retryPendingRotations() async {
+    for (final row in await _groups.getAllGroups()) {
+      final pending = row.pendingRotations;
+      if (pending == null || pending.isEmpty || pending == '{}') continue;
+      try {
+        await _client.retryPendingRotations(row.groupId);
+      } catch (e) {
+        debugPrint(
+          'GroupService: rotation boxes for ${row.groupId} still pending: $e',
+        );
+      }
+    }
   }
 
   /// Creates a new group with this device as admin and sends an invite

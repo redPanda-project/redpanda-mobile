@@ -11,8 +11,9 @@ jobs:
     runs-on: ubuntu-latest
     # Hard ceiling: a hung E2E node (leaked java subprocess keeping the test
     # runner alive) must never sit on GitHub's 6h default. A healthy full run
-    # is ~18-20 min; retries on a flaky suite push it toward 25.
-    timeout-minutes: 30
+    # is ~20-25 min since the MS08 suite (3 clients, 4 nodes) joined; retries
+    # on a flaky suite push it toward 30.
+    timeout-minutes: 40
 
     steps:
       - uses: actions/checkout@v4
@@ -67,7 +68,7 @@ jobs:
       # Serial execution removes the contention and keeps only one node
       # topology (port 59558) alive at a time.
       - name: Run E2E Tests (Light Client)
-        timeout-minutes: 20
+        timeout-minutes: 30
         run: |
           cd packages/redpanda_light_client
           flutter test --tags e2e --concurrency=1
