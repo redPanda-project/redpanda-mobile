@@ -80,6 +80,7 @@ class MessageRepository {
     required String senderId,
     required String content,
     required DateTime timestamp,
+    String? senderMemberId,
   }) {
     return _db.transaction(() async {
       if (messageId.isNotEmpty) {
@@ -103,6 +104,8 @@ class MessageRepository {
               // Store NULL (not empty string) for empty ids so the unique
               // index never groups malformed items together.
               messageId: drift.Value(messageId.isEmpty ? null : messageId),
+              // MS08: authenticated sender attribution for group messages.
+              senderMemberId: drift.Value(senderMemberId),
             ),
             mode: drift.InsertMode.insertOrIgnore,
           );

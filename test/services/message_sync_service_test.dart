@@ -2,6 +2,7 @@ import 'package:drift/drift.dart' as drift;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hex/hex.dart';
 import 'package:redpanda/database/database.dart';
+import 'package:redpanda/repositories/group_repository.dart';
 import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/repositories/outbound_handle_repository.dart';
 import 'package:redpanda/services/message_sync_service.dart';
@@ -22,7 +23,13 @@ void main() {
     db = createTestDatabase();
     client = FakeRedPandaClient();
     ohRepo = OutboundHandleRepository(db);
-    service = MessageSyncService(client, MessageRepository(db), ohRepo, db);
+    service = MessageSyncService(
+      client,
+      MessageRepository(db),
+      ohRepo,
+      db,
+      GroupRepository(db),
+    );
   });
 
   tearDown(() async {

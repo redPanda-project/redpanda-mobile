@@ -6,9 +6,13 @@ import 'dart:typed_data';
 
 import 'package:fixnum/fixnum.dart' as fixnum;
 
+import 'dart:convert' show utf8;
+
 import 'package:redpanda_light_client/src/client_facade.dart';
 import 'package:redpanda_light_client/src/crypto/channel_message.dart';
 import 'package:redpanda_light_client/src/crypto/crypto_utils.dart';
+import 'package:redpanda_light_client/src/crypto/group_control.dart';
+import 'package:redpanda_light_client/src/crypto/group_crypto.dart';
 import 'package:redpanda_light_client/src/crypto/message_crypto_v3.dart';
 import 'package:redpanda_light_client/src/crypto/message_crypto_v4.dart';
 import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
@@ -16,6 +20,7 @@ import 'package:redpanda_light_client/src/crypto/ratchet.dart';
 import 'package:redpanda_light_client/src/logging/logger.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
+import 'package:redpanda_light_client/src/domain/group_state.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/domain/reverse_garlic_block.dart';
@@ -146,6 +151,17 @@ class RedPandaLightClient implements RedPandaClient {
   final _routingAckController = StreamController<RoutingAckUpdate>.broadcast();
   final _channelAckController = StreamController<ChannelAckUpdate>.broadcast();
   final _nodeScoreController = StreamController<List<NodeScore>>.broadcast();
+
+  /// Registered groups by group id (MS08).
+  final Map<String, _GroupState> _groups = {};
+
+  final _groupStateController = StreamController<GroupStateUpdate>.broadcast();
+  final _groupHandshakeController =
+      StreamController<GroupHandshakeEvent>.broadcast();
+
+  /// Cap on buffered unknown-epoch items per group (Decision 10) — a
+  /// malicious or broken peer must not grow the buffer unboundedly.
+  static const int maxPendingGroupItems = 256;
 
   RedPandaLightClient({
     required this.selfNodeId,
@@ -1120,6 +1136,7 @@ class RedPandaLightClient implements RedPandaClient {
     required List<GarlicHop> forwardHops,
     required int payloadLength,
     required bool tagged,
+    String? memberIdHex,
   }) {
     final ownOh = _registeredOHs
         .where((oh) => oh.channelId == channelId)
@@ -1158,6 +1175,7 @@ class RedPandaLightClient implements RedPandaClient {
         for (final hop in forwardHops) _hexEncode(hop.nodeId),
         for (final hop in returnHops) _hexEncode(hop.nodeId),
       ],
+      memberIdHex: memberIdHex,
     );
     return ReturnPathBlock(
       ackOhId: ownOh.ohId,
@@ -1540,12 +1558,16 @@ class RedPandaLightClient implements RedPandaClient {
     final previousCursor = oh.lastCursor;
     oh.lastCursor = response.nextCursor.toInt();
 
+    // Group OHs (MS08) are registered under channelId = groupId and have no
+    // channel encryption key — their items dispatch through the group state.
+    final group = oh.channelId != null ? _groups[oh.channelId] : null;
+
     // Look up the channel encryption key for this OH
     final encKey = oh.channelId != null
         ? _channelEncryptionKeys[oh.channelId]
         : null;
 
-    if (encKey == null) {
+    if (group == null && encKey == null) {
       RpLog.info(
         'RedPandaLightClient: fetchMessages() no encryption key for channelId=${oh.channelId}',
       );
@@ -1562,6 +1584,7 @@ class RedPandaLightClient implements RedPandaClient {
     // channel ratchet, v3 (pre-MS03b transition) through the static K_enc.
     final messages = <DecryptedMessage>[];
     final ackedMessageIds = <Uint8List>[];
+    final ackedGroupMessageIds = <Uint8List>[];
     RatchetSession? session;
     var ratchetAdvanced = false;
     var garlicStateChanged = false;
@@ -1583,6 +1606,15 @@ class RedPandaLightClient implements RedPandaClient {
           _handleRoutingAck(ackEntry, item.payload);
           continue;
         }
+        if (group != null) {
+          // Groups issue no reply session tags (MS08, Decision 7) — a
+          // tagged item that is not an outstanding R-ACK is foreign.
+          RpLog.info(
+            'RedPandaLightClient: dropping tagged mail item on group OH — '
+            'not an outstanding R-ACK',
+          );
+          continue;
+        }
         final tagChannel = _sessionTagStore.lookup(tagHex);
         if (tagChannel == null || tagChannel != oh.channelId) {
           RpLog.info(
@@ -1594,6 +1626,10 @@ class RedPandaLightClient implements RedPandaClient {
       } else {
         tagHex = null;
       }
+      if (group != null) {
+        await _handleGroupItem(group, item, messages, ackedGroupMessageIds);
+        continue;
+      }
       try {
         final ChannelMessage channelMessage;
         if (item.payload.isNotEmpty &&
@@ -1604,7 +1640,9 @@ class RedPandaLightClient implements RedPandaClient {
         } else {
           channelMessage = await MessageCryptoV3.decrypt(
             item.payload,
-            encKey,
+            // Non-null here: group == null implies encKey != null (checked
+            // right after the fetch above).
+            encKey!,
             oh.channelId!,
           );
         }
@@ -1615,6 +1653,12 @@ class RedPandaLightClient implements RedPandaClient {
         if (tagHex != null) {
           _sessionTagStore.consume(tagHex);
           garlicStateChanged = true;
+        }
+        // MS08: a group handshake rides the 1:1 channel — surface it as an
+        // event, never as a chat message.
+        if (channelMessage.isGroupHandshake) {
+          _emitGroupHandshake(oh.channelId!, channelMessage.groupHandshake!);
+          continue;
         }
         // MS06: a Channel-ACK confirms the partner received our message —
         // surface it as a status update, never as a chat message.
@@ -1665,6 +1709,17 @@ class RedPandaLightClient implements RedPandaClient {
           RpLog.info('RedPandaLightClient: failed to send channel ack: $e');
         }),
       );
+    }
+    // MS08 (Decision 13): group channel-ACKs are v5 broadcasts to all
+    // members — every member sees who confirmed.
+    if (group != null) {
+      for (final ackedId in ackedGroupMessageIds) {
+        unawaited(
+          _sendGroupAck(group, ackedId).catchError((Object e) {
+            RpLog.info('RedPandaLightClient: failed to send group ack: $e');
+          }),
+        );
+      }
     }
 
     // Acknowledge the fetched batch so the Full Node can delete it.
@@ -1741,6 +1796,7 @@ class RedPandaLightClient implements RedPandaClient {
           messageIdHex: entry.messageIdHex,
           status: ack.status,
           latencyMs: latencyMs,
+          memberIdHex: entry.memberIdHex,
         ),
       );
     }
@@ -1819,6 +1875,832 @@ class RedPandaLightClient implements RedPandaClient {
       141,
       Uint8List.fromList(flaschenpost.writeToBuffer()),
     );
+  }
+
+  // =========================================================================
+  // Groups (Frontend MS08)
+  // =========================================================================
+
+  @override
+  Stream<GroupStateUpdate> get groupStateUpdates =>
+      _groupStateController.stream;
+
+  @override
+  Stream<GroupHandshakeEvent> get groupHandshakeEvents =>
+      _groupHandshakeController.stream;
+
+  /// Registers a group in the network layer. Applied only on the first
+  /// registration of a group id — live state is always at least as advanced
+  /// as anything persisted (mirrors [addChannelKeys]).
+  @override
+  void registerGroup(GroupRegistration registration) {
+    if (registration.members.length > maxGroupMembers) {
+      throw ArgumentError.value(
+        registration.members.length,
+        'members',
+        'groups support at most $maxGroupMembers members (MS08, Decision 2)',
+      );
+    }
+    if (_groups.containsKey(registration.groupId)) return;
+
+    GroupCryptoSession session;
+    final stateJson = registration.cryptoStateJson;
+    if (stateJson != null) {
+      try {
+        session = GroupCryptoSession.fromJson(registration.groupId, stateJson);
+      } on FormatException catch (e) {
+        RpLog.info(
+          'RedPandaLightClient: discarding unreadable group crypto state for '
+          '${registration.groupId} ($e), starting empty (epoch 0)',
+        );
+        session = GroupCryptoSession.empty(registration.groupId);
+      }
+    } else {
+      session = GroupCryptoSession.empty(registration.groupId);
+    }
+
+    _groups[registration.groupId] = _GroupState(
+      groupId: registration.groupId,
+      label: registration.label,
+      isAdmin: registration.isAdmin,
+      myMemberIdHex: registration.myMemberIdHex,
+      mySignSeed: Uint8List.fromList(registration.mySignSeed),
+      myX25519Priv: Uint8List.fromList(registration.myX25519Priv),
+      members: List.of(registration.members),
+      session: session,
+      pendingItems: [
+        for (final item in registration.pendingItems) Uint8List.fromList(item),
+      ],
+      pendingRotations: {
+        for (final entry in registration.pendingRotations.entries)
+          entry.key: Uint8List.fromList(entry.value),
+      },
+    );
+  }
+
+  /// Publishes the full mutable state of [group] so the app layer can
+  /// persist it (on-device only — the crypto state is key material).
+  void _emitGroupState(_GroupState group) {
+    if (_groupStateController.isClosed) return;
+    _groupStateController.add(
+      GroupStateUpdate(
+        groupId: group.groupId,
+        label: group.label,
+        keyEpoch: group.session.epoch,
+        members: List.unmodifiable(group.members),
+        cryptoStateJson: group.session.toJson(),
+        pendingItems: [for (final item in group.pendingItems) item.toList()],
+        pendingRotations: {
+          for (final entry in group.pendingRotations.entries)
+            entry.key: entry.value.toList(),
+        },
+      ),
+    );
+  }
+
+  @override
+  Future<String> sendGroupMessage(
+    String groupId,
+    String content, {
+    String? messageId,
+  }) async {
+    final group = _groups[groupId];
+    if (group == null) {
+      throw StateError('sendGroupMessage: group $groupId is not registered');
+    }
+    if (!group.session.hasEpoch) {
+      throw StateError(
+        'sendGroupMessage: group $groupId has no key epoch yet '
+        '(waiting for the first rotation)',
+      );
+    }
+
+    final Uint8List messageIdBytes;
+    if (messageId != null && messageId.isNotEmpty) {
+      messageIdBytes = Uint8List.fromList(_hexDecode(messageId));
+    } else {
+      messageIdBytes = CryptoUtils.randomBytes(16);
+    }
+    final messageIdHex = _hexEncode(messageIdBytes);
+
+    // One ciphertext for every recipient (Decision 1: crypto O(1)). A retry
+    // re-encrypts with the next chain key — receivers that already got the
+    // message deduplicate on the inner message_id, late ones use the
+    // skipped-key store.
+    final channelMessage = ChannelMessage(
+      messageId: messageIdBytes,
+      timestampMs: DateTime.now().millisecondsSinceEpoch,
+      content: content,
+    );
+    final payload = await group.session.encrypt(
+      channelMessage.encode(),
+      myMemberIdHex: group.myMemberIdHex,
+      mySignSeed: group.mySignSeed,
+    );
+    // Persist immediately: the sending chain has advanced even if the
+    // fan-out below fails partially or completely.
+    _emitGroupState(group);
+
+    try {
+      await _fanOutToGroup(group, payload, messageIdHex: messageIdHex);
+    } on GroupSendException catch (e) {
+      // Attach the used message id: the retry MUST reuse it, otherwise the
+      // members already reached would see the re-send as a new message.
+      throw GroupSendException(e.failedMemberIds, e.message, messageIdHex);
+    }
+    return messageIdHex;
+  }
+
+  /// Delivers [payload] to every other member's group OH (Decision 7:
+  /// forward garlic per recipient; with [messageIdHex] an R-ACK is
+  /// requested per delivery). Throws [GroupSendException] listing the
+  /// members that could not be reached.
+  Future<void> _fanOutToGroup(
+    _GroupState group,
+    Uint8List payload, {
+    String? messageIdHex,
+  }) async {
+    final activePeer = _peers.values
+        .where((p) => p.isHandshakeVerified)
+        .firstOrNull;
+    if (activePeer == null) {
+      throw StateError('group fan-out: no active peer available');
+    }
+
+    final failed = <String>[];
+    for (final member in group.members) {
+      if (member.memberIdHex == group.myMemberIdHex) continue;
+      try {
+        await _sendToGroupMember(
+          group,
+          member,
+          payload,
+          activePeer,
+          messageIdHex: messageIdHex,
+        );
+      } catch (e) {
+        RpLog.info(
+          'RedPandaLightClient: group send to member '
+          '${member.memberIdHex} failed: $e',
+        );
+        failed.add(member.memberIdHex);
+      }
+    }
+    if (failed.isNotEmpty) {
+      throw GroupSendException(failed);
+    }
+  }
+
+  /// Sends [payload] to one member's group OH: multi-hop garlic when relay
+  /// hops are available (with an optional R-ACK request correlated to the
+  /// member), otherwise a direct fire-and-forget deposit.
+  Future<void> _sendToGroupMember(
+    _GroupState group,
+    GroupMemberInfo member,
+    Uint8List payload,
+    ActivePeer submitVia, {
+    String? messageIdHex,
+  }) async {
+    final ohId = member.ohId;
+    if (ohId == null || ohId.length != GarlicHop.nodeIdLength) {
+      throw StateError('member ${member.memberIdHex} has no group OH yet');
+    }
+
+    final hops = _hopSelector.selectHops(
+      count: defaultHopCount,
+      excludeAddresses: {submitVia.address, ?member.ohEndpoint},
+      excludeNodeIds: {?submitVia.discoveredNodeId},
+    );
+    if (hops.isNotEmpty) {
+      if (payload.length > GarlicBuilder.maxPayloadLength(hops.length)) {
+        // Re-sending the same content can never succeed (fixed 2048 bytes).
+        throw DepositException(DepositStatus.badRequest);
+      }
+      final returnPath = messageIdHex != null
+          ? _buildReturnPath(
+              group.groupId,
+              submitVia,
+              messageIdHex: messageIdHex,
+              forwardHops: hops,
+              payloadLength: payload.length,
+              tagged: false,
+              memberIdHex: member.memberIdHex,
+            )
+          : null;
+      final packet = await GarlicBuilder.build(
+        hops: hops,
+        ohId: ohId,
+        payload: payload,
+        returnPath: returnPath,
+      );
+      submitVia.sendCommand(142, packet);
+      return;
+    }
+
+    // Direct fallback, fire-and-forget (mirrors the channel-ACK fallback):
+    // a lost deposit surfaces as a missing R-ACK and is re-sent.
+    final flaschenpost = FlaschenpostPut()
+      ..content = payload
+      ..ohId = ohId;
+    submitVia.sendCommand(
+      141,
+      Uint8List.fromList(flaschenpost.writeToBuffer()),
+    );
+  }
+
+  @override
+  Future<void> rotateGroupKey(
+    String groupId, {
+    required List<GroupMemberInfo> members,
+    String? label,
+  }) async {
+    final group = _groups[groupId];
+    if (group == null) {
+      throw StateError('rotateGroupKey: group $groupId is not registered');
+    }
+    if (!group.isAdmin) {
+      throw StateError('only the group admin can rotate the key (Decision 9)');
+    }
+    if (members.length > maxGroupMembers) {
+      throw ArgumentError.value(
+        members.length,
+        'members',
+        'groups support at most $maxGroupMembers members (MS08, Decision 2)',
+      );
+    }
+    if (!members.any((m) => m.memberIdHex == group.myMemberIdHex)) {
+      throw ArgumentError.value(
+        members,
+        'members',
+        'the member list must include the admin itself',
+      );
+    }
+
+    final newLabel = label ?? group.label;
+    final secret = CryptoUtils.randomBytes(CryptoUtils.aesKeyLength);
+    final newEpoch = group.session.epoch + 1;
+    final control = GroupControl.rotation(
+      KeyRotation(
+        groupSecret: secret,
+        keyEpoch: newEpoch,
+        members: members,
+        groupName: newLabel,
+      ),
+    ).encode();
+    // Rotations are admin-signed: [4 control_len BE][control][sig 64] with
+    // sig = Ed25519(admin) over utf8(group_id) ‖ control. The sealed box
+    // alone does not authenticate the sender — any member knows every
+    // X25519 public key.
+    final signature = await CryptoUtils.sign(group.mySignSeed, [
+      ...utf8.encode(groupId),
+      ...control,
+    ]);
+    final signed =
+        (BytesBuilder()
+              ..add(_uint32beBytes(control.length))
+              ..add(control)
+              ..add(signature))
+            .toBytes();
+
+    // Seal one box per other member while the secret still exists — after
+    // installEpoch it is gone and undelivered boxes could not be rebuilt.
+    final boxes = <String, Uint8List>{};
+    for (final member in members) {
+      if (member.memberIdHex == group.myMemberIdHex) continue;
+      boxes[member.memberIdHex] = await GroupCryptoSession.seal(
+        signed,
+        memberX25519Pub: _hexDecode(member.x25519PubHex),
+        groupId: groupId,
+      );
+    }
+
+    await group.session.installEpoch(newEpoch, secret, [
+      for (final member in members) member.memberIdHex,
+    ]);
+    group.members = List.of(members);
+    group.label = newLabel;
+    group.pendingRotations
+      ..clear()
+      ..addAll(boxes);
+    _emitGroupState(group);
+
+    await _deliverPendingRotations(group);
+  }
+
+  @override
+  Future<void> retryPendingRotations(String groupId) async {
+    final group = _groups[groupId];
+    if (group == null) {
+      throw StateError(
+        'retryPendingRotations: group $groupId is not registered',
+      );
+    }
+    await _deliverPendingRotations(group);
+  }
+
+  /// Delivers the pending sealed rotation boxes of [group]; successfully
+  /// submitted boxes are removed. Throws [GroupSendException] when boxes
+  /// remain (retry via [retryPendingRotations]).
+  Future<void> _deliverPendingRotations(_GroupState group) async {
+    if (group.pendingRotations.isEmpty) return;
+    final activePeer = _peers.values
+        .where((p) => p.isHandshakeVerified)
+        .firstOrNull;
+    if (activePeer == null) {
+      throw GroupSendException(
+        group.pendingRotations.keys.toList(),
+        'no active peer to deliver rotation boxes over',
+      );
+    }
+
+    final failed = <String>[];
+    var changed = false;
+    for (final memberIdHex in List.of(group.pendingRotations.keys)) {
+      final member = group.members
+          .where((m) => m.memberIdHex == memberIdHex)
+          .firstOrNull;
+      if (member == null) {
+        // No longer a member — the box is obsolete.
+        group.pendingRotations.remove(memberIdHex);
+        changed = true;
+        continue;
+      }
+      try {
+        await _sendToGroupMember(
+          group,
+          member,
+          group.pendingRotations[memberIdHex]!,
+          activePeer,
+        );
+        group.pendingRotations.remove(memberIdHex);
+        changed = true;
+      } catch (e) {
+        RpLog.info(
+          'RedPandaLightClient: rotation box for $memberIdHex '
+          'not delivered: $e',
+        );
+        failed.add(memberIdHex);
+      }
+    }
+    if (changed) {
+      _emitGroupState(group);
+    }
+    if (failed.isNotEmpty) {
+      throw GroupSendException(
+        failed,
+        'rotation boxes still pending for ${failed.length} member(s)',
+      );
+    }
+  }
+
+  /// Sends a group handshake over the existing 1:1 channel [channelId]
+  /// (Decision 8), ratchet-encrypted like any other 1:1 message.
+  @override
+  Future<void> sendGroupHandshake(String channelId, List<int> handshake) async {
+    final sessionFuture = _ratchetSessions[channelId];
+    if (sessionFuture == null) {
+      throw StateError(
+        'sendGroupHandshake: channel $channelId has no keys registered',
+      );
+    }
+    final peerOhId = _channelPeerOhIds[channelId];
+    if (peerOhId == null || peerOhId.length != GarlicHop.nodeIdLength) {
+      throw StateError('sendGroupHandshake: channel $channelId has no peer OH');
+    }
+    final activePeer = _peers.values
+        .where((p) => p.isHandshakeVerified)
+        .firstOrNull;
+    if (activePeer == null) {
+      throw StateError('sendGroupHandshake: no active peer available');
+    }
+
+    final message = ChannelMessage(
+      messageId: CryptoUtils.randomBytes(16),
+      timestampMs: DateTime.now().millisecondsSinceEpoch,
+      content: '',
+      groupHandshake: Uint8List.fromList(handshake),
+    );
+    final session = await sessionFuture;
+    final payload = await session.encrypt(message, channelId);
+    _emitRatchetState(channelId, session);
+
+    final hops = _selectGarlicHops(channelId, activePeer);
+    if (hops.isNotEmpty &&
+        payload.length <= GarlicBuilder.maxPayloadLength(hops.length)) {
+      final packet = await GarlicBuilder.build(
+        hops: hops,
+        ohId: peerOhId,
+        payload: payload,
+      );
+      activePeer.sendCommand(142, packet);
+      return;
+    }
+
+    // Direct fallback with want_response for a definite result — the app
+    // layer retries the handshake on failure.
+    final flaschenpost = FlaschenpostPut()
+      ..content = payload
+      ..ohId = peerOhId
+      ..wantResponse = true;
+    final completer = _putResponses.register();
+    activePeer.sendCommand(
+      141,
+      Uint8List.fromList(flaschenpost.writeToBuffer()),
+    );
+    final List<int> responseBytes;
+    try {
+      responseBytes = await completer.future.timeout(depositResponseTimeout);
+    } on TimeoutException {
+      _putResponses.abandon(completer);
+      // Legacy nodes never answer — keep fire-and-forget semantics.
+      return;
+    }
+    final response = FlaschenpostPutResponse.fromBuffer(responseBytes);
+    if (response.status != Status.OK) {
+      throw DepositException(response.status.name);
+    }
+  }
+
+  /// Broadcasts a rename to the group (admin only): a GroupControl info
+  /// update inside a regular v5 group message.
+  @override
+  Future<void> sendGroupInfoUpdate(String groupId, String label) async {
+    final group = _groups[groupId];
+    if (group == null) {
+      throw StateError('sendGroupInfoUpdate: group $groupId is not registered');
+    }
+    if (!group.isAdmin) {
+      throw StateError('only the group admin can rename the group');
+    }
+    if (!group.session.hasEpoch) {
+      throw StateError('group $groupId has no key epoch yet');
+    }
+
+    group.label = label;
+    final control = GroupControl.info(GroupInfoUpdate(name: label)).encode();
+    final message = ChannelMessage(
+      messageId: CryptoUtils.randomBytes(16),
+      timestampMs: DateTime.now().millisecondsSinceEpoch,
+      content: '',
+      groupControl: control,
+    );
+    final payload = await group.session.encrypt(
+      message.encode(),
+      myMemberIdHex: group.myMemberIdHex,
+      mySignSeed: group.mySignSeed,
+    );
+    _emitGroupState(group);
+    await _fanOutToGroup(group, payload);
+  }
+
+  /// Handles one mail item fetched from a group OH: v5 group messages
+  /// (chat, channel-ACKs, control broadcasts) and v6 sealed controls
+  /// (rotations). Unknown-epoch items are buffered (Decision 10) — the
+  /// fetch acknowledgement deletes them server-side, so dropping would
+  /// lose them.
+  Future<void> _handleGroupItem(
+    _GroupState group,
+    MailItem item,
+    List<DecryptedMessage> messages,
+    List<Uint8List> ackedMessageIds,
+  ) async {
+    final payload = item.payload;
+    if (payload.isEmpty) return;
+
+    if (payload[0] == GroupCryptoSession.versionSealedControl) {
+      await _handleSealedGroupControl(group, payload);
+      return;
+    }
+    if (payload[0] != GroupCryptoSession.versionGroupMessage) {
+      RpLog.info(
+        'RedPandaLightClient: dropping group mail item with unknown '
+        'version ${payload[0]}',
+      );
+      return;
+    }
+
+    try {
+      final result = await group.session.decrypt(payload);
+      final channelMessage = ChannelMessage.decode(result.plaintext);
+
+      if (channelMessage.isChannelAck) {
+        if (!_channelAckController.isClosed) {
+          _channelAckController.add(
+            ChannelAckUpdate(
+              channelId: group.groupId,
+              messageIdHex: _hexEncode(channelMessage.ackMessageId!),
+              timestampMs: channelMessage.timestampMs,
+              memberIdHex: result.senderMemberIdHex,
+            ),
+          );
+        }
+        _emitGroupState(group);
+        return;
+      }
+      if (channelMessage.isGroupControl) {
+        _applyGroupControlMessage(
+          group,
+          result.senderMemberIdHex,
+          channelMessage.groupControl!,
+        );
+        _emitGroupState(group);
+        return;
+      }
+
+      messages.add(
+        DecryptedMessage(
+          id: _hexEncode(channelMessage.messageId),
+          content: channelMessage.content,
+          receivedAtMs: item.receivedAtMs.toInt(),
+          senderTimestampMs: channelMessage.timestampMs,
+          channelId: group.groupId,
+          senderMemberIdHex: result.senderMemberIdHex,
+        ),
+      );
+      ackedMessageIds.add(Uint8List.fromList(channelMessage.messageId));
+      _emitGroupState(group);
+    } on GroupUnknownEpochException catch (e) {
+      if (group.pendingItems.length < maxPendingGroupItems) {
+        group.pendingItems.add(Uint8List.fromList(payload));
+        _emitGroupState(group);
+        RpLog.info(
+          'RedPandaLightClient: buffering group item for unknown '
+          'epoch ${e.epoch} (${group.pendingItems.length} buffered)',
+        );
+      } else {
+        RpLog.info(
+          'RedPandaLightClient: pending-item buffer full, dropping group '
+          'item for epoch ${e.epoch}',
+        );
+      }
+    } on GroupCryptoException catch (e) {
+      RpLog.info('RedPandaLightClient: dropping group item: $e');
+    } on GcmAuthenticationException catch (e) {
+      RpLog.info('RedPandaLightClient: dropping group item: $e');
+    } on FormatException catch (e) {
+      RpLog.info('RedPandaLightClient: dropping malformed group item: $e');
+    }
+  }
+
+  /// Applies a GroupControl that arrived as a regular group message
+  /// (currently only the rename); mutations are only accepted from the
+  /// pinned admin (Decision 9).
+  void _applyGroupControlMessage(
+    _GroupState group,
+    String senderMemberIdHex,
+    Uint8List controlBytes,
+  ) {
+    final GroupControl control;
+    try {
+      control = GroupControl.decode(controlBytes);
+    } on FormatException catch (e) {
+      RpLog.info('RedPandaLightClient: dropping malformed group control: $e');
+      return;
+    }
+    final info = control.infoUpdate;
+    if (info == null) {
+      // Rotations never travel as group messages (they need the new epoch
+      // to be readable before it is installed) — sealed v6 only.
+      RpLog.info(
+        'RedPandaLightClient: ignoring non-info group control in a v5 message',
+      );
+      return;
+    }
+    final admin = group.members
+        .where((m) => m.role == GroupMemberInfo.roleAdmin)
+        .firstOrNull;
+    if (admin == null || admin.memberIdHex != senderMemberIdHex) {
+      RpLog.info(
+        'RedPandaLightClient: rejecting group rename from non-admin '
+        '$senderMemberIdHex',
+      );
+      return;
+    }
+    group.label = info.name;
+  }
+
+  /// Verifies and applies a sealed rotation (envelope v6): unseal with the
+  /// own X25519 key, check the admin signature against the pinned admin,
+  /// enforce the single-admin invariant, install the epoch and drain the
+  /// pending-item buffer (Decision 10).
+  Future<void> _handleSealedGroupControl(
+    _GroupState group,
+    List<int> payload,
+  ) async {
+    try {
+      final signed = await GroupCryptoSession.unseal(
+        payload,
+        myX25519Priv: group.myX25519Priv,
+        groupId: group.groupId,
+      );
+      if (signed.length < 4 + CryptoUtils.signatureLength) {
+        throw const FormatException('sealed control: truncated');
+      }
+      final controlLength = ByteData.sublistView(signed, 0, 4).getUint32(0);
+      if (4 + controlLength + CryptoUtils.signatureLength != signed.length) {
+        throw const FormatException('sealed control: bad framing');
+      }
+      final control = Uint8List.sublistView(signed, 4, 4 + controlLength);
+      final signature = Uint8List.sublistView(signed, 4 + controlLength);
+
+      final admin = group.members
+          .where((m) => m.role == GroupMemberInfo.roleAdmin)
+          .firstOrNull;
+      if (admin == null) {
+        RpLog.info(
+          'RedPandaLightClient: dropping sealed control for '
+          '${group.groupId} — no pinned admin',
+        );
+        return;
+      }
+      final signatureValid = await CryptoUtils.verify(
+        _hexDecode(admin.memberIdHex),
+        [...utf8.encode(group.groupId), ...control],
+        signature,
+      );
+      if (!signatureValid) {
+        RpLog.info(
+          'RedPandaLightClient: dropping sealed control with invalid '
+          'admin signature for ${group.groupId}',
+        );
+        return;
+      }
+
+      final rotation = GroupControl.decode(control).keyRotation;
+      if (rotation == null) return;
+      final incomingAdmin = rotation.members
+          .where((m) => m.role == GroupMemberInfo.roleAdmin)
+          .firstOrNull;
+      if (incomingAdmin == null ||
+          incomingAdmin.memberIdHex != admin.memberIdHex) {
+        // Single-admin invariant (Decision 9): a rotation may not move the
+        // admin role.
+        RpLog.info(
+          'RedPandaLightClient: rejecting rotation that changes the admin '
+          'of ${group.groupId}',
+        );
+        return;
+      }
+
+      final installed = await group.session.installEpoch(
+        rotation.keyEpoch,
+        rotation.groupSecret,
+        [for (final member in rotation.members) member.memberIdHex],
+      );
+      if (!installed) {
+        RpLog.info(
+          'RedPandaLightClient: ignoring stale rotation to epoch '
+          '${rotation.keyEpoch} (current: ${group.session.epoch})',
+        );
+        return;
+      }
+      group.members = List.of(rotation.members);
+      if (rotation.groupName.isNotEmpty) {
+        group.label = rotation.groupName;
+      }
+      RpLog.info(
+        'RedPandaLightClient: installed epoch ${rotation.keyEpoch} for '
+        'group ${group.groupId} (${rotation.members.length} members)',
+      );
+      _emitGroupState(group);
+      await _drainGroupBuffer(group);
+    } on GcmAuthenticationException catch (e) {
+      RpLog.info('RedPandaLightClient: dropping sealed control: $e');
+    } on FormatException catch (e) {
+      RpLog.info('RedPandaLightClient: dropping sealed control: $e');
+    }
+  }
+
+  /// Retries the buffered unknown-epoch items after a rotation installed
+  /// new keys (Decision 10). Still-unknown epochs go back into the buffer.
+  Future<void> _drainGroupBuffer(_GroupState group) async {
+    if (group.pendingItems.isEmpty) return;
+    final items = List.of(group.pendingItems);
+    group.pendingItems.clear();
+    final ackedMessageIds = <Uint8List>[];
+
+    for (final payload in items) {
+      try {
+        final result = await group.session.decrypt(payload);
+        final channelMessage = ChannelMessage.decode(result.plaintext);
+        if (channelMessage.isChannelAck) {
+          if (!_channelAckController.isClosed) {
+            _channelAckController.add(
+              ChannelAckUpdate(
+                channelId: group.groupId,
+                messageIdHex: _hexEncode(channelMessage.ackMessageId!),
+                timestampMs: channelMessage.timestampMs,
+                memberIdHex: result.senderMemberIdHex,
+              ),
+            );
+          }
+          continue;
+        }
+        if (channelMessage.isGroupControl) {
+          _applyGroupControlMessage(
+            group,
+            result.senderMemberIdHex,
+            channelMessage.groupControl!,
+          );
+          continue;
+        }
+        if (!_incomingMessageController.isClosed) {
+          // The original server receive time was not buffered; the drain
+          // time is close enough (ordering uses the sender timestamp).
+          _incomingMessageController.add(
+            DecryptedMessage(
+              id: _hexEncode(channelMessage.messageId),
+              content: channelMessage.content,
+              receivedAtMs: DateTime.now().millisecondsSinceEpoch,
+              senderTimestampMs: channelMessage.timestampMs,
+              channelId: group.groupId,
+              senderMemberIdHex: result.senderMemberIdHex,
+            ),
+          );
+        }
+        ackedMessageIds.add(Uint8List.fromList(channelMessage.messageId));
+      } on GroupUnknownEpochException {
+        group.pendingItems.add(payload);
+      } catch (e) {
+        RpLog.info(
+          'RedPandaLightClient: dropping buffered group item on drain: $e',
+        );
+      }
+    }
+    _emitGroupState(group);
+
+    for (final ackedId in ackedMessageIds) {
+      unawaited(
+        _sendGroupAck(group, ackedId).catchError((Object e) {
+          RpLog.info('RedPandaLightClient: failed to send group ack: $e');
+        }),
+      );
+    }
+  }
+
+  /// Confirms receipt of a group message to all members (Decision 13):
+  /// a regular v5 message carrying only ack_message_id, fire-and-forget
+  /// and without an own R-ACK request (acks stay lightweight, as in 1:1).
+  Future<void> _sendGroupAck(_GroupState group, Uint8List ackedId) async {
+    if (!group.session.hasEpoch) return;
+    final ackMessage = ChannelMessage(
+      messageId: CryptoUtils.randomBytes(16),
+      timestampMs: DateTime.now().millisecondsSinceEpoch,
+      content: '',
+      ackMessageId: ackedId,
+    );
+    final payload = await group.session.encrypt(
+      ackMessage.encode(),
+      myMemberIdHex: group.myMemberIdHex,
+      mySignSeed: group.mySignSeed,
+    );
+    _emitGroupState(group);
+    try {
+      await _fanOutToGroup(group, payload);
+    } on GroupSendException catch (e) {
+      // A lost ack only leaves the sender's message at `routed`.
+      RpLog.info('RedPandaLightClient: group ack fan-out incomplete: $e');
+    }
+  }
+
+  /// Decodes and surfaces a group handshake fetched from a 1:1 channel.
+  void _emitGroupHandshake(String channelId, Uint8List handshakeBytes) {
+    final GroupHandshake handshake;
+    try {
+      handshake = GroupHandshake.decode(handshakeBytes);
+    } on FormatException catch (e) {
+      RpLog.info('RedPandaLightClient: dropping malformed group handshake: $e');
+      return;
+    }
+    if (_groupHandshakeController.isClosed) return;
+    if (handshake.isProposal) {
+      _groupHandshakeController.add(
+        GroupHandshakeEvent(
+          channelId: channelId,
+          isProposal: true,
+          groupIdHex: handshake.proposalGroupIdHex!,
+          groupName: handshake.proposalGroupName,
+          adminMemberIdHex: handshake.proposalAdminMemberIdHex,
+        ),
+      );
+    } else {
+      _groupHandshakeController.add(
+        GroupHandshakeEvent(
+          channelId: channelId,
+          isProposal: false,
+          groupIdHex: handshake.acceptGroupIdHex!,
+          memberIdHex: handshake.acceptMemberIdHex,
+          x25519PubHex: handshake.acceptX25519PubHex,
+          ohId: handshake.acceptOhId,
+          ohEndpoint: handshake.acceptOhEndpoint,
+        ),
+      );
+    }
+  }
+
+  static Uint8List _uint32beBytes(int value) {
+    final data = ByteData(4)..setUint32(0, value);
+    return data.buffer.asUint8List();
   }
 
   /// Sends an AckFetchRequest for [oh] confirming receipt of all mail items
@@ -1932,6 +2814,7 @@ class RedPandaLightClient implements RedPandaClient {
               RoutingAckUpdate.timeout(
                 channelId: entry.channelId,
                 messageIdHex: entry.messageIdHex,
+                memberIdHex: entry.memberIdHex,
               ),
             );
           }
@@ -1978,6 +2861,40 @@ class RedPandaLightClient implements RedPandaClient {
       peer.requestPeerList();
     }
   }
+}
+
+/// Mutable in-memory state of one registered group (Frontend MS08): the
+/// member list, the own group identity, the crypto session and the
+/// buffered/undelivered payloads. Snapshotted into [GroupStateUpdate]s for
+/// on-device persistence.
+class _GroupState {
+  final String groupId;
+  String label;
+  final bool isAdmin;
+  final String myMemberIdHex;
+  final Uint8List mySignSeed;
+  final Uint8List myX25519Priv;
+  List<GroupMemberInfo> members;
+  final GroupCryptoSession session;
+
+  /// Buffered unknown-epoch items (Decision 10).
+  final List<Uint8List> pendingItems;
+
+  /// Sealed rotation boxes not yet delivered, member id hex → payload.
+  final Map<String, Uint8List> pendingRotations;
+
+  _GroupState({
+    required this.groupId,
+    required this.label,
+    required this.isAdmin,
+    required this.myMemberIdHex,
+    required this.mySignSeed,
+    required this.myX25519Priv,
+    required this.members,
+    required this.session,
+    required this.pendingItems,
+    required this.pendingRotations,
+  });
 }
 
 /// FIFO matcher for response commands that can have several requests in

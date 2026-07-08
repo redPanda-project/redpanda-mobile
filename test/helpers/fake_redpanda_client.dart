@@ -129,11 +129,86 @@ class FakeRedPandaClient implements RedPandaClient {
   @override
   Future<void> addPeer(String address) async {}
 
+  /// When set, [registerOutboundHandle] returns a registration built by
+  /// this factory (MS08 group tests); otherwise it throws.
+  Future<OHRegistration> Function(String? channelId)? ohRegistrationFactory;
+
   @override
   Future<OHRegistration> registerOutboundHandle({String? channelId}) {
+    final factory = ohRegistrationFactory;
+    if (factory != null) return factory(channelId);
     throw UnimplementedError('not needed in these tests');
   }
 
   @override
   Future<List<DecryptedMessage>> fetchMessages(OHRegistration oh) async => [];
+
+  // --- Groups (MS08) ---
+
+  final groupStateController = StreamController<GroupStateUpdate>.broadcast();
+  final groupHandshakeController =
+      StreamController<GroupHandshakeEvent>.broadcast();
+  final List<GroupRegistration> registeredGroups = [];
+  final List<({String groupId, String content, String? messageId})>
+  sentGroupMessages = [];
+  final List<({String groupId, List<GroupMemberInfo> members, String? label})>
+  rotations = [];
+  final List<({String channelId, List<int> handshake})> sentHandshakes = [];
+  final List<({String groupId, String label})> sentInfoUpdates = [];
+  final List<String> retriedRotations = [];
+
+  /// When set, [sendGroupMessage] throws this error instead of succeeding.
+  Object? groupSendError;
+
+  @override
+  void registerGroup(GroupRegistration registration) {
+    registeredGroups.add(registration);
+  }
+
+  @override
+  Future<String> sendGroupMessage(
+    String groupId,
+    String content, {
+    String? messageId,
+  }) async {
+    final error = groupSendError;
+    if (error != null) throw error;
+    sentGroupMessages.add((
+      groupId: groupId,
+      content: content,
+      messageId: messageId,
+    ));
+    return messageId ?? 'fake-group-${sentGroupMessages.length}';
+  }
+
+  @override
+  Future<void> rotateGroupKey(
+    String groupId, {
+    required List<GroupMemberInfo> members,
+    String? label,
+  }) async {
+    rotations.add((groupId: groupId, members: members, label: label));
+  }
+
+  @override
+  Future<void> retryPendingRotations(String groupId) async {
+    retriedRotations.add(groupId);
+  }
+
+  @override
+  Future<void> sendGroupHandshake(String channelId, List<int> handshake) async {
+    sentHandshakes.add((channelId: channelId, handshake: handshake));
+  }
+
+  @override
+  Future<void> sendGroupInfoUpdate(String groupId, String label) async {
+    sentInfoUpdates.add((groupId: groupId, label: label));
+  }
+
+  @override
+  Stream<GroupStateUpdate> get groupStateUpdates => groupStateController.stream;
+
+  @override
+  Stream<GroupHandshakeEvent> get groupHandshakeEvents =>
+      groupHandshakeController.stream;
 }

@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:redpanda/repositories/channel_repository.dart';
+import 'package:redpanda/repositories/group_repository.dart';
+import 'package:redpanda/services/group_service.dart';
 import 'package:redpanda/shared/widgets/connection_status_badge.dart';
 
 class HomeScreen extends ConsumerWidget {
@@ -11,6 +13,8 @@ class HomeScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     // using channelsProvider from channel_repository.dart
     final channelsAsync = ref.watch(channelsProvider);
+    final groups = ref.watch(groupsProvider).value ?? const [];
+    final invites = ref.watch(groupInvitesProvider).value ?? const [];
 
     return Scaffold(
       appBar: AppBar(
@@ -27,7 +31,7 @@ class HomeScreen extends ConsumerWidget {
       ),
       body: channelsAsync.when(
         data: (channels) {
-          if (channels.isEmpty) {
+          if (channels.isEmpty && groups.isEmpty && invites.isEmpty) {
             return Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -46,26 +50,78 @@ class HomeScreen extends ConsumerWidget {
               ),
             );
           }
-          return ListView.builder(
-            itemCount: channels.length,
-            itemBuilder: (context, index) {
-              final channel = channels[index];
-              return ListTile(
-                leading: CircleAvatar(
-                  backgroundColor: Theme.of(
-                    context,
-                  ).colorScheme.primaryContainer,
-                  child: Text(channel.label[0].toUpperCase()),
+          return ListView(
+            children: [
+              // MS08: pending group invites first — they need a decision.
+              for (final invite in invites)
+                ListTile(
+                  leading: const CircleAvatar(child: Icon(Icons.group_add)),
+                  title: Text(invite.groupName),
+                  subtitle: const Text('Group invite'),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.check, color: Colors.green),
+                        onPressed: () async {
+                          final messenger = ScaffoldMessenger.of(context);
+                          try {
+                            await ref
+                                .read(groupServiceProvider)
+                                .acceptInvite(invite.groupId);
+                          } catch (e) {
+                            messenger.showSnackBar(
+                              SnackBar(
+                                content: Text('Could not join group: $e'),
+                              ),
+                            );
+                          }
+                        },
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close, color: Colors.red),
+                        onPressed: () => ref
+                            .read(groupServiceProvider)
+                            .dismissInvite(invite.groupId),
+                      ),
+                    ],
+                  ),
                 ),
-                title: Text(channel.label),
-                subtitle: const Text(
-                  'Private Channel', // TODO: Add status
+              for (final group in groups)
+                ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: Theme.of(
+                      context,
+                    ).colorScheme.secondaryContainer,
+                    child: const Icon(Icons.group),
+                  ),
+                  title: Text(group.label),
+                  subtitle: Text(
+                    group.keyEpoch == 0
+                        ? 'Waiting for the group key…'
+                        : 'Group',
+                  ),
+                  onTap: () {
+                    context.push('/chat/${group.groupId}');
+                  },
                 ),
-                onTap: () {
-                  context.push('/chat/${channel.id}');
-                },
-              );
-            },
+              for (final channel in channels)
+                ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: Theme.of(
+                      context,
+                    ).colorScheme.primaryContainer,
+                    child: Text(channel.label[0].toUpperCase()),
+                  ),
+                  title: Text(channel.label),
+                  subtitle: const Text(
+                    'Private Channel', // TODO: Add status
+                  ),
+                  onTap: () {
+                    context.push('/chat/${channel.id}');
+                  },
+                ),
+            ],
           );
         },
         loading: () => const Center(child: CircularProgressIndicator()),
@@ -78,6 +134,12 @@ class HomeScreen extends ConsumerWidget {
             heroTag: "join_channel",
             onPressed: () => context.push('/channels/join'),
             child: const Icon(Icons.qr_code_scanner),
+          ),
+          const SizedBox(height: 16),
+          FloatingActionButton.small(
+            heroTag: "create_group",
+            onPressed: () => context.push('/groups/create'),
+            child: const Icon(Icons.group_add),
           ),
           const SizedBox(height: 16),
           FloatingActionButton(

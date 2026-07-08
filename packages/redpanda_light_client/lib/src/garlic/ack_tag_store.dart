@@ -13,19 +13,22 @@
 class AckTagStore {
   final Map<String, AckTagEntry> _entries = {};
 
-  /// Registers an outstanding ack tag for a sent message.
+  /// Registers an outstanding ack tag for a sent message. [memberIdHex]
+  /// identifies the targeted group member for MS08 fan-outs (null for 1:1).
   void store(
     String tagHex, {
     required String channelId,
     required String messageIdHex,
     required List<String> hopNodeIdsHex,
     int? sentAtMs,
+    String? memberIdHex,
   }) {
     _entries[tagHex] = AckTagEntry(
       channelId: channelId,
       messageIdHex: messageIdHex,
       hopNodeIdsHex: List.unmodifiable(hopNodeIdsHex),
       sentAtMs: sentAtMs ?? DateTime.now().millisecondsSinceEpoch,
+      memberIdHex: memberIdHex,
     );
   }
 
@@ -68,10 +71,14 @@ class AckTagEntry {
 
   final int sentAtMs;
 
+  /// MS08: the targeted group member (hex member id); null for 1:1 sends.
+  final String? memberIdHex;
+
   const AckTagEntry({
     required this.channelId,
     required this.messageIdHex,
     required this.hopNodeIdsHex,
     required this.sentAtMs,
+    this.memberIdHex,
   });
 }

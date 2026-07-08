@@ -86,6 +86,99 @@ class Messages extends Table {
 
   // Time of the last send attempt; basis for the backoff calculation.
   DateTimeColumn get lastRetryAt => dateTime().nullable()();
+
+  // MS08: authenticated sender member id (hex) for incoming group messages;
+  // null for 1:1 messages and own outgoing messages.
+  TextColumn get senderMemberId => text().nullable()();
+}
+
+// MS08: one row per group this device is a member of. The crypto state
+// (sender chains, outer keys, epoch archive) is a JSON snapshot from the
+// network isolate (pattern = Channels.ratchetState) and is key material —
+// on-device only, never exported.
+@DataClassName('GroupChannelRow')
+class GroupChannels extends Table {
+  // 32-byte group id (hex) — also the channelId of the own group OH.
+  TextColumn get groupId => text()();
+  TextColumn get label => text()();
+  BoolColumn get isAdmin => boolean().withDefault(const Constant(false))();
+
+  // Own group identity: member id = Ed25519 verify key (hex); the signing
+  // seed and X25519 private key never leave the device.
+  TextColumn get myMemberId => text()();
+  TextColumn get mySignSeed => text()();
+  TextColumn get myX25519Priv => text()();
+
+  IntColumn get keyEpoch => integer().withDefault(const Constant(0))();
+  TextColumn get cryptoState => text().nullable()();
+
+  // Sealed rotation boxes not yet delivered (JSON: member id hex → payload
+  // hex) — the epoch secret is deleted at install, so unsent boxes must
+  // survive restarts (MS08, Decision 10).
+  TextColumn get pendingRotations => text().nullable()();
+
+  DateTimeColumn get createdAt => dateTime().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {groupId};
+}
+
+// MS08: the authoritative member list per group (replaced wholesale by each
+// key rotation).
+@DataClassName('GroupMemberRow')
+class GroupMembers extends Table {
+  TextColumn get groupId => text().references(GroupChannels, #groupId)();
+  // Ed25519 verify key (hex, 64 chars) — the member identity.
+  TextColumn get memberId => text()();
+  TextColumn get displayName => text()();
+  TextColumn get ohId => text().nullable()(); // 20-byte mailbox id, hex
+  TextColumn get ohEndpoint => text().nullable()();
+  TextColumn get x25519Pub => text()();
+  IntColumn get role => integer()(); // 0 = admin, 1 = member
+
+  @override
+  Set<Column> get primaryKey => {groupId, memberId};
+}
+
+// MS08: buffered group items of a not-yet-installed key epoch
+// (Decision 10) — the fetch acknowledgement already deleted them
+// server-side, so they must survive restarts until the rotation arrives.
+@DataClassName('GroupPendingItemRow')
+class GroupPendingItems extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get groupId => text().references(GroupChannels, #groupId)();
+  BlobColumn get payload => blob()();
+  DateTimeColumn get receivedAt => dateTime()();
+}
+
+// MS08: pending group invites (proposal received over a 1:1 channel,
+// Decision 8) until the user accepts or dismisses them.
+@DataClassName('GroupInviteRow')
+class GroupInvites extends Table {
+  TextColumn get groupId => text()();
+  TextColumn get groupName => text()();
+  // Pinned admin identity from the proposal: rotations must be signed by it.
+  TextColumn get adminMemberId => text()();
+  // The 1:1 channel the proposal arrived on (the reply path for the accept).
+  TextColumn get channelId => text()();
+  DateTimeColumn get receivedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {groupId};
+}
+
+// MS08: per-member delivery receipts for outgoing group messages
+// (Decision 13: routed/delivered aggregate over ALL members).
+@DataClassName('MessageReceiptRow')
+class MessageReceipts extends Table {
+  TextColumn get conversationId => text()(); // group id
+  TextColumn get messageId => text()(); // network message id (hex)
+  TextColumn get memberId => text()();
+  BoolColumn get routed => boolean().withDefault(const Constant(false))();
+  BoolColumn get delivered => boolean().withDefault(const Constant(false))();
+
+  @override
+  Set<Column> get primaryKey => {conversationId, messageId, memberId};
 }
 
 // MS06: R-ACK-based reliability of known full nodes (garlic hop candidates).
@@ -144,6 +237,11 @@ class OutboundHandles extends Table {
     OutboundHandles,
     SessionTags,
     NodeScores,
+    GroupChannels,
+    GroupMembers,
+    GroupPendingItems,
+    GroupInvites,
+    MessageReceipts,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -153,7 +251,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 13;
+  int get schemaVersion => 14;
 
   @override
   MigrationStrategy get migration {
@@ -269,6 +367,20 @@ class AppDatabase extends _$AppDatabase {
         if (from < 13 && to >= 13) {
           // MS06: persisted R-ACK node scores — non-destructive.
           await m.createTable(nodeScores);
+        }
+        if (from < 14 && to >= 14) {
+          // MS08: group chat — non-destructive. New group tables plus the
+          // sender attribution column on messages (only needed for DBs whose
+          // messages table predates this version; below v9 it was recreated
+          // above with the current schema).
+          await m.createTable(groupChannels);
+          await m.createTable(groupMembers);
+          await m.createTable(groupPendingItems);
+          await m.createTable(groupInvites);
+          await m.createTable(messageReceipts);
+          if (from >= 9) {
+            await m.addColumn(messages, messages.senderMemberId);
+          }
         }
       },
     );

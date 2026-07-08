@@ -18,8 +18,8 @@ void main() {
       await db.close();
     });
 
-    test('schema version is 13', () {
-      expect(db.schemaVersion, equals(13));
+    test('schema version is 14', () {
+      expect(db.schemaVersion, equals(14));
     });
 
     test('dedup is scoped per conversation: same id in two channels', () async {
@@ -359,6 +359,71 @@ void main() {
       final tag = await legacy.select(legacy.sessionTags).getSingle();
       expect(tag.tag, equals('ef' * 16));
       expect(tag.channelId, equals('kept-id'));
+
+      await legacy.close();
+    });
+
+    test('v13 → v14 migration adds the group tables and senderMemberId '
+        'without losing data (MS08)', () async {
+      // Reshape a fresh database into the v13 layout.
+      final legacy = createTestDatabase();
+      for (final table in [
+        'group_channels',
+        'group_members',
+        'group_pending_items',
+        'group_invites',
+        'message_receipts',
+      ]) {
+        await legacy.customStatement('DROP TABLE $table;');
+      }
+      await legacy.customStatement(
+        'ALTER TABLE messages DROP COLUMN sender_member_id;',
+      );
+      await legacy.customStatement(
+        "INSERT INTO channels (uuid, label, encryption_key, auth_public_key) "
+        "VALUES ('kept-id', 'Kept Channel', '${'aa' * 32}', '${'bb' * 32}');",
+      );
+      await legacy.customStatement(
+        "INSERT INTO messages (conversation_id, sender_id, content, "
+        "timestamp, status, type) VALUES ('kept-id', 'kept-id', 'hi', 0, 4, "
+        "0);",
+      );
+
+      await legacy.migration.onUpgrade(legacy.createMigrator(), 13, 14);
+
+      // MS08 is non-destructive: existing rows survive.
+      final message = await legacy.select(legacy.messages).getSingle();
+      expect(message.content, equals('hi'));
+      expect(message.senderMemberId, isNull);
+
+      // The new tables are writable.
+      await legacy
+          .into(legacy.groupChannels)
+          .insert(
+            GroupChannelsCompanion.insert(
+              groupId: 'cd' * 32,
+              label: 'Gruppe',
+              myMemberId: 'ee' * 32,
+              mySignSeed: 'ff' * 32,
+              myX25519Priv: '11' * 32,
+            ),
+          );
+      await legacy
+          .into(legacy.groupMembers)
+          .insert(
+            GroupMembersCompanion.insert(
+              groupId: 'cd' * 32,
+              memberId: 'ee' * 32,
+              displayName: 'Me',
+              x25519Pub: '22' * 32,
+              role: 0,
+            ),
+          );
+      final group = await legacy.select(legacy.groupChannels).getSingle();
+      expect(group.label, equals('Gruppe'));
+      expect(group.keyEpoch, equals(0));
+      final member = await legacy.select(legacy.groupMembers).getSingle();
+      expect(member.displayName, equals('Me'));
 
       await legacy.close();
     });

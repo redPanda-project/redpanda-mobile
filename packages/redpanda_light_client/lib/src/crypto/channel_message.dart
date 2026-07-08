@@ -7,11 +7,13 @@ import 'dart:typed_data';
 ///
 /// ```
 /// ChannelMessage {
-///   bytes  message_id     = 1;  // 16 random bytes, stable across retries
-///   int64  timestamp_ms   = 2;
-///   string content        = 3;
-///   bytes  reply_path     = 5;  // MS05: serialized ReverseGarlicBlock (optional)
-///   bytes  ack_message_id = 6;  // MS06: Channel-ACK for this message id (optional)
+///   bytes  message_id      = 1;  // 16 random bytes, stable across retries
+///   int64  timestamp_ms    = 2;
+///   string content         = 3;
+///   bytes  reply_path      = 5;  // MS05: serialized ReverseGarlicBlock (optional)
+///   bytes  ack_message_id  = 6;  // MS06: Channel-ACK for this message id (optional)
+///   bytes  group_handshake = 7;  // MS08: serialized GroupHandshake (1:1 only, optional)
+///   bytes  group_control   = 8;  // MS08: serialized GroupControl (groups only, optional)
 /// }
 /// ```
 ///
@@ -62,16 +64,34 @@ class ChannelMessage {
   /// Null/empty for regular messages.
   final Uint8List? ackMessageId;
 
+  /// MS08: serialized GroupHandshake riding a 1:1 channel (Decision 8).
+  /// Null/empty for regular messages; the layout lives in
+  /// `crypto/group_control.dart`.
+  final Uint8List? groupHandshake;
+
+  /// MS08: serialized GroupControl riding a group message (e.g. a rename).
+  /// Null/empty for regular messages.
+  final Uint8List? groupControl;
+
   const ChannelMessage({
     required this.messageId,
     required this.timestampMs,
     required this.content,
     this.replyPath,
     this.ackMessageId,
+    this.groupHandshake,
+    this.groupControl,
   });
 
   /// True when this message is a Channel-ACK (MS06).
   bool get isChannelAck => ackMessageId != null && ackMessageId!.isNotEmpty;
+
+  /// True when this message carries a group handshake (MS08).
+  bool get isGroupHandshake =>
+      groupHandshake != null && groupHandshake!.isNotEmpty;
+
+  /// True when this message carries a group control action (MS08).
+  bool get isGroupControl => groupControl != null && groupControl!.isNotEmpty;
 
   /// Encodes this message to its proto3-compatible binary representation.
   Uint8List encode() {
@@ -114,6 +134,22 @@ class ChannelMessage {
       out.add(ackBytes);
     }
 
+    // field 7: group_handshake (length-delimited, MS08)
+    final handshakeBytes = groupHandshake;
+    if (handshakeBytes != null && handshakeBytes.isNotEmpty) {
+      out.addByte(0x3A); // (7 << 3) | 2
+      _writeVarint(out, handshakeBytes.length);
+      out.add(handshakeBytes);
+    }
+
+    // field 8: group_control (length-delimited, MS08)
+    final controlBytes = groupControl;
+    if (controlBytes != null && controlBytes.isNotEmpty) {
+      out.addByte(0x42); // (8 << 3) | 2
+      _writeVarint(out, controlBytes.length);
+      out.add(controlBytes);
+    }
+
     return out.toBytes();
   }
 
@@ -130,6 +166,8 @@ class ChannelMessage {
     String content = '';
     Uint8List? replyPath;
     Uint8List? ackMessageId;
+    Uint8List? groupHandshake;
+    Uint8List? groupControl;
 
     int readVarint() {
       var result = 0;
@@ -211,6 +249,36 @@ class ChannelMessage {
           );
           offset += ackLen;
           break;
+        case 7: // group_handshake (MS08)
+          if (wireType != 2) {
+            throw const FormatException('ChannelMessage: bad wire type for #7');
+          }
+          final handshakeLen = readVarint();
+          if (offset + handshakeLen > data.length) {
+            throw const FormatException(
+              'ChannelMessage: truncated group_handshake',
+            );
+          }
+          groupHandshake = Uint8List.fromList(
+            data.sublist(offset, offset + handshakeLen),
+          );
+          offset += handshakeLen;
+          break;
+        case 8: // group_control (MS08)
+          if (wireType != 2) {
+            throw const FormatException('ChannelMessage: bad wire type for #8');
+          }
+          final controlLen = readVarint();
+          if (offset + controlLen > data.length) {
+            throw const FormatException(
+              'ChannelMessage: truncated group_control',
+            );
+          }
+          groupControl = Uint8List.fromList(
+            data.sublist(offset, offset + controlLen),
+          );
+          offset += controlLen;
+          break;
         default:
           // Unknown field — skip according to wire type.
           _skipField(
@@ -230,6 +298,8 @@ class ChannelMessage {
       content: content,
       replyPath: replyPath,
       ackMessageId: ackMessageId,
+      groupHandshake: groupHandshake,
+      groupControl: groupControl,
     );
   }
 

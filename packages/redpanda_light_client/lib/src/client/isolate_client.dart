@@ -10,6 +10,7 @@ import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
 import 'package:redpanda_light_client/src/crypto/ratchet.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
+import 'package:redpanda_light_client/src/domain/group_state.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/domain/routing_ack.dart';
@@ -56,11 +57,18 @@ class RedPandaIsolateClient implements RedPandaClient {
   final _channelAckController = StreamController<ChannelAckUpdate>.broadcast();
   final _nodeScoreController = StreamController<List<NodeScore>>.broadcast();
 
+  final _groupStateController = StreamController<GroupStateUpdate>.broadcast();
+  final _groupHandshakeController =
+      StreamController<GroupHandshakeEvent>.broadcast();
+
   // Pending OH registrations awaiting their isolate response, by requestId.
   final Map<int, Completer<OHRegistration>> _pendingOhRegistrations = {};
 
   // Pending sends awaiting their isolate response, by requestId.
   final Map<int, Completer<String>> _pendingSends = {};
+
+  // Pending group operations (rotate/retry/handshake/rename), by requestId.
+  final Map<int, Completer<void>> _pendingGroupOps = {};
   int _nextRequestId = 0;
 
   // Cache last known status
@@ -159,13 +167,29 @@ class RedPandaIsolateClient implements RedPandaClient {
     } else if (event is EventMessageSendFailed) {
       final completer = _pendingSends.remove(event.requestId);
       if (completer != null && !completer.isCompleted) {
-        final statusCode = event.statusCode;
-        completer.completeError(
-          statusCode != null
-              ? DepositException(statusCode)
-              : StateError(event.error),
-        );
+        completer.completeError(_rebuildSendError(event));
       }
+    } else if (event is EventGroupOpDone) {
+      final completer = _pendingGroupOps.remove(event.requestId);
+      if (completer != null && !completer.isCompleted) {
+        if (event.error == null) {
+          completer.complete();
+        } else {
+          final failedMemberIds = event.failedMemberIds;
+          final statusCode = event.statusCode;
+          completer.completeError(
+            failedMemberIds != null
+                ? GroupSendException(failedMemberIds, event.error)
+                : statusCode != null
+                ? DepositException(statusCode)
+                : StateError(event.error!),
+          );
+        }
+      }
+    } else if (event is EventGroupStateUpdate) {
+      _groupStateController.add(event.update);
+    } else if (event is EventGroupHandshake) {
+      _groupHandshakeController.add(event.event);
     } else if (event is EventOhMailboxUpdate) {
       _ohMailboxUpdateController.add(
         OhMailboxUpdate(
@@ -390,6 +414,117 @@ class RedPandaIsolateClient implements RedPandaClient {
     _send(CmdRestoreNodeScores(scores));
   }
 
+  /// Rebuilds the typed error a failed send carried across the isolate
+  /// boundary.
+  static Object _rebuildSendError(EventMessageSendFailed event) {
+    final failedMemberIds = event.failedMemberIds;
+    if (failedMemberIds != null) {
+      return GroupSendException(
+        failedMemberIds,
+        event.error,
+        event.messageIdHex,
+      );
+    }
+    final statusCode = event.statusCode;
+    if (statusCode != null) {
+      return DepositException(statusCode);
+    }
+    return StateError(event.error);
+  }
+
+  // -----------------------------------------------------------------------
+  // Groups (Frontend MS08)
+  // -----------------------------------------------------------------------
+
+  @override
+  void registerGroup(GroupRegistration registration) {
+    _send(CmdRegisterGroup(registration));
+  }
+
+  @override
+  Future<String> sendGroupMessage(
+    String groupId,
+    String content, {
+    String? messageId,
+  }) async {
+    await _isolateReady.future;
+    final requestId = _nextRequestId++;
+    final completer = Completer<String>();
+    _pendingSends[requestId] = completer;
+    _send(
+      CmdSendGroupMessage(requestId, groupId, content, messageId: messageId),
+    );
+    return completer.future.timeout(
+      const Duration(seconds: 60),
+      onTimeout: () {
+        _pendingSends.remove(requestId);
+        throw TimeoutException(
+          'sendGroupMessage timed out',
+          const Duration(seconds: 60),
+        );
+      },
+    );
+  }
+
+  Future<void> _groupOp(IsolateCommand Function(int requestId) build) async {
+    await _isolateReady.future;
+    final requestId = _nextRequestId++;
+    final completer = Completer<void>();
+    _pendingGroupOps[requestId] = completer;
+    _send(build(requestId));
+    return completer.future.timeout(
+      const Duration(seconds: 60),
+      onTimeout: () {
+        _pendingGroupOps.remove(requestId);
+        throw TimeoutException(
+          'group operation timed out',
+          const Duration(seconds: 60),
+        );
+      },
+    );
+  }
+
+  @override
+  Future<void> rotateGroupKey(
+    String groupId, {
+    required List<GroupMemberInfo> members,
+    String? label,
+  }) {
+    return _groupOp(
+      (requestId) =>
+          CmdRotateGroupKey(requestId, groupId, members, label: label),
+    );
+  }
+
+  @override
+  Future<void> retryPendingRotations(String groupId) {
+    return _groupOp(
+      (requestId) => CmdRetryPendingRotations(requestId, groupId),
+    );
+  }
+
+  @override
+  Future<void> sendGroupHandshake(String channelId, List<int> handshake) {
+    return _groupOp(
+      (requestId) => CmdSendGroupHandshake(requestId, channelId, handshake),
+    );
+  }
+
+  @override
+  Future<void> sendGroupInfoUpdate(String groupId, String label) {
+    return _groupOp(
+      (requestId) => CmdSendGroupInfoUpdate(requestId, groupId, label),
+    );
+  }
+
+  @override
+  Stream<GroupStateUpdate> get groupStateUpdates =>
+      _groupStateController.stream;
+
+  @override
+  Stream<GroupHandshakeEvent> get groupHandshakeEvents =>
+      _groupHandshakeController.stream;
+
   // Lifecycle hooks proxied
   void onPause() {
     _send(CmdLifecyclePause());
@@ -493,6 +628,14 @@ void _isolateEntryPoint(SendPort mainSendPort) {
         mainSendPort.send(EventNodeScores(scores));
       });
 
+      // Forward group state snapshots and handshakes (MS08)
+      client!.groupStateUpdates.listen((update) {
+        mainSendPort.send(EventGroupStateUpdate(update));
+      });
+      client!.groupHandshakeEvents.listen((event) {
+        mainSendPort.send(EventGroupHandshake(event));
+      });
+
       // Send periodic peer stats snapshots to main thread
       Timer.periodic(const Duration(seconds: 3), (_) {
         if (client != null) {
@@ -586,6 +729,67 @@ void _isolateEntryPoint(SendPort mainSendPort) {
         );
       } else if (message is CmdRestoreNodeScores) {
         client!.restoreNodeScores(message.scores);
+      } else if (message is CmdRegisterGroup) {
+        client!.registerGroup(message.registration);
+      } else if (message is CmdSendGroupMessage) {
+        try {
+          final messageId = await client!.sendGroupMessage(
+            message.groupId,
+            message.content,
+            messageId: message.messageId,
+          );
+          mainSendPort.send(EventMessageSent(message.requestId, messageId));
+        } on GroupSendException catch (e) {
+          mainSendPort.send(
+            EventMessageSendFailed(
+              message.requestId,
+              e.message,
+              failedMemberIds: e.failedMemberIds,
+              messageIdHex: e.messageIdHex,
+            ),
+          );
+        } on DepositException catch (e) {
+          mainSendPort.send(
+            EventMessageSendFailed(
+              message.requestId,
+              e.toString(),
+              statusCode: e.statusName,
+            ),
+          );
+        } catch (e) {
+          mainSendPort.send(
+            EventMessageSendFailed(message.requestId, e.toString()),
+          );
+        }
+      } else if (message is CmdRotateGroupKey) {
+        await _runGroupOp(
+          mainSendPort,
+          message.requestId,
+          () => client!.rotateGroupKey(
+            message.groupId,
+            members: message.members,
+            label: message.label,
+          ),
+        );
+      } else if (message is CmdRetryPendingRotations) {
+        await _runGroupOp(
+          mainSendPort,
+          message.requestId,
+          () => client!.retryPendingRotations(message.groupId),
+        );
+      } else if (message is CmdSendGroupHandshake) {
+        await _runGroupOp(
+          mainSendPort,
+          message.requestId,
+          () =>
+              client!.sendGroupHandshake(message.channelId, message.handshake),
+        );
+      } else if (message is CmdSendGroupInfoUpdate) {
+        await _runGroupOp(
+          mainSendPort,
+          message.requestId,
+          () => client!.sendGroupInfoUpdate(message.groupId, message.label),
+        );
       } else if (message is CmdRestoreOutboundHandle) {
         await client!.restoreOutboundHandle(
           OHRegistration(
@@ -605,4 +809,35 @@ void _isolateEntryPoint(SendPort mainSendPort) {
       RpLog.debug(stack.toString());
     }
   });
+}
+
+/// Runs a group operation and reports its outcome as [EventGroupOpDone],
+/// preserving the typed failure across the isolate boundary.
+Future<void> _runGroupOp(
+  SendPort mainSendPort,
+  int requestId,
+  Future<void> Function() op,
+) async {
+  try {
+    await op();
+    mainSendPort.send(EventGroupOpDone(requestId));
+  } on GroupSendException catch (e) {
+    mainSendPort.send(
+      EventGroupOpDone(
+        requestId,
+        error: e.message,
+        failedMemberIds: e.failedMemberIds,
+      ),
+    );
+  } on DepositException catch (e) {
+    mainSendPort.send(
+      EventGroupOpDone(
+        requestId,
+        error: e.toString(),
+        statusCode: e.statusName,
+      ),
+    );
+  } catch (e) {
+    mainSendPort.send(EventGroupOpDone(requestId, error: e.toString()));
+  }
 }

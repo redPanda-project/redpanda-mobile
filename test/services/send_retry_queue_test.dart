@@ -1,6 +1,7 @@
 import 'package:drift/drift.dart' as drift;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:redpanda/database/database.dart';
+import 'package:redpanda/repositories/group_repository.dart';
 import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/services/send_retry_queue.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart'
@@ -19,7 +20,7 @@ void main() {
     db = createTestDatabase();
     repo = MessageRepository(db);
     client = FakeRedPandaClient();
-    queue = SendRetryQueue(repo, client);
+    queue = SendRetryQueue(repo, client, GroupRepository(db));
   });
 
   tearDown(() async {

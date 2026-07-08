@@ -3,6 +3,7 @@ import 'package:redpanda_light_client/src/client_facade.dart';
 import 'package:redpanda_light_client/src/crypto/ratchet.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
+import 'package:redpanda_light_client/src/domain/group_state.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/domain/routing_ack.dart';
@@ -119,4 +120,50 @@ class MockRedPandaClient implements RedPandaClient {
   void restoreNodeScores(List<NodeScore> scores) {
     // Mock: no-op
   }
+
+  @override
+  void registerGroup(GroupRegistration registration) {
+    // Mock: no-op
+  }
+
+  @override
+  Future<String> sendGroupMessage(
+    String groupId,
+    String content, {
+    String? messageId,
+  }) async {
+    await Future.delayed(const Duration(milliseconds: 500));
+    return messageId ??
+        'mock-group-message-id-${DateTime.now().millisecondsSinceEpoch}';
+  }
+
+  @override
+  Future<void> rotateGroupKey(
+    String groupId, {
+    required List<GroupMemberInfo> members,
+    String? label,
+  }) async {
+    // Mock: no-op
+  }
+
+  @override
+  Future<void> retryPendingRotations(String groupId) async {
+    // Mock: no-op
+  }
+
+  @override
+  Future<void> sendGroupHandshake(String channelId, List<int> handshake) async {
+    // Mock: no-op
+  }
+
+  @override
+  Future<void> sendGroupInfoUpdate(String groupId, String label) async {
+    // Mock: no-op
+  }
+
+  @override
+  Stream<GroupStateUpdate> get groupStateUpdates => const Stream.empty();
+
+  @override
+  Stream<GroupHandshakeEvent> get groupHandshakeEvents => const Stream.empty();
 }
