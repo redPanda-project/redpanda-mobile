@@ -1754,13 +1754,36 @@ class RedPandaLightClient implements RedPandaClient {
   /// ChannelMessage whose ack_message_id references the acknowledged
   /// message, ratchet-encrypted like any other message.
   ///
-  /// Travels the forward garlic path (or the direct deposit as fallback) and
-  /// deliberately does **not** consume the pending RGB — that stays reserved
-  /// for the user's actual reply — and requests no R-ACK of its own (ACKs
-  /// stay lightweight; a lost ACK is repaired by the next one).
+  /// Only sent when the channel has the partner's OH id (a forward path to
+  /// reply over). Without one — a pure reverse-garlic relationship where we
+  /// only ever learned a single-use RGB — the ACK is **skipped**: routing it
+  /// over the pending RGB would burn the return path the user's real reply
+  /// needs, and there is no other destination. The reply the responder does
+  /// send is itself the acknowledgement. Skipping also matters for
+  /// correctness: encrypting an ACK advances the ratchet, so emitting a
+  /// dead-end ACK would renumber the responder's next real message.
+  ///
+  /// Requests no R-ACK of its own (ACKs stay lightweight; a lost ACK is
+  /// repaired by the next one) and never consumes the pending RGB.
   Future<void> _sendChannelAck(String channelId, Uint8List ackedId) async {
     final sessionFuture = _ratchetSessions[channelId];
     if (sessionFuture == null) return;
+
+    // Resolve the destination BEFORE encrypting — a channel-ACK with no
+    // forward path must not advance the ratchet or deposit into a void.
+    final peerOhId = _channelPeerOhIds[channelId];
+    if (peerOhId == null || peerOhId.length != GarlicHop.nodeIdLength) {
+      return;
+    }
+    final activePeer = _peers.values
+        .where((p) => p.isHandshakeVerified)
+        .firstOrNull;
+    if (activePeer == null) {
+      RpLog.info(
+        'RedPandaLightClient: no active peer to send a channel ack over',
+      );
+      return;
+    }
 
     final random = Random.secure();
     final ackMessage = ChannelMessage(
@@ -1775,36 +1798,23 @@ class RedPandaLightClient implements RedPandaClient {
     final payload = await session.encrypt(ackMessage, channelId);
     _emitRatchetState(channelId, session);
 
-    final activePeer = _peers.values
-        .where((p) => p.isHandshakeVerified)
-        .firstOrNull;
-    if (activePeer == null) {
-      RpLog.info(
-        'RedPandaLightClient: no active peer to send a channel ack over',
+    final hops = _selectGarlicHops(channelId, activePeer);
+    if (hops.isNotEmpty &&
+        payload.length <= GarlicBuilder.maxPayloadLength(hops.length)) {
+      final packet = await GarlicBuilder.build(
+        hops: hops,
+        ohId: peerOhId,
+        payload: payload,
       );
+      activePeer.sendCommand(142, packet);
       return;
-    }
-
-    final peerOhId = _channelPeerOhIds[channelId];
-    if (peerOhId != null && peerOhId.length == GarlicHop.nodeIdLength) {
-      final hops = _selectGarlicHops(channelId, activePeer);
-      if (hops.isNotEmpty &&
-          payload.length <= GarlicBuilder.maxPayloadLength(hops.length)) {
-        final packet = await GarlicBuilder.build(
-          hops: hops,
-          ohId: peerOhId,
-          payload: payload,
-        );
-        activePeer.sendCommand(142, packet);
-        return;
-      }
     }
 
     // Direct fallback without want_response: best effort, never interferes
     // with the deposit-response queue of regular sends.
     final flaschenpost = FlaschenpostPut()
       ..content = payload
-      ..ohId = peerOhId ?? Uint8List(0);
+      ..ohId = peerOhId;
     activePeer.sendCommand(
       141,
       Uint8List.fromList(flaschenpost.writeToBuffer()),
