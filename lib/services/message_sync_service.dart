@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hex/hex.dart';
 import 'package:redpanda/database/database.dart';
+import 'package:redpanda/repositories/group_repository.dart';
 import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/repositories/outbound_handle_repository.dart';
 import 'package:redpanda/shared/providers.dart';
@@ -21,6 +22,7 @@ class MessageSyncService {
   final MessageRepository _messages;
   final OutboundHandleRepository _outboundHandles;
   final AppDatabase _db;
+  final GroupRepository _groups;
 
   final _overflowController = StreamController<OhMailboxUpdate>.broadcast();
   StreamSubscription<DecryptedMessage>? _messageSub;
@@ -30,6 +32,7 @@ class MessageSyncService {
   StreamSubscription<RoutingAckUpdate>? _routingAckSub;
   StreamSubscription<ChannelAckUpdate>? _channelAckSub;
   StreamSubscription<List<NodeScore>>? _nodeScoreSub;
+  StreamSubscription<GroupStateUpdate>? _groupStateSub;
 
   /// Serializes ratchet-state DB writes so they are applied in emission
   /// order — a slow earlier write must not overwrite a newer state.
@@ -41,11 +44,15 @@ class MessageSyncService {
   /// Same ordering guarantee for node-score snapshots (MS06).
   Future<void> _nodeScorePersistPending = Future.value();
 
+  /// Same ordering guarantee for group state snapshots (MS08).
+  Future<void> _groupStatePersistPending = Future.value();
+
   MessageSyncService(
     this._client,
     this._messages,
     this._outboundHandles,
     this._db,
+    this._groups,
   );
 
   /// Mailbox overflow warnings; the chat UI surfaces these to the user.
@@ -115,6 +122,15 @@ class MessageSyncService {
             ),
           );
     });
+    _groupStateSub ??= _client.groupStateUpdates.listen((update) {
+      _groupStatePersistPending = _groupStatePersistPending
+          .then((_) => _groups.applyStateUpdate(update))
+          .catchError(
+            (Object e) => debugPrint(
+              'MessageSyncService: failed to persist group state: $e',
+            ),
+          );
+    });
   }
 
   Future<void> stop() async {
@@ -125,6 +141,7 @@ class MessageSyncService {
     await _routingAckSub?.cancel();
     await _channelAckSub?.cancel();
     await _nodeScoreSub?.cancel();
+    await _groupStateSub?.cancel();
     _messageSub = null;
     _updateSub = null;
     _ratchetSub = null;
@@ -132,6 +149,7 @@ class MessageSyncService {
     _routingAckSub = null;
     _channelAckSub = null;
     _nodeScoreSub = null;
+    _groupStateSub = null;
   }
 
   /// Persists a fetched message unless it was already stored (dedup via
@@ -145,9 +163,12 @@ class MessageSyncService {
     await _messages.insertIncomingIfNew(
       messageId: msg.id,
       conversationId: channelId,
-      senderId: channelId,
+      // MS08: group messages carry their authenticated sender; 1:1 messages
+      // keep the channel id as sender (the peer).
+      senderId: msg.senderMemberIdHex ?? channelId,
       content: msg.content,
       timestamp: DateTime.fromMillisecondsSinceEpoch(msg.receivedAtMs),
+      senderMemberId: msg.senderMemberIdHex,
     );
   }
 
@@ -204,6 +225,40 @@ class MessageSyncService {
   /// MAILBOX_FULL or a timeout re-queue the message for a retry over fresh
   /// hops (the node scorer already penalized the old ones on timeout).
   Future<void> handleRoutingAckUpdate(RoutingAckUpdate update) async {
+    // MS08 (Decision 13): group deliveries ack per member — aggregate to
+    // `routed` only once every other member's mailbox confirmed.
+    final memberIdHex = update.memberIdHex;
+    if (memberIdHex != null) {
+      if (update.timedOut || update.status != RoutingAck.statusStored) {
+        await _messages.requeueSentByNetworkId(
+          update.channelId,
+          update.messageIdHex,
+        );
+        return;
+      }
+      await _groups.markReceipt(
+        conversationId: update.channelId,
+        messageId: update.messageIdHex,
+        memberId: memberIdHex,
+        routed: true,
+      );
+      final group = await _groups.getGroup(update.channelId);
+      if (group == null) return;
+      final complete = await _groups.allMembersConfirmed(
+        conversationId: update.channelId,
+        messageId: update.messageIdHex,
+        ownMemberId: group.myMemberId,
+        delivered: false,
+      );
+      if (complete) {
+        await _messages.markRoutedByNetworkId(
+          update.channelId,
+          update.messageIdHex,
+        );
+      }
+      return;
+    }
+
     if (update.timedOut) {
       debugPrint(
         'MessageSyncService: no R-ACK for ${update.messageIdHex} — '
@@ -251,6 +306,29 @@ class MessageSyncService {
 
   /// Applies an application-layer delivery confirmation (Channel-ACK, MS06).
   Future<void> handleChannelAckUpdate(ChannelAckUpdate update) async {
+    // MS08 (Decision 13): group acks aggregate per member — `delivered`
+    // only once ALL other members confirmed. Acks are broadcast, so this
+    // also fires for messages we merely received; those rows are excluded
+    // by markDeliveredByNetworkId (status `received`).
+    final memberIdHex = update.memberIdHex;
+    if (memberIdHex != null) {
+      await _groups.markReceipt(
+        conversationId: update.channelId,
+        messageId: update.messageIdHex,
+        memberId: memberIdHex,
+        routed: true,
+        delivered: true,
+      );
+      final group = await _groups.getGroup(update.channelId);
+      if (group == null) return;
+      final complete = await _groups.allMembersConfirmed(
+        conversationId: update.channelId,
+        messageId: update.messageIdHex,
+        ownMemberId: group.myMemberId,
+        delivered: true,
+      );
+      if (!complete) return;
+    }
     await _messages.markDeliveredByNetworkId(
       update.channelId,
       update.messageIdHex,
@@ -341,6 +419,7 @@ final messageSyncServiceProvider = Provider<MessageSyncService>((ref) {
     ref.watch(messageRepositoryProvider),
     ref.watch(outboundHandleRepositoryProvider),
     ref.watch(dbProvider),
+    ref.watch(groupRepositoryProvider),
   );
 });
 

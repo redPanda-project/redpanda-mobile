@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:redpanda/database/database.dart';
+import 'package:redpanda/repositories/group_repository.dart';
 import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/shared/providers.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
@@ -16,6 +17,7 @@ import 'package:redpanda_light_client/redpanda_light_client.dart';
 class SendRetryQueue {
   final MessageRepository _messages;
   final RedPandaClient _client;
+  final GroupRepository _groups;
 
   static const int maxRetries = 10;
   static const Duration checkInterval = Duration(seconds: 60);
@@ -30,7 +32,7 @@ class SendRetryQueue {
   Timer? _timer;
   bool _passInProgress = false;
 
-  SendRetryQueue(this._messages, this._client);
+  SendRetryQueue(this._messages, this._client, this._groups);
 
   void start() {
     _timer ??= Timer.periodic(
@@ -82,15 +84,32 @@ class SendRetryQueue {
           // Reuse the stable network message id across attempts so re-sends
           // deduplicate at the receiver. On the very first attempt the row has
           // no id yet; sendMessage generates one which we then persist.
-          final usedId = await _client.sendMessage(
-            msg.conversationId,
-            msg.content,
-            messageId: msg.messageId,
-          );
+          // MS08: rows whose conversation is a group fan out via
+          // sendGroupMessage instead.
+          final usedId = await _groups.isGroup(msg.conversationId)
+              ? await _client.sendGroupMessage(
+                  msg.conversationId,
+                  msg.content,
+                  messageId: msg.messageId,
+                )
+              : await _client.sendMessage(
+                  msg.conversationId,
+                  msg.content,
+                  messageId: msg.messageId,
+                );
           if (msg.messageId == null || msg.messageId!.isEmpty) {
             await _messages.setNetworkMessageId(msg.id, usedId);
           }
           await _messages.updateMessageStatus(msg.id, MessageStatus.sent);
+        } on GroupSendException catch (e) {
+          // MS08: some members were not reached — normal backoff. Persist
+          // the id the partial fan-out used so the re-send deduplicates at
+          // the members that already got it.
+          if ((msg.messageId == null || msg.messageId!.isEmpty) &&
+              e.messageIdHex != null) {
+            await _messages.setNetworkMessageId(msg.id, e.messageIdHex!);
+          }
+          await _messages.markRetryAttempt(msg.id);
         } on DepositException catch (e) {
           // MS02b: the node reported why the deposit was rejected.
           if (e.isBadRequest) {
@@ -123,5 +142,6 @@ final sendRetryQueueProvider = Provider<SendRetryQueue>((ref) {
   return SendRetryQueue(
     ref.watch(messageRepositoryProvider),
     ref.watch(redPandaClientProvider),
+    ref.watch(groupRepositoryProvider),
   );
 });

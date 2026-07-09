@@ -1,6 +1,7 @@
 import 'package:redpanda_light_client/src/crypto/ratchet.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
+import 'package:redpanda_light_client/src/domain/group_state.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/domain/routing_ack.dart';
@@ -124,4 +125,60 @@ abstract class RedPandaClient {
 
   /// Restores persisted node scores on startup. Live in-memory scores win.
   void restoreNodeScores(List<NodeScore> scores);
+
+  // -----------------------------------------------------------------------
+  // Groups (Frontend MS08)
+  // -----------------------------------------------------------------------
+
+  /// Registers a group (the group counterpart of [addChannelKeys]) so
+  /// [sendGroupMessage] can encrypt for it and fetched items from the group
+  /// OH (registered under `channelId = groupId`) can be decrypted.
+  /// Persisted state travels in [GroupRegistration.cryptoStateJson],
+  /// `pendingItems` and `pendingRotations`; like the channel state it is
+  /// applied only on the first registration — live state wins.
+  void registerGroup(GroupRegistration registration);
+
+  /// Encrypts [content] once with the own sender chain (envelope v5) and
+  /// fans it out to every other member's group OH (master spec MS08,
+  /// Decisions 1/5/7). Pass the same [messageId] on retries — members that
+  /// were already reached deduplicate on it.
+  ///
+  /// Throws [GroupSendException] when one or more members could not be
+  /// reached. A retry re-encrypts with the next chain key; members that
+  /// already received the message drop the duplicate by message id.
+  Future<String> sendGroupMessage(
+    String groupId,
+    String content, {
+    String? messageId,
+  });
+
+  /// Admin only (Decision 9): installs a new key epoch for [members] (the
+  /// full replacement list), seals one rotation box per other member and
+  /// delivers them (Decisions 3/6/12). Boxes that could not be delivered
+  /// stay pending (see [GroupStateUpdate.pendingRotations]) and are retried
+  /// via [retryPendingRotations].
+  Future<void> rotateGroupKey(
+    String groupId, {
+    required List<GroupMemberInfo> members,
+    String? label,
+  });
+
+  /// Re-sends sealed rotation boxes that could not be delivered yet.
+  Future<void> retryPendingRotations(String groupId);
+
+  /// Sends a group handshake (invite proposal / join accept, Decision 8)
+  /// over the existing 1:1 channel [channelId], ratchet-encrypted like any
+  /// other 1:1 message. [handshake] is a serialized `GroupHandshake`.
+  Future<void> sendGroupHandshake(String channelId, List<int> handshake);
+
+  /// Admin only: broadcasts a rename to the group (GroupControl over v5).
+  Future<void> sendGroupInfoUpdate(String groupId, String label);
+
+  /// Group state snapshots (crypto chains, epoch, member list, buffered
+  /// items, pending rotation boxes). The app layer persists them and feeds
+  /// them back via [registerGroup] after a restart.
+  Stream<GroupStateUpdate> get groupStateUpdates;
+
+  /// Group handshakes received over 1:1 channels (Decision 8).
+  Stream<GroupHandshakeEvent> get groupHandshakeEvents;
 }

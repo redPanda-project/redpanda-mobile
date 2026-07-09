@@ -13,19 +13,26 @@
 class AckTagStore {
   final Map<String, AckTagEntry> _entries = {};
 
-  /// Registers an outstanding ack tag for a sent message.
+  /// Registers an outstanding ack tag for a sent message. [memberIdHex]
+  /// identifies the targeted group member for MS08 fan-outs (null for 1:1);
+  /// [isRotation] marks the delivery of a sealed rotation box — its R-ACK
+  /// clears the box from the pending store instead of updating a message.
   void store(
     String tagHex, {
     required String channelId,
     required String messageIdHex,
     required List<String> hopNodeIdsHex,
     int? sentAtMs,
+    String? memberIdHex,
+    bool isRotation = false,
   }) {
     _entries[tagHex] = AckTagEntry(
       channelId: channelId,
       messageIdHex: messageIdHex,
       hopNodeIdsHex: List.unmodifiable(hopNodeIdsHex),
       sentAtMs: sentAtMs ?? DateTime.now().millisecondsSinceEpoch,
+      memberIdHex: memberIdHex,
+      isRotation: isRotation,
     );
   }
 
@@ -68,10 +75,21 @@ class AckTagEntry {
 
   final int sentAtMs;
 
+  /// MS08: the targeted group member (hex member id); null for 1:1 sends.
+  final String? memberIdHex;
+
+  /// MS08: true when this entry tracks a sealed rotation box delivery —
+  /// the arriving R-ACK removes the box from the group's pending store
+  /// (Decision 10: rotations must arrive reliably) and is not forwarded
+  /// as a message status update.
+  final bool isRotation;
+
   const AckTagEntry({
     required this.channelId,
     required this.messageIdHex,
     required this.hopNodeIdsHex,
     required this.sentAtMs,
+    this.memberIdHex,
+    this.isRotation = false,
   });
 }

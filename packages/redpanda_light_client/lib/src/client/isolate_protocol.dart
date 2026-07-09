@@ -1,4 +1,5 @@
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
+import 'package:redpanda_light_client/src/domain/group_state.dart';
 import 'package:redpanda_light_client/src/garlic/node_scorer.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
@@ -114,6 +115,64 @@ class CmdRestoreNodeScores extends IsolateCommand {
   CmdRestoreNodeScores(this.scores);
 }
 
+/// Registers a group (MS08). [GroupRegistration] carries only
+/// isolate-sendable primitives and plain data classes.
+class CmdRegisterGroup extends IsolateCommand {
+  final GroupRegistration registration;
+  CmdRegisterGroup(this.registration);
+}
+
+/// Sends a group message (MS08); answered with [EventMessageSent] /
+/// [EventMessageSendFailed] like a 1:1 send.
+class CmdSendGroupMessage extends IsolateCommand {
+  final int requestId;
+  final String groupId;
+  final String content;
+  final String? messageId;
+  CmdSendGroupMessage(
+    this.requestId,
+    this.groupId,
+    this.content, {
+    this.messageId,
+  });
+}
+
+/// Rotates the group key (MS08, admin only); answered with
+/// [EventGroupOpDone].
+class CmdRotateGroupKey extends IsolateCommand {
+  final int requestId;
+  final String groupId;
+  final List<GroupMemberInfo> members;
+  final String? label;
+  CmdRotateGroupKey(this.requestId, this.groupId, this.members, {this.label});
+}
+
+/// Re-sends undelivered sealed rotation boxes (MS08); answered with
+/// [EventGroupOpDone].
+class CmdRetryPendingRotations extends IsolateCommand {
+  final int requestId;
+  final String groupId;
+  CmdRetryPendingRotations(this.requestId, this.groupId);
+}
+
+/// Sends a group handshake over a 1:1 channel (MS08, Decision 8); answered
+/// with [EventGroupOpDone].
+class CmdSendGroupHandshake extends IsolateCommand {
+  final int requestId;
+  final String channelId;
+  final List<int> handshake;
+  CmdSendGroupHandshake(this.requestId, this.channelId, this.handshake);
+}
+
+/// Broadcasts a group rename (MS08, admin only); answered with
+/// [EventGroupOpDone].
+class CmdSendGroupInfoUpdate extends IsolateCommand {
+  final int requestId;
+  final String groupId;
+  final String label;
+  CmdSendGroupInfoUpdate(this.requestId, this.groupId, this.label);
+}
+
 // --- Events (Isolate -> Main) ---
 abstract class IsolateEvent {}
 
@@ -158,7 +217,21 @@ class EventMessageSendFailed extends IsolateEvent {
   /// as a string so the event stays isolate-sendable; the main side rebuilds
   /// a DepositException from it.
   final String? statusCode;
-  EventMessageSendFailed(this.requestId, this.error, {this.statusCode});
+
+  /// MS08: member ids (hex) a group fan-out could not reach; the main side
+  /// rebuilds a GroupSendException from it. Null for 1:1 sends.
+  final List<String>? failedMemberIds;
+
+  /// MS08: the message id (hex) a partially delivered group fan-out used —
+  /// travels with the failure so the retry reuses it.
+  final String? messageIdHex;
+  EventMessageSendFailed(
+    this.requestId,
+    this.error, {
+    this.statusCode,
+    this.failedMemberIds,
+    this.messageIdHex,
+  });
 }
 
 class EventIncomingMessage extends IsolateEvent {
@@ -262,6 +335,39 @@ class EventChannelAckUpdate extends IsolateEvent {
 class EventNodeScores extends IsolateEvent {
   final List<NodeScore> scores;
   EventNodeScores(this.scores);
+}
+
+/// Completion of a group operation (rotate/retry/handshake/rename, MS08).
+class EventGroupOpDone extends IsolateEvent {
+  final int requestId;
+
+  /// Null on success; otherwise the error description.
+  final String? error;
+
+  /// Set when the failure was a partial fan-out ([GroupSendException]).
+  final List<String>? failedMemberIds;
+
+  /// Proto Status name when a node rejected a deposit (DepositException).
+  final String? statusCode;
+  EventGroupOpDone(
+    this.requestId, {
+    this.error,
+    this.failedMemberIds,
+    this.statusCode,
+  });
+}
+
+/// Group state snapshot (MS08) forwarded for on-device persistence.
+/// [GroupStateUpdate] carries only primitives and plain data classes.
+class EventGroupStateUpdate extends IsolateEvent {
+  final GroupStateUpdate update;
+  EventGroupStateUpdate(this.update);
+}
+
+/// Group handshake received over a 1:1 channel (MS08, Decision 8).
+class EventGroupHandshake extends IsolateEvent {
+  final GroupHandshakeEvent event;
+  EventGroupHandshake(this.event);
 }
 
 /// OH state change (cursor advanced, renewal, mailbox overflow) forwarded

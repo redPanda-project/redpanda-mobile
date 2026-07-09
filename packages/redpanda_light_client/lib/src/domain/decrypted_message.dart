@@ -21,6 +21,10 @@ class DecryptedMessage {
   /// correlated (and consumed) via its session tag.
   final bool viaSessionTag;
 
+  /// MS08: the authenticated sender member id (hex) for group messages
+  /// (the group id is in [channelId]); null for 1:1 messages.
+  final String? senderMemberIdHex;
+
   const DecryptedMessage({
     required this.id,
     required this.content,
@@ -28,5 +32,6 @@ class DecryptedMessage {
     this.senderTimestampMs = 0,
     this.channelId,
     this.viaSessionTag = false,
+    this.senderMemberIdHex,
   });
 }

@@ -2,15 +2,17 @@ import 'dart:convert';
 import 'package:drift/drift.dart' as drift;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:hex/hex.dart';
 import 'package:redpanda/database/database.dart';
+import 'package:redpanda/repositories/group_repository.dart';
 import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/repositories/outbound_handle_repository.dart';
 import 'package:redpanda/screens/chat/share_qr_dialog.dart';
 import 'package:redpanda/services/message_sync_service.dart';
 import 'package:redpanda/shared/providers.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart'
-    show DepositException;
+    show DepositException, GroupSendException;
 
 class ChatScreen extends ConsumerStatefulWidget {
   final String peerUuid;
@@ -36,6 +38,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     if (currentUser == null) return;
 
     final messages = ref.read(messageRepositoryProvider);
+    final isGroup = await ref
+        .read(groupRepositoryProvider)
+        .isGroup(widget.peerUuid);
 
     // Insert message locally with pending status
     final rowId = await messages.insertOutgoing(
@@ -50,11 +55,30 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     // reports deposit rejections (FlaschenpostPutResponse) — surface those to
     // the user, analogous to the mailbox-overflow warning.
     try {
-      final usedId = await ref
-          .read(redPandaClientProvider)
-          .sendMessage(widget.peerUuid, content);
+      final client = ref.read(redPandaClientProvider);
+      final usedId = isGroup
+          ? await client.sendGroupMessage(widget.peerUuid, content)
+          : await client.sendMessage(widget.peerUuid, content);
       await messages.setNetworkMessageId(rowId, usedId);
       await messages.updateMessageStatus(rowId, MessageStatus.sent);
+    } on GroupSendException catch (e) {
+      // MS08: some members were not reached — the retry queue re-fans-out
+      // with the SAME message id (receivers deduplicate), so persist the id
+      // the partial fan-out already used.
+      if (e.messageIdHex != null) {
+        await messages.setNetworkMessageId(rowId, e.messageIdHex!);
+      }
+      await messages.markRetryAttempt(rowId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '${e.failedMemberIds.length} member(s) not reached yet — '
+              'will retry.',
+            ),
+          ),
+        );
+      }
     } on DepositException catch (e) {
       if (e.isBadRequest) {
         // Over the per-item size limit — retrying can never succeed.
@@ -105,6 +129,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final messagesAsync = ref.watch(messagesStreamProvider(widget.peerUuid));
     final channelAsync = ref.watch(channelProvider(widget.peerUuid));
 
+    // MS08: this conversation may be a group instead of a 1:1 channel.
+    final group = ref
+        .watch(groupsProvider)
+        .value
+        ?.where((g) => g.groupId == widget.peerUuid)
+        .firstOrNull;
+    final groupMembers = group != null
+        ? ref.watch(groupMembersProvider(widget.peerUuid)).value ?? const []
+        : const <GroupMemberRow>[];
+    final memberNames = {
+      for (final member in groupMembers) member.memberId: member.displayName,
+    };
+
     // Warn when the Full Node evicted messages from our mailbox.
     ref.listen(mailboxOverflowProvider, (_, next) {
       final update = next.value;
@@ -143,21 +180,45 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: channelAsync.when(
-          data: (channel) => Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(channel?.label ?? "Unknown"),
-              const Text(
-                "Private Channel",
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.normal),
+        title: group != null
+            ? Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(group.label),
+                  Text(
+                    group.keyEpoch == 0
+                        ? 'Waiting for the group key…'
+                        : '${groupMembers.length} members',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.normal,
+                    ),
+                  ),
+                ],
+              )
+            : channelAsync.when(
+                data: (channel) => Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(channel?.label ?? "Unknown"),
+                    const Text(
+                      "Private Channel",
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.normal,
+                      ),
+                    ),
+                  ],
+                ),
+                loading: () => const Text("Loading..."),
+                error: (_, _) => const Text("Chat"),
               ),
-            ],
-          ),
-          loading: () => const Text("Loading..."),
-          error: (_, _) => const Text("Chat"),
-        ),
         actions: [
+          if (group != null)
+            IconButton(
+              icon: const Icon(Icons.info_outline),
+              onPressed: () => context.push('/groups/${widget.peerUuid}/info'),
+            ),
           channelAsync.when(
             data: (channel) {
               if (channel == null) return const SizedBox.shrink();
@@ -219,13 +280,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   itemCount: messages.length,
                   itemBuilder: (context, index) {
                     final msg = messages[index];
-                    final isMe =
-                        msg.conversationId == widget.peerUuid &&
-                        msg.senderId != widget.peerUuid;
-                    // Note: Logic above is a bit simplified. Usually check if senderId == myUuid.
-                    // But here, if senderId != peerUuid, assume it's me.
+                    // MS08: in groups the sender is a member id, so "mine"
+                    // is decided by the status (incoming rows are always
+                    // `received`); 1:1 keeps the legacy heuristic.
+                    final isMe = group != null
+                        ? msg.status != MessageStatus.received
+                        : msg.conversationId == widget.peerUuid &&
+                              msg.senderId != widget.peerUuid;
 
                     final statusIcon = isMe ? _statusIcon(msg.status) : null;
+                    // MS08: authenticated sender name for group messages.
+                    final senderName = !isMe && msg.senderMemberId != null
+                        ? memberNames[msg.senderMemberId] ?? 'Unknown member'
+                        : null;
 
                     return Align(
                       alignment: isMe
@@ -245,15 +312,30 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                 ).colorScheme.surfaceContainerHighest,
                           borderRadius: BorderRadius.circular(16),
                         ),
-                        child: Row(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
-                            Flexible(child: Text(msg.content)),
-                            if (statusIcon != null) ...[
-                              const SizedBox(width: 6),
-                              statusIcon,
-                            ],
+                            if (senderName != null)
+                              Text(
+                                senderName,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  color: Theme.of(context).colorScheme.primary,
+                                ),
+                              ),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Flexible(child: Text(msg.content)),
+                                if (statusIcon != null) ...[
+                                  const SizedBox(width: 6),
+                                  statusIcon,
+                                ],
+                              ],
+                            ),
                           ],
                         ),
                       ),

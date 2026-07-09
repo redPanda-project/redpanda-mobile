@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:redpanda/router.dart';
+import 'package:redpanda/services/group_service.dart';
 import 'package:redpanda/services/message_sync_service.dart';
 import 'package:redpanda/services/send_retry_queue.dart';
 import 'package:redpanda/shared/providers.dart';
@@ -32,6 +33,15 @@ class _MyAppState extends ConsumerState<MyApp> {
     unawaited(
       syncService.restorePersistedState().catchError(
         (Object e) => debugPrint('Failed to restore persisted OH state: $e'),
+      ),
+    );
+
+    // MS08: handshake handling + restore persisted groups into the client
+    final groupService = ref.read(groupServiceProvider);
+    groupService.start();
+    unawaited(
+      groupService.restorePersistedGroups().catchError(
+        (Object e) => debugPrint('Failed to restore persisted groups: $e'),
       ),
     );
     ref.read(sendRetryQueueProvider).start();

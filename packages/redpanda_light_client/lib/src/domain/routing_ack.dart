@@ -159,16 +159,22 @@ class RoutingAckUpdate {
   /// were scored down and the app should re-send over fresh hops.
   final bool timedOut;
 
+  /// MS08: the group member this delivery targeted (hex member id) —
+  /// group fan-outs request one R-ACK per recipient. Null for 1:1 sends.
+  final String? memberIdHex;
+
   const RoutingAckUpdate.ack({
     required this.channelId,
     required this.messageIdHex,
     required int this.status,
     required int this.latencyMs,
+    this.memberIdHex,
   }) : timedOut = false;
 
   const RoutingAckUpdate.timeout({
     required this.channelId,
     required this.messageIdHex,
+    this.memberIdHex,
   }) : status = null,
        latencyMs = null,
        timedOut = true;
@@ -186,9 +192,14 @@ class ChannelAckUpdate {
   /// The partner's receive timestamp (their clock).
   final int timestampMs;
 
+  /// MS08: the group member that confirmed receipt (hex member id).
+  /// Null for 1:1 acks.
+  final String? memberIdHex;
+
   const ChannelAckUpdate({
     required this.channelId,
     required this.messageIdHex,
     required this.timestampMs,
+    this.memberIdHex,
   });
 }
