@@ -5,7 +5,9 @@
 version: 2
 updates:
   - package-ecosystem: "pub"
-    directory: "/"
+    directories:
+      - "/"
+      - "/packages/redpanda_light_client"
     schedule:
       interval: "monthly"
     target-branch: "main"
