@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [ main, develop ]
 
+# CI only checks out code, downloads a release asset, and runs tests —
+# nothing is pushed or published, so read access to contents is all it needs.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
