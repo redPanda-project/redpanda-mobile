@@ -1,0 +1,29 @@
+# Dependabot version updates (sdd01). Security alerts/updates are enabled
+# separately in the repo settings.
+# Monthly + grouped to keep PR noise low (see plans/sdd01 in the main workspace).
+
+version: 2
+updates:
+  - package-ecosystem: "pub"
+    directories:
+      - "/"
+      - "/packages/redpanda_light_client"
+    schedule:
+      interval: "monthly"
+    target-branch: "main"
+    open-pull-requests-limit: 2
+    groups:
+      pub-dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    target-branch: "main"
+    open-pull-requests-limit: 2
+    groups:
+      actions-dependencies:
+        patterns:
+          - "*"
