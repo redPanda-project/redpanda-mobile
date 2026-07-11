@@ -60,10 +60,11 @@ class RedPandaLightClient implements RedPandaClient {
       StreamController<ConnectionStatus>.broadcast();
   final _peerCountController = StreamController<int>.broadcast();
 
+  /// Bootstrap nodes of the first real v23 network (live since 2026-07-11).
+  /// Tests and local setups inject their own list via the `seeds` parameter.
   static const List<String> defaultSeeds = [
-    '65.109.130.115:59558',
-    'localhost:59558',
-    // 'localhost:59559',
+    '5.75.137.166:59558',
+    '46.224.156.238:59558',
   ];
 
   final SocketFactory _socketFactory;
