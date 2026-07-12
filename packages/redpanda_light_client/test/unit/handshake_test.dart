@@ -40,6 +40,7 @@ void main() {
     when(() => mockSocket.setOption(any(), any())).thenReturn(true);
     when(() => mockSocket.add(any())).thenReturn(null);
     when(() => mockSocket.destroy()).thenReturn(null);
+    when(() => mockSocket.done).thenAnswer((_) => Completer<void>().future);
 
     selfKeys = await KeyPair.generate();
     selfNodeId = NodeId(Uint8List(20));
