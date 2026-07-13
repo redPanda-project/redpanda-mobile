@@ -110,6 +110,15 @@ class SendRetryQueue {
             await _messages.setNetworkMessageId(msg.id, e.messageIdHex!);
           }
           await _messages.markRetryAttempt(msg.id);
+        } on UnknownPeerException catch (e) {
+          // Peer OH still unknown — normal backoff, becomes sendable once
+          // the peer OH is registered (see redpanda_light_client.dart
+          // sendMessage / REDPANDAJ-2DR).
+          debugPrint(
+            'SendRetryQueue: message ${msg.id} deferred, peer OH unknown '
+            'for channel ${e.channelId}',
+          );
+          await _messages.markRetryAttempt(msg.id);
         } on DepositException catch (e) {
           // MS02b: the node reported why the deposit was rejected.
           if (e.isBadRequest) {

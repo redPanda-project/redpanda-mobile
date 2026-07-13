@@ -369,5 +369,60 @@ void main() {
       );
       expect(frames, isEmpty, reason: 'nothing must be sent');
     });
+
+    test('REDPANDAJ-2DR: without a known peer OH, sendMessage refuses the '
+        'direct deposit instead of sending an empty oh_id', () async {
+      final (client, socket, _) = await setupClient(hopCount: 0);
+      addTearDown(client.disconnect);
+
+      final frames = <int>[];
+      socket.onCommandFrame = (cmd, _) => frames.add(cmd);
+
+      // No peerOhId passed at all: _channelPeerOhIds[channelId] stays null.
+      final channel = await Channel.generate('MS04-no-oh');
+      client.addChannelKeys(
+        channel.id,
+        channel.encryptionKey,
+        isChannelCreator: true,
+      );
+
+      await expectLater(
+        client.sendMessage(channel.id, 'Hello into the void'),
+        throwsA(isA<UnknownPeerException>()),
+      );
+      expect(
+        frames,
+        isEmpty,
+        reason:
+            'a FlaschenpostPut with an empty oh_id would be misparsed by '
+            'the node as a GMAck frame (REDPANDAJ-2DR) — nothing may be '
+            'sent when the peer OH is unknown',
+      );
+    });
+
+    test('REDPANDAJ-2DR: a malformed (wrong-length) peer OH is treated the '
+        'same as unknown — no direct deposit is sent', () async {
+      final (client, socket, _) = await setupClient(hopCount: 0);
+      addTearDown(client.disconnect);
+
+      final frames = <int>[];
+      socket.onCommandFrame = (cmd, _) => frames.add(cmd);
+
+      final channel = await Channel.generate('MS04-bad-oh');
+      client.addChannelKeys(
+        channel.id,
+        channel.encryptionKey,
+        // Wrong length (nodeIdLength is 20): must not be trusted as a real
+        // destination.
+        peerOhId: [1, 2, 3],
+        isChannelCreator: true,
+      );
+
+      await expectLater(
+        client.sendMessage(channel.id, 'Hello'),
+        throwsA(isA<UnknownPeerException>()),
+      );
+      expect(frames, isEmpty);
+    });
   });
 }

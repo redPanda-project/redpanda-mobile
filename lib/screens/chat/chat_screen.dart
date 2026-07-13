@@ -12,7 +12,7 @@ import 'package:redpanda/screens/chat/share_qr_dialog.dart';
 import 'package:redpanda/services/message_sync_service.dart';
 import 'package:redpanda/shared/providers.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart'
-    show DepositException, GroupSendException;
+    show DepositException, GroupSendException, UnknownPeerException;
 
 class ChatScreen extends ConsumerStatefulWidget {
   final String peerUuid;
@@ -95,6 +95,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   : e.isQuotaExceeded
                   ? "Recipient's mailbox is full — will retry later."
                   : 'Message could not be delivered yet — will retry later.',
+            ),
+          ),
+        );
+      }
+    } on UnknownPeerException catch (_) {
+      // The channel's partner OH mailbox isn't known yet (e.g. right after
+      // adding a contact, before the first handshake round-trip). Sending
+      // anyway would deposit with an empty oh_id, which the node silently
+      // drops (REDPANDAJ-2DR) — keep the message pending instead so the
+      // retry queue delivers it once the peer OH is known.
+      await messages.markRetryAttempt(rowId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Recipient not reachable yet — will retry automatically.',
             ),
           ),
         );

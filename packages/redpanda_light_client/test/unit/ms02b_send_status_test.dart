@@ -241,6 +241,11 @@ void main() {
       client.addChannelKeys(
         channel.id,
         channel.encryptionKey,
+        // A known peer OH is required for the direct-deposit fallback to be
+        // attempted at all (REDPANDAJ-2DR: sendMessage refuses to deposit
+        // with an unknown/empty oh_id) — these tests exercise the
+        // FlaschenpostPutResponse handling of that deposit.
+        peerOhId: List<int>.generate(20, (i) => i),
         isChannelCreator: true,
       );
 
@@ -257,6 +262,11 @@ void main() {
       client.addChannelKeys(
         channel.id,
         channel.encryptionKey,
+        // A known peer OH is required for the direct-deposit fallback to be
+        // attempted at all (REDPANDAJ-2DR: sendMessage refuses to deposit
+        // with an unknown/empty oh_id) — these tests exercise the
+        // FlaschenpostPutResponse handling of that deposit.
+        peerOhId: List<int>.generate(20, (i) => i),
         isChannelCreator: true,
       );
 
@@ -281,6 +291,11 @@ void main() {
       client.addChannelKeys(
         channel.id,
         channel.encryptionKey,
+        // A known peer OH is required for the direct-deposit fallback to be
+        // attempted at all (REDPANDAJ-2DR: sendMessage refuses to deposit
+        // with an unknown/empty oh_id) — these tests exercise the
+        // FlaschenpostPutResponse handling of that deposit.
+        peerOhId: List<int>.generate(20, (i) => i),
         isChannelCreator: true,
       );
 
@@ -307,6 +322,11 @@ void main() {
       client.addChannelKeys(
         channel.id,
         channel.encryptionKey,
+        // A known peer OH is required for the direct-deposit fallback to be
+        // attempted at all (REDPANDAJ-2DR: sendMessage refuses to deposit
+        // with an unknown/empty oh_id) — these tests exercise the
+        // FlaschenpostPutResponse handling of that deposit.
+        peerOhId: List<int>.generate(20, (i) => i),
         isChannelCreator: true,
       );
 
@@ -325,6 +345,11 @@ void main() {
       client.addChannelKeys(
         channel.id,
         channel.encryptionKey,
+        // A known peer OH is required for the direct-deposit fallback to be
+        // attempted at all (REDPANDAJ-2DR: sendMessage refuses to deposit
+        // with an unknown/empty oh_id) — these tests exercise the
+        // FlaschenpostPutResponse handling of that deposit.
+        peerOhId: List<int>.generate(20, (i) => i),
         isChannelCreator: true,
       );
 
