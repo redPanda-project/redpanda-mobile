@@ -13,6 +13,7 @@ import 'package:redpanda_light_client/src/domain/channel.dart';
 import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/domain/reverse_garlic_block.dart';
+import 'package:redpanda_light_client/src/domain/send_exceptions.dart';
 import 'package:redpanda_light_client/src/garlic/garlic_builder.dart';
 import 'package:redpanda_light_client/src/generated/commands.pb.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
@@ -413,15 +414,24 @@ void main() {
       final message = await aliceSession.decrypt(payload, channel.id);
       expect(message.content, 'Reply through your hops!');
 
-      // Consumed: the persistence snapshot clears the pending RGB and the
-      // next send cannot use it (no peer OH id → direct deposit fallback).
+      // Consumed: the persistence snapshot clears the pending RGB, and the
+      // next send has no route left at all — no RGB, no known peer OH, no
+      // garlic hops for this channel. REDPANDAJ-2DR: sendMessage must refuse
+      // rather than deposit with an empty oh_id.
       await waitFor(() => updates.isNotEmpty);
       expect(updates.last.pendingRgbHex, isNull);
 
-      await client.sendMessage(channel.id, 'Second message');
-      await waitFor(() => frames.length >= 2);
-      expect(frames[1].$1, 141, reason: 'RGB is single-use');
-      expect(client.lastSendViaRgb, isFalse);
+      await expectLater(
+        client.sendMessage(channel.id, 'Second message'),
+        throwsA(isA<UnknownPeerException>()),
+      );
+      expect(
+        frames,
+        hasLength(1),
+        reason:
+            'RGB is single-use and no other route is known; nothing '
+            'more may be sent',
+      );
     });
 
     test('an expired RGB is discarded and the reply falls back to the '

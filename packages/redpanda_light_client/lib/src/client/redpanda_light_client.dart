@@ -1007,6 +1007,23 @@ class RedPandaLightClient implements RedPandaClient {
         'falling back to a direct deposit (no relay privacy)',
       );
     }
+
+    // A direct deposit needs the partner's OH mailbox id. Without one (or
+    // with a malformed one) the FlaschenpostPut would go out with an empty
+    // oh_id, which the node's legacy garlic-parsing fallback misparses as a
+    // GMAck frame and silently drops (REDPANDAJ-2DR) — the message would be
+    // lost even though the app believes the retry queue will eventually
+    // deliver it. Fail loudly instead: the app layer keeps the message
+    // pending and retries once the peer OH is known, instead of firing a
+    // packet that can never be understood by the node.
+    if (peerOhId == null || peerOhId.length != GarlicHop.nodeIdLength) {
+      RpLog.info(
+        'RedPandaLightClient: sendMessage() channel $channelId has no known '
+        'peer OH — refusing the direct-deposit fallback, message stays '
+        'pending for retry',
+      );
+      throw UnknownPeerException(channelId);
+    }
     lastSendHopCount = 0;
 
     // Direct fallback (MS01/MS02b): FlaschenpostPut with target OH mailbox
@@ -1015,7 +1032,7 @@ class RedPandaLightClient implements RedPandaClient {
     // surface here instead of failing silently.
     final flaschenpost = FlaschenpostPut()
       ..content = payload
-      ..ohId = peerOhId ?? Uint8List(0)
+      ..ohId = peerOhId
       ..wantResponse = true;
 
     final completer = _putResponses.register();

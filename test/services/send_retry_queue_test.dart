@@ -5,7 +5,7 @@ import 'package:redpanda/repositories/group_repository.dart';
 import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/services/send_retry_queue.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart'
-    show DepositException, DepositStatus;
+    show DepositException, DepositStatus, UnknownPeerException;
 
 import '../helpers/fake_redpanda_client.dart';
 import '../helpers/test_database.dart';
@@ -171,6 +171,53 @@ void main() {
       final msg = await messageById(id);
       expect(msg.status, equals(MessageStatus.pending));
       expect(msg.retryCount, equals(1));
+    });
+
+    test('REDPANDAJ-2DR: unknown peer OH keeps the message pending with the '
+        'normal backoff instead of a doomed empty-oh_id deposit', () async {
+      // sendMessage refuses to deposit with an empty oh_id (would be
+      // misparsed by the node as a GMAck frame) and throws
+      // UnknownPeerException instead — the message must stay queued for
+      // retry, not be marked failed or lost.
+      client.sendError = UnknownPeerException('channel-1');
+      final id = await insertPending();
+
+      await queue.retryPending();
+
+      final msg = await messageById(id);
+      expect(msg.status, equals(MessageStatus.pending));
+      expect(msg.retryCount, equals(1));
+      expect(msg.lastRetryAt, isNotNull);
+    });
+
+    test('REDPANDAJ-2DR: once the peer OH becomes known, a subsequent retry '
+        'pass delivers the message', () async {
+      client.sendError = UnknownPeerException('channel-1');
+      final id = await insertPending(
+        retryCount: 3,
+        lastRetryAt: DateTime.now().subtract(const Duration(minutes: 9)),
+      );
+
+      await queue.retryPending();
+      expect((await messageById(id)).status, equals(MessageStatus.pending));
+      expect(client.sentMessages, isEmpty);
+
+      // Peer OH is now known (e.g. the partner's handshake arrived) —
+      // sendMessage succeeds on the next due retry pass. Push lastRetryAt
+      // back far enough for the backoff window to be open again.
+      client.sendError = null;
+      await (db.update(db.messages)..where((t) => t.id.equals(id))).write(
+        MessagesCompanion(
+          lastRetryAt: drift.Value(
+            DateTime.now().subtract(const Duration(minutes: 30)),
+          ),
+        ),
+      );
+
+      await queue.retryPending();
+
+      expect(client.sentMessages, hasLength(1));
+      expect((await messageById(id)).status, equals(MessageStatus.sent));
     });
 
     test('does not touch sent or failed messages', () async {
