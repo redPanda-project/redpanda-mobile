@@ -22,6 +22,9 @@ import '../helpers/garlic_test_utils.dart';
 /// inject node responses. The exchange stays in plaintext because the
 /// encryption handshake is never completed — command framing is identical.
 class ScriptedSocket implements Socket {
+  @override
+  Future<void> get done => Completer<void>().future;
+
   final _incoming = StreamController<Uint8List>();
   final List<int> _outBuffer = [];
   bool _handshakeAnswered = false;

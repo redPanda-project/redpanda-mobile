@@ -11,6 +11,9 @@ class MockSocket implements Socket {
   bool isClosed = false;
 
   @override
+  Future<void> get done => Completer<void>().future;
+
+  @override
   StreamSubscription<Uint8List> listen(
     void Function(Uint8List event)? onData, {
     Function? onError,

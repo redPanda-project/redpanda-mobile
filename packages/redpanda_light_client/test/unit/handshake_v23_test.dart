@@ -15,6 +15,9 @@ import 'package:test/test.dart';
 /// framed AES-256-GCM transport. Lets tests observe the client's encrypted
 /// frames and inject (optionally tampered) server frames.
 class ScriptedV23Server implements Socket {
+  @override
+  Future<void> get done => Completer<void>().future;
+
   final _incoming = StreamController<Uint8List>();
   final List<int> _outBuffer = [];
 

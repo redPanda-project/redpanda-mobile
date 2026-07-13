@@ -45,6 +45,7 @@ void main() {
     when(() => mockSocket.setOption(any(), any())).thenReturn(true);
     when(() => mockSocket.add(any())).thenReturn(null);
     when(() => mockSocket.destroy()).thenReturn(null);
+    when(() => mockSocket.done).thenAnswer((_) => Completer<void>().future);
 
     // Use the KeyPair.generate() factory which creates a valid dummy pair
     selfKeys = await KeyPair.generate();

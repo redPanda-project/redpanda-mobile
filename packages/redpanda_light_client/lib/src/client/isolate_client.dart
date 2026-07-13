@@ -1,7 +1,10 @@
 import 'dart:async';
 import 'dart:isolate';
+import 'dart:math' as math;
 
 import 'dart:typed_data';
+
+import 'package:hex/hex.dart';
 
 import 'package:redpanda_light_client/src/client/isolate_protocol.dart';
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
@@ -33,6 +36,38 @@ class RedPandaIsolateClient implements RedPandaClient {
   SendPort? _sendPort;
   final ReceivePort _receivePort = ReceivePort();
   final Completer<void> _isolateReady = Completer<void>();
+
+  // Supervision: an unhandled error in the worker isolate is fatal for the
+  // isolate (errorsAreFatal default) and would otherwise silently kill all
+  // networking — timers, reconnects, polling — until the app restarts.
+  // We watch onExit/onError and respawn the worker with backoff.
+  ReceivePort? _exitPort;
+  ReceivePort? _errorPort;
+  Isolate? _isolate;
+  bool _disposed = false;
+  int _spawnGeneration = 0;
+  int _respawnAttempts = 0;
+  bool _respawnScheduled = false;
+  bool _connectRequested = false;
+  bool _lifecyclePaused = false;
+
+  // Identity for CmdInit; resolved once on the main isolate so a respawned
+  // worker keeps the same node identity instead of generating a fresh one.
+  NodeId? _initNodeId;
+  KeyPair? _initKeys;
+
+  // Replay caches: the last state-establishing command per key, kept current
+  // from worker events (ratchet/garlic/mailbox updates), so a respawned
+  // worker is transparently re-initialized without stale crypto state.
+  final Map<String, CmdAddChannelKeys> _channelReplay = {};
+  final Map<String, CmdRestoreOutboundHandle> _ohReplay = {};
+  final Map<String, CmdRegisterGroup> _groupReplay = {};
+  final Set<String> _peerReplay = {};
+  List<NodeScore>? _nodeScoreReplay;
+
+  /// Worker entry point override — exists only so tests can inject a fake
+  /// worker; must be a top-level or static function.
+  final void Function(SendPort)? _workerEntryPointOverride;
 
   final _connectionStatusController =
       StreamController<ConnectionStatus>.broadcast();
@@ -79,37 +114,150 @@ class RedPandaIsolateClient implements RedPandaClient {
     NodeId? selfNodeId,
     KeyPair? selfKeys,
     this.seeds = const [],
+    void Function(SendPort)? workerEntryPoint,
   }) : _explicitNodeId = selfNodeId,
-       _explicitKeys = selfKeys {
+       _explicitKeys = selfKeys,
+       _workerEntryPointOverride = workerEntryPoint {
     _startIsolate();
   }
 
   Future<void> _startIsolate() async {
+    _receivePort.listen((message) {
+      if (message is SendPort) {
+        _onWorkerReady(message);
+      } else if (message is IsolateEvent) {
+        _handleEvent(message);
+      }
+    });
+    await _spawnWorker();
+  }
+
+  Future<void> _spawnWorker() async {
+    if (_disposed) return;
+    _exitPort?.close();
+    _errorPort?.close();
+    final exitPort = ReceivePort();
+    final errorPort = ReceivePort();
+    _exitPort = exitPort;
+    _errorPort = errorPort;
+    final generation = ++_spawnGeneration;
+
+    errorPort.listen((message) {
+      // [errorDescription, stackTrace] from the dying worker.
+      RpLog.info('RedPandaIsolateClient: worker error: $message');
+    });
+    exitPort.listen((_) {
+      if (generation != _spawnGeneration) return; // event from an old worker
+      RpLog.info('RedPandaIsolateClient: worker isolate died.');
+      _onWorkerDied();
+    });
+
     try {
-      await Isolate.spawn(
-        _isolateEntryPoint,
+      _isolate = await Isolate.spawn(
+        _workerEntryPointOverride ?? _isolateEntryPoint,
         _receivePort.sendPort,
         debugName: 'RedPandaNetworkWorker',
+        onExit: exitPort.sendPort,
+        onError: errorPort.sendPort,
       );
-
-      _receivePort.listen((message) {
-        if (message is SendPort) {
-          _sendPort = message;
-          _sendInitCommand();
-          _isolateReady.complete();
-        } else if (message is IsolateEvent) {
-          _handleEvent(message);
-        }
-      });
+      if (_disposed) {
+        _isolate?.kill(priority: Isolate.immediate);
+      }
     } catch (e) {
-      RpLog.debug('RedPandaIsolateClient: Failed to spawn isolate: $e');
+      RpLog.info('RedPandaIsolateClient: Failed to spawn isolate: $e');
+      _onWorkerDied();
     }
   }
 
-  void _sendInitCommand() {
-    _sendPort?.send(
-      CmdInit(nodeId: _explicitNodeId, keyPair: _explicitKeys, seeds: seeds),
+  /// Permanently shuts down the worker isolate and the supervision (no
+  /// further respawns). Used by tests; the app keeps the client alive for
+  /// its whole lifetime.
+  void dispose() {
+    _disposed = true;
+    _isolate?.kill(priority: Isolate.immediate);
+    _isolate = null;
+    _exitPort?.close();
+    _errorPort?.close();
+    _receivePort.close();
+    _sendPort = null;
+    _failPendingRequests();
+  }
+
+  Future<void> _onWorkerReady(SendPort port) async {
+    _respawnAttempts = 0;
+    _initKeys ??= _explicitKeys ?? await KeyPair.generate();
+    _initNodeId ??= _explicitNodeId ?? NodeId.fromPublicKey(_initKeys!);
+    _sendPort = port;
+    port.send(CmdInit(nodeId: _initNodeId, keyPair: _initKeys, seeds: seeds));
+    _replayState(port);
+    if (!_isolateReady.isCompleted) {
+      _isolateReady.complete();
+    }
+  }
+
+  void _onWorkerDied() {
+    if (_disposed) return;
+    _sendPort = null;
+    _failPendingRequests();
+    if (_respawnScheduled) return;
+    _respawnScheduled = true;
+    final delayMs = math.min(
+      30000,
+      500 * math.pow(2, _respawnAttempts).toInt(),
     );
+    _respawnAttempts++;
+    RpLog.info('RedPandaIsolateClient: respawning worker in ${delayMs}ms');
+    Timer(Duration(milliseconds: delayMs), () {
+      _respawnScheduled = false;
+      if (_sendPort != null) return; // already alive again
+      _spawnWorker();
+    });
+  }
+
+  /// Fails every request still waiting on the dead worker so callers (UI,
+  /// retry queue) get an error now instead of hanging into their timeout.
+  void _failPendingRequests() {
+    StateError error() => StateError('network worker restarted; request lost');
+    for (final completer in _pendingSends.values) {
+      if (!completer.isCompleted) completer.completeError(error());
+    }
+    _pendingSends.clear();
+    for (final completer in _pendingGroupOps.values) {
+      if (!completer.isCompleted) completer.completeError(error());
+    }
+    _pendingGroupOps.clear();
+    for (final completer in _pendingOhRegistrations.values) {
+      if (!completer.isCompleted) completer.completeError(error());
+    }
+    _pendingOhRegistrations.clear();
+  }
+
+  /// Re-establishes the worker state after a respawn: known peers, channel
+  /// keys (with the latest ratchet/garlic state), OH registrations, groups,
+  /// node scores and the connect/lifecycle flags.
+  void _replayState(SendPort port) {
+    for (final address in _peerReplay) {
+      port.send(CmdAddPeer(address));
+    }
+    for (final cmd in _channelReplay.values) {
+      port.send(cmd);
+    }
+    for (final cmd in _ohReplay.values) {
+      port.send(cmd);
+    }
+    for (final cmd in _groupReplay.values) {
+      port.send(cmd);
+    }
+    final scores = _nodeScoreReplay;
+    if (scores != null && scores.isNotEmpty) {
+      port.send(CmdRestoreNodeScores(scores));
+    }
+    if (_connectRequested) {
+      port.send(CmdConnect());
+    }
+    if (_lifecyclePaused) {
+      port.send(CmdLifecyclePause());
+    }
   }
 
   void _handleEvent(IsolateEvent event) {
@@ -130,6 +278,14 @@ class RedPandaIsolateClient implements RedPandaClient {
     } else if (event is EventIncomingMessage) {
       _incomingMessageController.add(event.message);
     } else if (event is EventOhRegistered) {
+      // Keep the registration replayable for a respawned worker.
+      _ohReplay[HEX.encode(event.ohId)] = CmdRestoreOutboundHandle(
+        ohId: event.ohId,
+        privateKeyBytes: event.privateKeyBytes,
+        expiresAtMs: event.expiresAtMs,
+        channelId: event.channelId,
+        serverEndpoint: event.serverEndpoint,
+      );
       final completer = _pendingOhRegistrations.remove(event.requestId);
       if (completer != null && !completer.isCompleted) {
         try {
@@ -191,6 +347,17 @@ class RedPandaIsolateClient implements RedPandaClient {
     } else if (event is EventGroupHandshake) {
       _groupHandshakeController.add(event.event);
     } else if (event is EventOhMailboxUpdate) {
+      final replay = _ohReplay[HEX.encode(event.ohId)];
+      if (replay != null) {
+        _ohReplay[HEX.encode(event.ohId)] = CmdRestoreOutboundHandle(
+          ohId: replay.ohId,
+          privateKeyBytes: replay.privateKeyBytes,
+          expiresAtMs: event.expiresAtMs,
+          channelId: replay.channelId,
+          serverEndpoint: replay.serverEndpoint,
+          lastCursor: event.lastCursor,
+        );
+      }
       _ohMailboxUpdateController.add(
         OhMailboxUpdate(
           ohId: event.ohId,
@@ -201,6 +368,7 @@ class RedPandaIsolateClient implements RedPandaClient {
         ),
       );
     } else if (event is EventRatchetStateUpdate) {
+      _patchChannelReplay(event.channelId, ratchetState: event.stateJson);
       _ratchetStateController.add(
         RatchetStateUpdate(
           channelId: event.channelId,
@@ -208,6 +376,12 @@ class RedPandaIsolateClient implements RedPandaClient {
         ),
       );
     } else if (event is EventGarlicSessionUpdate) {
+      _patchChannelReplay(
+        event.channelId,
+        sessionTags: event.sessionTags,
+        pendingRgbHex: event.pendingRgbHex,
+        patchGarlic: true,
+      );
       _garlicSessionController.add(
         GarlicSessionUpdate(
           channelId: event.channelId,
@@ -238,10 +412,37 @@ class RedPandaIsolateClient implements RedPandaClient {
         ),
       );
     } else if (event is EventNodeScores) {
+      _nodeScoreReplay = event.scores;
       _nodeScoreController.add(event.scores);
     } else if (event is EventLog) {
       RpLog.debug('[Isolate] ${event.message}');
     }
+  }
+
+  /// Updates the cached [CmdAddChannelKeys] for [channelId] with newer
+  /// ratchet or garlic state, so a worker respawn never replays stale
+  /// crypto state (which would break the ratchet chain).
+  void _patchChannelReplay(
+    String channelId, {
+    String? ratchetState,
+    Map<String, int>? sessionTags,
+    String? pendingRgbHex,
+    bool patchGarlic = false,
+  }) {
+    final old = _channelReplay[channelId];
+    if (old == null) return;
+    _channelReplay[channelId] = CmdAddChannelKeys(
+      old.channelId,
+      old.encryptionKey,
+      peerOhId: old.peerOhId,
+      peerOhEndpoint: old.peerOhEndpoint,
+      isChannelCreator: old.isChannelCreator,
+      ratchetState: ratchetState ?? old.ratchetState,
+      // A garlic update is an authoritative snapshot: pendingRgbHex may
+      // legitimately become null (block consumed).
+      sessionTags: patchGarlic ? sessionTags : old.sessionTags,
+      pendingRgbHex: patchGarlic ? pendingRgbHex : old.pendingRgbHex,
+    );
   }
 
   void _send(IsolateCommand cmd) {
@@ -281,17 +482,20 @@ class RedPandaIsolateClient implements RedPandaClient {
 
   @override
   Future<void> connect() async {
+    _connectRequested = true;
     await _isolateReady.future;
     _send(CmdConnect());
   }
 
   @override
   Future<void> disconnect() async {
+    _connectRequested = false;
     _send(CmdDisconnect());
   }
 
   @override
   Future<void> addPeer(String address) async {
+    _peerReplay.add(address);
     _send(CmdAddPeer(address));
   }
 
@@ -348,16 +552,16 @@ class RedPandaIsolateClient implements RedPandaClient {
   @override
   Future<void> restoreOutboundHandle(OHRegistration registration) async {
     await _isolateReady.future;
-    _send(
-      CmdRestoreOutboundHandle(
-        ohId: registration.ohId,
-        privateKeyBytes: registration.keypair.privateKeyBytes.toList(),
-        expiresAtMs: registration.expiresAtMs,
-        channelId: registration.channelId,
-        serverEndpoint: registration.serverEndpoint,
-        lastCursor: registration.lastCursor,
-      ),
+    final cmd = CmdRestoreOutboundHandle(
+      ohId: registration.ohId,
+      privateKeyBytes: registration.keypair.privateKeyBytes.toList(),
+      expiresAtMs: registration.expiresAtMs,
+      channelId: registration.channelId,
+      serverEndpoint: registration.serverEndpoint,
+      lastCursor: registration.lastCursor,
     );
+    _ohReplay[HEX.encode(registration.ohId)] = cmd;
+    _send(cmd);
   }
 
   @override
@@ -376,18 +580,18 @@ class RedPandaIsolateClient implements RedPandaClient {
     Map<String, int>? sessionTags,
     String? pendingRgbHex,
   }) {
-    _send(
-      CmdAddChannelKeys(
-        channelId,
-        encryptionKey,
-        peerOhId: peerOhId,
-        peerOhEndpoint: peerOhEndpoint,
-        isChannelCreator: isChannelCreator,
-        ratchetState: ratchetState,
-        sessionTags: sessionTags,
-        pendingRgbHex: pendingRgbHex,
-      ),
+    final cmd = CmdAddChannelKeys(
+      channelId,
+      encryptionKey,
+      peerOhId: peerOhId,
+      peerOhEndpoint: peerOhEndpoint,
+      isChannelCreator: isChannelCreator,
+      ratchetState: ratchetState,
+      sessionTags: sessionTags,
+      pendingRgbHex: pendingRgbHex,
     );
+    _channelReplay[channelId] = cmd;
+    _send(cmd);
   }
 
   @override
@@ -411,6 +615,7 @@ class RedPandaIsolateClient implements RedPandaClient {
 
   @override
   void restoreNodeScores(List<NodeScore> scores) {
+    _nodeScoreReplay = scores;
     _send(CmdRestoreNodeScores(scores));
   }
 
@@ -438,6 +643,7 @@ class RedPandaIsolateClient implements RedPandaClient {
 
   @override
   void registerGroup(GroupRegistration registration) {
+    _groupReplay[registration.groupId] = CmdRegisterGroup(registration);
     _send(CmdRegisterGroup(registration));
   }
 
@@ -527,16 +733,28 @@ class RedPandaIsolateClient implements RedPandaClient {
 
   // Lifecycle hooks proxied
   void onPause() {
+    _lifecyclePaused = true;
     _send(CmdLifecyclePause());
   }
 
   void onResume() {
+    _lifecyclePaused = false;
     _send(CmdLifecycleResume());
   }
 }
 
 /// The entry point for the background isolate.
 void _isolateEntryPoint(SendPort mainSendPort) {
+  // Catch every uncaught async error (e.g. a socket write failing with
+  // "connection reset by peer") so a single bad connection can never take
+  // down the whole network worker. The supervision in
+  // [RedPandaIsolateClient] remains as the last line of defense.
+  runZonedGuarded(() => _runWorker(mainSendPort), (error, stack) {
+    mainSendPort.send(EventLog('RedPandaWorker: uncaught error: $error'));
+  });
+}
+
+void _runWorker(SendPort mainSendPort) {
   final receivePort = ReceivePort();
   mainSendPort.send(receivePort.sendPort);
 

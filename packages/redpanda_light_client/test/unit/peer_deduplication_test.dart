@@ -7,6 +7,9 @@ import 'package:redpanda_light_client/redpanda_light_client.dart';
 // Mock Socket
 class MockSocket implements Socket {
   final StreamController<Uint8List> _controller = StreamController<Uint8List>();
+
+  @override
+  Future<void> get done => Completer<void>().future;
   bool isClosed = false;
 
   @override

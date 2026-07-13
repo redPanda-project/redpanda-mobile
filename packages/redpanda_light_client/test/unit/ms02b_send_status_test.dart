@@ -17,6 +17,9 @@ import 'package:redpanda_light_client/src/network/active_peer.dart';
 /// inject node responses. The exchange stays in plaintext because the
 /// encryption handshake is never completed — command framing is identical.
 class ScriptedSocket implements Socket {
+  @override
+  Future<void> get done => Completer<void>().future;
+
   final _incoming = StreamController<Uint8List>();
   final List<int> _outBuffer = [];
   bool _handshakeAnswered = false;

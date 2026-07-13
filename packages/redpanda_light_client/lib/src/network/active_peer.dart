@@ -131,6 +131,17 @@ class ActivePeer {
       socket.setOption(SocketOption.tcpNoDelay, true);
       _socket = socket;
 
+      // Write failures (e.g. "connection reset by peer" during a send)
+      // surface on socket.done, not on the read stream's onError handler.
+      // Without a listener they become unhandled async errors that are
+      // fatal for the surrounding isolate.
+      unawaited(
+        socket.done.catchError((Object e) {
+          RpLog.debug('ActivePeer($address) socket write error: $e');
+          _shutdown();
+        }),
+      );
+
       RpLog.debug('ActivePeer($address): TCP Connected. Sending Handshake...');
       _sendHandshake();
 

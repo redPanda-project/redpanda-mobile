@@ -26,6 +26,9 @@ import '../helpers/garlic_test_utils.dart';
 /// client writes and lets the test inject node responses. Extended for MS05
 /// with the OH fetch/ack frames so fetchMessages can be scripted.
 class ScriptedSocket implements Socket {
+  @override
+  Future<void> get done => Completer<void>().future;
+
   final _incoming = StreamController<Uint8List>();
   final List<int> _outBuffer = [];
   bool _handshakeAnswered = false;
