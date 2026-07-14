@@ -3,13 +3,21 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:redpanda/router.dart';
+import 'package:redpanda/services/field_logging.dart';
 import 'package:redpanda/services/group_service.dart';
 import 'package:redpanda/services/message_sync_service.dart';
 import 'package:redpanda/services/send_retry_queue.dart';
 import 'package:redpanda/shared/providers.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // T17: restore the opt-in logcat sink before the client's first logs.
+  try {
+    await FieldLogging.init();
+  } catch (e) {
+    debugPrint('Failed to restore field logging setting: $e');
+  }
   runApp(const ProviderScope(child: MyApp()));
 }
 

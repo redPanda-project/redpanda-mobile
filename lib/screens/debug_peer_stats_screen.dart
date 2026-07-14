@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:redpanda/services/field_logging.dart';
 import 'package:redpanda/shared/providers.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
 
@@ -11,6 +12,18 @@ class DebugPeerStatsScreen extends ConsumerWidget {
     final snapshotAsync = ref.watch(peerStatsSnapshotProvider);
     final activePeers = ref.watch(activePeersProvider);
     final connectingPeers = ref.watch(connectingPeersProvider);
+    final fieldLogging = ref.watch(fieldLoggingProvider);
+
+    final loggingToggle = SwitchListTile(
+      title: const Text('Field logging (logcat)'),
+      subtitle: const Text(
+        'Writes operational logs to the device log for adb logcat. '
+        'Info level only — never OH ids, peer addresses or payloads.',
+      ),
+      value: fieldLogging,
+      onChanged: (value) =>
+          ref.read(fieldLoggingProvider.notifier).setEnabled(value),
+    );
 
     return Scaffold(
       appBar: AppBar(title: const Text('Peer Network Status')),
@@ -47,13 +60,21 @@ class DebugPeerStatsScreen extends ConsumerWidget {
           });
 
           if (peerStatsList.isEmpty) {
-            return const Center(child: Text('No peers known yet.'));
+            return Column(
+              children: [
+                loggingToggle,
+                const Expanded(
+                  child: Center(child: Text('No peers known yet.')),
+                ),
+              ],
+            );
           }
 
           return ListView.builder(
-            itemCount: peerStatsList.length,
+            itemCount: peerStatsList.length + 1,
             itemBuilder: (context, index) {
-              final p = peerStatsList[index];
+              if (index == 0) return loggingToggle;
+              final p = peerStatsList[index - 1];
               final isConnected = activePeers.contains(p.address);
               final isConnecting = connectingPeers.contains(p.address);
               final isPrimary = top3Addresses.contains(p.address);
