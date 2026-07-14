@@ -92,7 +92,7 @@ void main() {
     });
 
     test('respects the backoff window between attempts', () async {
-      // Last attempt just now with 3 failures → due again in 8 minutes.
+      // Last attempt just now with 3 failures → due again in 2 minutes.
       await insertPending(retryCount: 3, lastRetryAt: DateTime.now());
 
       await queue.retryPending();
@@ -233,16 +233,30 @@ void main() {
   });
 
   group('SendRetryQueue backoff', () {
-    test('doubles per retry: 1, 2, 4, 8 minutes', () {
-      expect(SendRetryQueue.backoffFor(0), const Duration(minutes: 1));
-      expect(SendRetryQueue.backoffFor(1), const Duration(minutes: 2));
-      expect(SendRetryQueue.backoffFor(2), const Duration(minutes: 4));
-      expect(SendRetryQueue.backoffFor(3), const Duration(minutes: 8));
+    test('fast early retries then exponential tail', () {
+      // retryCount 0/1 fire within seconds so a dropped first attempt
+      // re-sends quickly; from retryCount 2 the tail doubles per step.
+      expect(SendRetryQueue.backoffFor(0), const Duration(seconds: 10));
+      expect(SendRetryQueue.backoffFor(1), const Duration(seconds: 30));
+      expect(SendRetryQueue.backoffFor(2), const Duration(minutes: 1));
+      expect(SendRetryQueue.backoffFor(3), const Duration(minutes: 2));
+      expect(SendRetryQueue.backoffFor(4), const Duration(minutes: 4));
+      expect(SendRetryQueue.backoffFor(5), const Duration(minutes: 8));
+      expect(SendRetryQueue.backoffFor(6), const Duration(minutes: 16));
     });
 
     test('is capped at 30 minutes', () {
-      expect(SendRetryQueue.backoffFor(5), const Duration(minutes: 30));
-      expect(SendRetryQueue.backoffFor(10), const Duration(minutes: 30));
+      expect(SendRetryQueue.backoffFor(7), const Duration(minutes: 30));
+      expect(SendRetryQueue.backoffFor(12), const Duration(minutes: 30));
+    });
+
+    test('QUOTA_EXCEEDED penalty still backs off at least 4 minutes', () {
+      // The mailbox-full penalty must not shrink to a few-second early
+      // window: backoffFor(quotaExceededPenalty) must stay >= 4 minutes.
+      expect(
+        SendRetryQueue.backoffFor(SendRetryQueue.quotaExceededPenalty),
+        greaterThanOrEqualTo(const Duration(minutes: 4)),
+      );
     });
 
     test('a message with no previous attempt is immediately due', () async {

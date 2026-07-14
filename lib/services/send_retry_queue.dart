@@ -9,25 +9,42 @@ import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/shared/providers.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
 
-/// Periodically re-sends pending messages with exponential backoff.
+/// Periodically re-sends pending messages with a fast-early / exponential-tail
+/// backoff.
 ///
 /// A message stays in status pending until a send attempt succeeds (then
 /// sent) or [maxRetries] attempts failed (then failed). Backoff between
-/// attempts is 2^retryCount minutes, capped at [maxBackoff].
+/// attempts follows [backoffFor]: the first few retries fire within seconds
+/// (a first-attempt drop from the DHT announce race re-sends quickly), then
+/// the tail doubles like before, capped at [maxBackoff].
 class SendRetryQueue {
   final MessageRepository _messages;
   final RedPandaClient _client;
   final GroupRepository _groups;
 
-  static const int maxRetries = 10;
-  static const Duration checkInterval = Duration(seconds: 60);
+  /// Worst-case total retry timespan is the sum of the backoff windows a
+  /// message can incur, i.e. sum(backoffFor(0..maxRetries-1)):
+  ///   10s+30s+1m+2m+4m+8m+16m + 5x30m = ~182 min (~3.0 h).
+  /// The old 60s/2^n schedule with maxRetries=10 summed to ~181 min, so
+  /// bumping maxRetries from 10 to 12 keeps the total window in the same
+  /// (~3 h) ballpark despite the much faster early retries.
+  static const int maxRetries = 12;
+
+  /// Periodic tick. Lowered from 60s to 10s to match the 10s first backoff —
+  /// a 60s tick would make the first fast retry no faster than one full
+  /// minute. Each pass is a cheap indexed DB query (getPendingMessages on
+  /// status=pending) and overlapping passes are skipped (see [retryPending]),
+  /// so ticking every 10s is safe.
+  static const Duration checkInterval = Duration(seconds: 10);
   static const Duration maxBackoff = Duration(minutes: 30);
 
   /// How much retryCount is incremented by when the recipient mailbox is
-  /// full (QUOTA_EXCEEDED, reject-new). Jumps the next backoff window to
-  /// >= 2^3 = 8 minutes — retrying sooner cannot succeed until the
-  /// recipient fetched and acknowledged their mailbox.
-  static const int quotaExceededPenalty = 3;
+  /// full (QUOTA_EXCEEDED, reject-new). With the fast-early schedule a small
+  /// penalty would only defer a few seconds, so it is 4: it lands the next
+  /// backoff window at backoffFor(4) = 4 minutes (>= 4 min) — retrying sooner
+  /// cannot succeed until the recipient fetched and acknowledged their
+  /// mailbox.
+  static const int quotaExceededPenalty = 4;
 
   Timer? _timer;
   bool _passInProgress = false;
@@ -51,8 +68,24 @@ class SendRetryQueue {
   }
 
   /// Backoff window after [retryCount] failed attempts.
+  ///
+  /// Fast early retries, exponential tail (static and pure):
+  ///   retryCount 0 -> 10s
+  ///   retryCount 1 -> 30s
+  ///   retryCount 2 -> 1m
+  ///   retryCount 3 -> 2m
+  ///   retryCount 4 -> 4m
+  ///   retryCount 5 -> 8m
+  ///   retryCount 6 -> 16m
+  ///   retryCount >= 7 -> 30m (doubling from retryCount 2 on, i.e.
+  ///                           2^(retryCount-2) min, capped at [maxBackoff]).
   static Duration backoffFor(int retryCount) {
-    final minutes = min(1 << retryCount, maxBackoff.inMinutes);
+    const earlySeconds = <int>[10, 30];
+    if (retryCount < earlySeconds.length) {
+      return Duration(seconds: earlySeconds[retryCount]);
+    }
+    // From retryCount 2 onward: 1, 2, 4, ... minutes = 2^(retryCount-2) min.
+    final minutes = min(1 << (retryCount - 2), maxBackoff.inMinutes);
     return Duration(minutes: minutes);
   }
 
