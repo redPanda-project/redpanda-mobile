@@ -85,6 +85,26 @@ void main() {
       expect(await repo.watchPendingCount().first, equals(1));
     });
 
+    test(
+      'resetForImmediateRetry re-queues a failed message with fresh backoff',
+      () async {
+        final id = await repo.insertOutgoing(
+          conversationId: 'channel-1',
+          senderId: 'me',
+          content: 'Hello',
+        );
+        await repo.markRetryAttempt(id, penalty: 5);
+        await repo.updateMessageStatus(id, MessageStatus.failed);
+
+        await repo.resetForImmediateRetry(id);
+
+        final msg = (await repo.getPendingMessages()).single;
+        expect(msg.id, equals(id));
+        expect(msg.status, equals(MessageStatus.pending));
+        expect(msg.retryCount, equals(0));
+        expect(msg.lastRetryAt, isNull);
+      },
+    );
     test('requeueStuckSent re-queues only sent messages', () async {
       Future<int> insertWithStatus(String content, int status) async {
         final id = await repo.insertOutgoing(
