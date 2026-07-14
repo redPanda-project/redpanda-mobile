@@ -2,14 +2,23 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/router.dart';
+import 'package:redpanda/services/field_logging.dart';
 import 'package:redpanda/services/group_service.dart';
 import 'package:redpanda/services/message_sync_service.dart';
 import 'package:redpanda/services/send_retry_queue.dart';
 import 'package:redpanda/shared/providers.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // T17: restore the opt-in logcat sink before the client's first logs.
+  try {
+    await FieldLogging.init();
+  } catch (e) {
+    debugPrint('Failed to restore field logging setting: $e');
+  }
   runApp(const ProviderScope(child: MyApp()));
 }
 
@@ -43,6 +52,22 @@ class _MyAppState extends ConsumerState<MyApp> {
       groupService.restorePersistedGroups().catchError(
         (Object e) => debugPrint('Failed to restore persisted groups: $e'),
       ),
+    );
+    // Messages handed to the network but not R-ACKed before the last
+    // shutdown can never be confirmed (ack tags are in-memory only) —
+    // re-queue them so the retry queue delivers them again.
+    unawaited(
+      ref
+          .read(messageRepositoryProvider)
+          .requeueStuckSent()
+          .then((count) {
+            if (count > 0) {
+              debugPrint('Re-queued $count stuck sent message(s) on startup');
+            }
+          })
+          .catchError((Object e) {
+            debugPrint('Failed to re-queue stuck messages: $e');
+          }),
     );
     ref.read(sendRetryQueueProvider).start();
 

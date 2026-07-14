@@ -415,7 +415,10 @@ class RedPandaIsolateClient implements RedPandaClient {
       _nodeScoreReplay = event.scores;
       _nodeScoreController.add(event.scores);
     } else if (event is EventLog) {
-      RpLog.debug('[Isolate] ${event.message}');
+      // The worker forwards only LogLevel.info lines (privacy-sensitive
+      // debug details never leave the worker), so re-emit at info here —
+      // the app's sink decides whether they become visible (T17).
+      RpLog.info('[worker] ${event.message}');
     }
   }
 
@@ -745,6 +748,18 @@ class RedPandaIsolateClient implements RedPandaClient {
 
 /// The entry point for the background isolate.
 void _isolateEntryPoint(SendPort mainSendPort) {
+  // RpLog state is per-isolate: without a sink the worker's operational
+  // logs end in `dart:developer.log` inside this isolate — a no-op in
+  // release AOT and invisible to field tests (T17). Forward info lines to
+  // the main isolate instead, where the app's sink decides their fate.
+  // LogLevel.debug (OH ids, peer addresses, payload sizes) is NOT
+  // forwarded and stays suppressed inside the worker.
+  RpLog.sink = (message, level) {
+    if (level == LogLevel.info) {
+      mainSendPort.send(EventLog(message));
+    }
+  };
+
   // Catch every uncaught async error (e.g. a socket write failing with
   // "connection reset by peer") so a single bad connection can never take
   // down the whole network worker. The supervision in

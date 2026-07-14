@@ -105,6 +105,45 @@ void main() {
         expect(msg.lastRetryAt, isNull);
       },
     );
+    test('requeueStuckSent re-queues only sent messages', () async {
+      Future<int> insertWithStatus(String content, int status) async {
+        final id = await repo.insertOutgoing(
+          conversationId: 'channel-1',
+          senderId: 'me',
+          content: content,
+        );
+        await repo.updateMessageStatus(id, status);
+        return id;
+      }
+
+      final sentId = await insertWithStatus('stuck', MessageStatus.sent);
+      await insertWithStatus('routed', MessageStatus.routed);
+      await insertWithStatus('delivered', MessageStatus.delivered);
+      await insertWithStatus('failed', MessageStatus.failed);
+      final pendingId = await repo.insertOutgoing(
+        conversationId: 'channel-1',
+        senderId: 'me',
+        content: 'already pending',
+      );
+      await repo.insertIncomingIfNew(
+        messageId: 'in-1',
+        conversationId: 'channel-1',
+        senderId: 'channel-1',
+        content: 'incoming',
+        timestamp: DateTime.now(),
+      );
+
+      final count = await repo.requeueStuckSent();
+
+      expect(count, equals(1));
+      final pending = await repo.getPendingMessages();
+      expect(pending.map((m) => m.id), unorderedEquals([sentId, pendingId]));
+      // Backoff bookkeeping is untouched — the restart is not a failed
+      // send attempt.
+      final requeued = pending.singleWhere((m) => m.id == sentId);
+      expect(requeued.retryCount, equals(0));
+      expect(requeued.lastRetryAt, isNull);
+    });
   });
 
   group('MessageRepository: dedup of fetched messages', () {
