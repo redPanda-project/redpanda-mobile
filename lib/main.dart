@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/router.dart';
 import 'package:redpanda/services/group_service.dart';
 import 'package:redpanda/services/message_sync_service.dart';
@@ -43,6 +44,22 @@ class _MyAppState extends ConsumerState<MyApp> {
       groupService.restorePersistedGroups().catchError(
         (Object e) => debugPrint('Failed to restore persisted groups: $e'),
       ),
+    );
+    // Messages handed to the network but not R-ACKed before the last
+    // shutdown can never be confirmed (ack tags are in-memory only) —
+    // re-queue them so the retry queue delivers them again.
+    unawaited(
+      ref
+          .read(messageRepositoryProvider)
+          .requeueStuckSent()
+          .then((count) {
+            if (count > 0) {
+              debugPrint('Re-queued $count stuck sent message(s) on startup');
+            }
+          })
+          .catchError((Object e) {
+            debugPrint('Failed to re-queue stuck messages: $e');
+          }),
     );
     ref.read(sendRetryQueueProvider).start();
 
