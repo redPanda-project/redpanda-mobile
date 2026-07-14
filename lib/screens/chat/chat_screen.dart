@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:drift/drift.dart' as drift;
 import 'package:flutter/material.dart';
@@ -10,6 +11,7 @@ import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/repositories/outbound_handle_repository.dart';
 import 'package:redpanda/screens/chat/share_qr_dialog.dart';
 import 'package:redpanda/services/message_sync_service.dart';
+import 'package:redpanda/services/send_retry_queue.dart';
 import 'package:redpanda/shared/providers.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart'
     show DepositException, GroupSendException, UnknownPeerException;
@@ -117,6 +119,103 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }
     } catch (_) {
       await messages.markRetryAttempt(rowId);
+    }
+  }
+
+  /// Human-readable delivery state for the details sheet.
+  static String _statusLabel(int status) {
+    switch (status) {
+      case MessageStatus.pending:
+        return 'Waiting to send — retries automatically';
+      case MessageStatus.sent:
+        return 'Handed to the network, waiting for routing confirmation';
+      case MessageStatus.routed:
+        return "Stored in the recipient's mailbox";
+      case MessageStatus.delivered:
+        return "Delivered to the recipient's device";
+      case MessageStatus.failed:
+        return 'Delivery failed after several attempts';
+      default:
+        return 'Unknown';
+    }
+  }
+
+  /// Bottom sheet with the delivery state of an own outgoing message:
+  /// status, attempt count, next automatic retry, and a manual "send again"
+  /// action for messages the queue has not confirmed yet.
+  void _showDeliveryDetails(Message msg) {
+    final canRetry =
+        msg.status == MessageStatus.pending ||
+        msg.status == MessageStatus.failed;
+    final nextAttempt =
+        msg.status == MessageStatus.pending && msg.lastRetryAt != null
+        ? msg.lastRetryAt!.add(SendRetryQueue.backoffFor(msg.retryCount))
+        : null;
+
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  _statusIcon(msg.status) ?? const SizedBox.shrink(),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _statusLabel(msg.status),
+                      style: Theme.of(sheetContext).textTheme.titleSmall,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text('Sent: ${msg.timestamp}'),
+              if (msg.retryCount > 0) Text('Attempts: ${msg.retryCount + 1}'),
+              if (msg.lastRetryAt != null)
+                Text('Last attempt: ${msg.lastRetryAt}'),
+              if (nextAttempt != null)
+                Text(
+                  'Next automatic attempt: '
+                  '${nextAttempt.isBefore(DateTime.now()) ? 'due now' : nextAttempt}',
+                ),
+              if (canRetry) ...[
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Send again now'),
+                    onPressed: () {
+                      Navigator.of(sheetContext).pop();
+                      _retryNow(msg.id);
+                    },
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _retryNow(int messageRowId) async {
+    await ref
+        .read(messageRepositoryProvider)
+        .resetForImmediateRetry(messageRowId);
+    // Kick the queue instead of waiting for its next periodic pass.
+    unawaited(
+      ref.read(sendRetryQueueProvider).retryPending().catchError((Object _) {}),
+    );
+    if (mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Sending again…')));
     }
   }
 
@@ -314,45 +413,50 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       alignment: isMe
                           ? Alignment.centerRight
                           : Alignment.centerLeft,
-                      child: Container(
-                        margin: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 4,
-                        ),
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: isMe
-                              ? Theme.of(context).colorScheme.primaryContainer
-                              : Theme.of(
-                                  context,
-                                ).colorScheme.surfaceContainerHighest,
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (senderName != null)
-                              Text(
-                                senderName,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.bold,
-                                  color: Theme.of(context).colorScheme.primary,
+                      child: GestureDetector(
+                        onTap: isMe ? () => _showDeliveryDetails(msg) : null,
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 4,
+                          ),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: isMe
+                                ? Theme.of(context).colorScheme.primaryContainer
+                                : Theme.of(
+                                    context,
+                                  ).colorScheme.surfaceContainerHighest,
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (senderName != null)
+                                Text(
+                                  senderName,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.primary,
+                                  ),
                                 ),
-                              ),
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                Flexible(child: Text(msg.content)),
-                                if (statusIcon != null) ...[
-                                  const SizedBox(width: 6),
-                                  statusIcon,
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  Flexible(child: Text(msg.content)),
+                                  if (statusIcon != null) ...[
+                                    const SizedBox(width: 6),
+                                    statusIcon,
+                                  ],
                                 ],
-                              ],
-                            ),
-                          ],
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     );

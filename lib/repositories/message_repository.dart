@@ -224,6 +224,20 @@ class MessageRepository {
     );
   }
 
+  /// Puts a message back into the send queue for an immediate attempt,
+  /// clearing the retry bookkeeping. Used by the "send again" action on
+  /// failed/stuck messages — the user explicitly asked, so the backoff
+  /// window starts over.
+  Future<void> resetForImmediateRetry(int id) async {
+    await (_db.update(_db.messages)..where((t) => t.id.equals(id))).write(
+      const MessagesCompanion(
+        status: drift.Value(MessageStatus.pending),
+        retryCount: drift.Value(0),
+        lastRetryAt: drift.Value(null),
+      ),
+    );
+  }
+
   /// Number of messages still waiting to be sent, as a live stream.
   Stream<int> watchPendingCount() {
     final countExp = _db.messages.id.count();
