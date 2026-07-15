@@ -2,6 +2,7 @@ import 'package:redpanda_light_client/src/crypto/ratchet.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
 import 'package:redpanda_light_client/src/domain/group_state.dart';
+import 'package:redpanda_light_client/src/domain/oh_fetch_status.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/domain/routing_ack.dart';
@@ -63,6 +64,11 @@ abstract class RedPandaClient {
   /// renewed, mailbox overflow detected). The app layer should persist
   /// [OhMailboxUpdate.lastCursor] and [OhMailboxUpdate.expiresAtMs].
   Stream<OhMailboxUpdate> get ohMailboxUpdates;
+
+  /// Outcome of every mailbox fetch attempt (success and failure, including
+  /// empty polls). Purely informational — the app layer uses it to display
+  /// per-channel health ("mailbox last checked …"); nothing is persisted.
+  Stream<OhFetchStatus> get ohFetchStatus;
 
   /// Registers channel encryption keys so [sendMessage] can encrypt outgoing
   /// messages for [channelId]. Optionally associates a peer OH ID for routing.

@@ -3,8 +3,35 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:redpanda/repositories/channel_repository.dart';
 import 'package:redpanda/repositories/group_repository.dart';
+import 'package:redpanda/services/channel_health.dart';
 import 'package:redpanda/services/group_service.dart';
 import 'package:redpanda/shared/widgets/connection_status_badge.dart';
+
+/// Traffic-light health indicator for one channel tile. Green: everything
+/// runs; amber: working with limitations (queued sends, stale mailbox
+/// check, missing peer mailbox); red: needs attention. Details on the
+/// channel status page (info button in the chat).
+class _ChannelHealthDot extends ConsumerWidget {
+  final String channelId;
+
+  const _ChannelHealthDot({required this.channelId});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final health = ref.watch(channelHealthProvider(channelId));
+    final color = switch (health.level) {
+      ChannelHealthLevel.healthy => Colors.green,
+      ChannelHealthLevel.degraded => Colors.amber,
+      ChannelHealthLevel.problem => Colors.red,
+      ChannelHealthLevel.unknown => Colors.grey,
+    };
+    return Container(
+      width: 12,
+      height: 12,
+      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+    );
+  }
+}
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -114,9 +141,8 @@ class HomeScreen extends ConsumerWidget {
                     child: Text(channel.label[0].toUpperCase()),
                   ),
                   title: Text(channel.label),
-                  subtitle: const Text(
-                    'Private Channel', // TODO: Add status
-                  ),
+                  subtitle: const Text('Private Channel'),
+                  trailing: _ChannelHealthDot(channelId: channel.id),
                   onTap: () {
                     context.push('/chat/${channel.id}');
                   },

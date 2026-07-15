@@ -370,6 +370,23 @@ class EventGroupHandshake extends IsolateEvent {
   EventGroupHandshake(this.event);
 }
 
+/// Outcome of a single mailbox fetch attempt (success and failure) — purely
+/// informational, feeds the per-channel health display in the app.
+class EventOhFetchStatus extends IsolateEvent {
+  final List<int> ohId;
+  final String? channelId;
+  final bool success;
+  final int atMs;
+  final String? detail;
+  EventOhFetchStatus({
+    required this.ohId,
+    required this.success,
+    required this.atMs,
+    this.channelId,
+    this.detail,
+  });
+}
+
 /// OH state change (cursor advanced, renewal, mailbox overflow) forwarded
 /// from the isolate so the main isolate can persist cursor/expiry.
 class EventOhMailboxUpdate extends IsolateEvent {

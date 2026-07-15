@@ -21,6 +21,7 @@ import 'package:redpanda_light_client/src/logging/logger.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
 import 'package:redpanda_light_client/src/domain/group_state.dart';
+import 'package:redpanda_light_client/src/domain/oh_fetch_status.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/domain/reverse_garlic_block.dart';
@@ -659,6 +660,7 @@ class RedPandaLightClient implements RedPandaClient {
     _restoredGarlicSessions.clear();
     await _incomingMessageController.close();
     await _ohMailboxUpdateController.close();
+    await _ohFetchStatusController.close();
     await _ratchetStateController.close();
     await _garlicSessionController.close();
     _updateStatus(ConnectionStatus.disconnected);
@@ -670,6 +672,7 @@ class RedPandaLightClient implements RedPandaClient {
       StreamController<DecryptedMessage>.broadcast();
   final _ohMailboxUpdateController =
       StreamController<OhMailboxUpdate>.broadcast();
+  final _ohFetchStatusController = StreamController<OhFetchStatus>.broadcast();
   Timer? _pollingTimer;
   Timer? _renewalTimer;
 
@@ -860,6 +863,24 @@ class RedPandaLightClient implements RedPandaClient {
   @override
   Stream<OhMailboxUpdate> get ohMailboxUpdates =>
       _ohMailboxUpdateController.stream;
+
+  @override
+  Stream<OhFetchStatus> get ohFetchStatus => _ohFetchStatusController.stream;
+
+  /// Reports the outcome of one fetch attempt (success AND failure — unlike
+  /// [ohMailboxUpdates], which only fires on state changes).
+  void _emitFetchStatus(OHRegistration oh, bool success, [String? detail]) {
+    if (_ohFetchStatusController.isClosed) return;
+    _ohFetchStatusController.add(
+      OhFetchStatus(
+        ohId: oh.ohId,
+        channelId: oh.channelId,
+        success: success,
+        atMs: DateTime.now().millisecondsSinceEpoch,
+        detail: detail,
+      ),
+    );
+  }
 
   /// Currently registered/restored OHs (read-only view, for tests).
   List<OHRegistration> get registeredOutboundHandles =>
@@ -1527,6 +1548,7 @@ class RedPandaLightClient implements RedPandaClient {
       RpLog.info(
         'RedPandaLightClient: fetchMessages() no active peer available',
       );
+      _emitFetchStatus(oh, false, 'no active peer');
       return [];
     }
 
@@ -1551,6 +1573,7 @@ class RedPandaLightClient implements RedPandaClient {
       RpLog.info(
         'RedPandaLightClient: fetchMessages() timed out waiting for response',
       );
+      _emitFetchStatus(oh, false, 'timeout');
       return [];
     }
 
@@ -1564,8 +1587,13 @@ class RedPandaLightClient implements RedPandaClient {
       RpLog.info(
         'RedPandaLightClient: fetchMessages() non-OK status: ${response.status}',
       );
+      _emitFetchStatus(oh, false, 'status ${response.status}');
       return [];
     }
+
+    // The node answered OK — the mailbox was checked, regardless of whether
+    // the items can be decrypted below.
+    _emitFetchStatus(oh, true);
 
     if (response.mailboxOverflow) {
       RpLog.debug(
@@ -2850,6 +2878,7 @@ class RedPandaLightClient implements RedPandaClient {
             }
           } catch (e) {
             RpLog.info('RedPandaLightClient: Polling error: $e');
+            _emitFetchStatus(oh, false, 'error: $e');
           }
         }
         // MS05: prune session tags whose RGB expired long ago (48h).

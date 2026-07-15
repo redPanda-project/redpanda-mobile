@@ -102,6 +102,11 @@ class FakeRedPandaClient implements RedPandaClient {
   @override
   Stream<OhMailboxUpdate> get ohMailboxUpdates => updateController.stream;
 
+  final fetchStatusController = StreamController<OhFetchStatus>.broadcast();
+
+  @override
+  Stream<OhFetchStatus> get ohFetchStatus => fetchStatusController.stream;
+
   @override
   Stream<ConnectionStatus> get connectionStatus =>
       Stream.value(ConnectionStatus.connected);

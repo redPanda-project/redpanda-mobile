@@ -4,6 +4,7 @@ import 'package:redpanda_light_client/src/crypto/ratchet.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
 import 'package:redpanda_light_client/src/domain/group_state.dart';
+import 'package:redpanda_light_client/src/domain/oh_fetch_status.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/domain/routing_ack.dart';
@@ -86,6 +87,9 @@ class MockRedPandaClient implements RedPandaClient {
 
   @override
   Stream<OhMailboxUpdate> get ohMailboxUpdates => const Stream.empty();
+
+  @override
+  Stream<OhFetchStatus> get ohFetchStatus => const Stream.empty();
 
   @override
   void addChannelKeys(
