@@ -42,7 +42,9 @@ dependencies:
   uuid: ^4.5.3
   check_internet_connection: ^1.0.0
   drift: ^2.31.0
-  sqlite3_flutter_libs: ^0.5.42
+  # Pinned: 0.5.42 reports iOS min 12.0 but its bundled sqlite3 pod needs a
+  # higher deployment target, breaking `pod install`. Unpin once upstream fixes.
+  sqlite3_flutter_libs: 0.5.41
   drift_flutter: ^0.2.8
   qr_flutter: ^4.1.0
   redpanda_light_client:
