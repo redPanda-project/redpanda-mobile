@@ -1449,7 +1449,7 @@ class RedPandaLightClient implements RedPandaClient {
   Future<bool> renewOutboundHandle(OHRegistration oh) async {
     final activePeer = _peerForHandle(oh, 'renewOutboundHandle()');
     if (activePeer == null) {
-      RpLog.info('RedPandaLightClient: renewOutboundHandle() no active peer');
+      // _peerForHandle already logged the disconnected-host case.
       return false;
     }
 
@@ -1569,7 +1569,13 @@ class RedPandaLightClient implements RedPandaClient {
       RpLog.info(
         'RedPandaLightClient: fetchMessages() no active peer available',
       );
-      _emitFetchStatus(oh, false, 'host node not connected');
+      _emitFetchStatus(
+        oh,
+        false,
+        oh.serverEndpoint == null
+            ? 'no active peer'
+            : 'host node not connected',
+      );
       return [];
     }
 
