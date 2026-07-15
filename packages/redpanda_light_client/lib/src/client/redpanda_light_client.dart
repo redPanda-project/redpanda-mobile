@@ -1442,6 +1442,51 @@ class RedPandaLightClient implements RedPandaClient {
     return host;
   }
 
+  /// OHs currently being re-registered after a NOT_FOUND fetch, by hex id.
+  final Set<String> _reregisteringOhs = {};
+
+  /// Recreates [oh] on its host node after the node answered NOT_FOUND.
+  ///
+  /// The host no longer knows the handle (registration expired server-side —
+  /// e.g. renewals went to the wrong node before the host-node fix, or the
+  /// node lost its store) while the LOCAL expiry can still be days away, so
+  /// the regular renewal timer would never act and the mailbox would stay
+  /// dead until the local expiry. Re-registering with the same id and
+  /// keypair recreates the mailbox. The fetch cursor restarts at 0: a fresh
+  /// mailbox numbers its items from 1 again, so keeping the old cursor
+  /// would silently swallow all new mail.
+  Future<void> reregisterLostHandle(OHRegistration oh) async {
+    final key = _hexEncode(oh.ohId);
+    if (!_reregisteringOhs.add(key)) return;
+    try {
+      oh.lastCursor = 0;
+      // Persist the reset immediately — even when the re-registration
+      // below cannot reach the host yet, a restored stale cursor after an
+      // app restart must not swallow the recreated mailbox's items.
+      if (!_ohMailboxUpdateController.isClosed) {
+        _ohMailboxUpdateController.add(
+          OhMailboxUpdate(
+            ohId: oh.ohId,
+            channelId: oh.channelId,
+            lastCursor: 0,
+            expiresAtMs: oh.expiresAtMs,
+          ),
+        );
+      }
+      final renewed = await renewOutboundHandle(oh);
+      RpLog.info(
+        'RedPandaLightClient: re-registered lost handle $key '
+        '(confirmed: $renewed)',
+      );
+    } catch (e) {
+      RpLog.info(
+        'RedPandaLightClient: re-registration of lost handle $key failed: $e',
+      );
+    } finally {
+      _reregisteringOhs.remove(key);
+    }
+  }
+
   /// Re-registers [oh] with the same id and keypair to extend its TTL.
   /// On success, updates [OHRegistration.expiresAtMs] and emits an
   /// [OhMailboxUpdate] so the app layer can persist the new expiry.
@@ -1615,6 +1660,9 @@ class RedPandaLightClient implements RedPandaClient {
         'RedPandaLightClient: fetchMessages() non-OK status: ${response.status}',
       );
       _emitFetchStatus(oh, false, 'status ${response.status}');
+      if (response.status == Status.NOT_FOUND) {
+        unawaited(reregisterLostHandle(oh));
+      }
       return [];
     }
 
