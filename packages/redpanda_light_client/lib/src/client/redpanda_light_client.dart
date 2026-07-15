@@ -1454,12 +1454,25 @@ class RedPandaLightClient implements RedPandaClient {
   /// dead until the local expiry. Re-registering with the same id and
   /// keypair recreates the mailbox. The fetch cursor restarts at 0: a fresh
   /// mailbox numbers its items from 1 again, so keeping the old cursor
-  /// would silently swallow all new mail. Public for tests.
+  /// would silently swallow all new mail.
   Future<void> reregisterLostHandle(OHRegistration oh) async {
     final key = _hexEncode(oh.ohId);
     if (!_reregisteringOhs.add(key)) return;
     try {
       oh.lastCursor = 0;
+      // Persist the reset immediately — even when the re-registration
+      // below cannot reach the host yet, a restored stale cursor after an
+      // app restart must not swallow the recreated mailbox's items.
+      if (!_ohMailboxUpdateController.isClosed) {
+        _ohMailboxUpdateController.add(
+          OhMailboxUpdate(
+            ohId: oh.ohId,
+            channelId: oh.channelId,
+            lastCursor: 0,
+            expiresAtMs: oh.expiresAtMs,
+          ),
+        );
+      }
       final renewed = await renewOutboundHandle(oh);
       RpLog.info(
         'RedPandaLightClient: re-registered lost handle $key '

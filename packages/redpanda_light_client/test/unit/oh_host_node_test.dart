@@ -4,6 +4,7 @@ import 'package:test/test.dart';
 
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
+import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
@@ -73,13 +74,22 @@ void main() {
   test('re-registration after NOT_FOUND resets the fetch cursor', () async {
     // A NOT_FOUND fetch means the host recreated (or lost) the mailbox —
     // its sequence ids restart at 1, so the old cursor would silently
-    // swallow all new mail. The cursor must be reset even when the
-    // re-registration attempt itself cannot reach the host yet.
+    // swallow all new mail. The cursor must be reset AND persisted (via
+    // ohMailboxUpdates) even when the re-registration attempt itself
+    // cannot reach the host yet.
     final oh = await registration();
     oh.lastCursor = 57;
+    final updates = <OhMailboxUpdate>[];
+    final sub = client.ohMailboxUpdates.listen(updates.add);
 
     await client.reregisterLostHandle(oh);
+    await Future<void>.delayed(Duration.zero);
 
     expect(oh.lastCursor, 0);
+    expect(updates, hasLength(1));
+    expect(updates.single.lastCursor, 0);
+    expect(updates.single.ohId, oh.ohId);
+
+    await sub.cancel();
   });
 }
