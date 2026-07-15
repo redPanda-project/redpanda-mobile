@@ -5,8 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:redpanda/database/database.dart';
 import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/services/channel_health.dart';
-import 'package:redpanda_light_client/redpanda_light_client.dart'
-    hide Channel;
+import 'package:redpanda_light_client/redpanda_light_client.dart' hide Channel;
 
 final now = DateTime(2026, 7, 15, 12);
 
@@ -85,9 +84,7 @@ void main() {
 
     test('expired own mailbox registration is a problem', () {
       final health = _health(
-        ownHandle: _handle(
-          expiresAt: now.subtract(const Duration(minutes: 1)),
-        ),
+        ownHandle: _handle(expiresAt: now.subtract(const Duration(minutes: 1))),
       );
       expect(health.level, ChannelHealthLevel.problem);
     });

@@ -4,8 +4,7 @@ import 'package:redpanda/database/database.dart';
 import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/services/send_retry_queue.dart';
 import 'package:redpanda/shared/providers.dart';
-import 'package:redpanda_light_client/redpanda_light_client.dart'
-    hide Channel;
+import 'package:redpanda_light_client/redpanda_light_client.dart' hide Channel;
 
 /// Latest mailbox fetch state of one channel. In-memory only — the polling
 /// loop repopulates it within one cycle (30 s) after an app restart, so
@@ -109,7 +108,8 @@ class ConversationStats {
           failed++;
         case MessageStatus.routed:
         case MessageStatus.delivered:
-          if (lastConfirmedAt == null || msg.timestamp.isAfter(lastConfirmedAt)) {
+          if (lastConfirmedAt == null ||
+              msg.timestamp.isAfter(lastConfirmedAt)) {
             lastConfirmedAt = msg.timestamp;
           }
         case MessageStatus.received:
@@ -221,9 +221,7 @@ ChannelHealth computeChannelHealth({
 
   if (stats != null) {
     if (stats.failedCount > 0) {
-      problems.add(
-        '${stats.failedCount} message(s) failed after all retries',
-      );
+      problems.add('${stats.failedCount} message(s) failed after all retries');
     }
     if (stats.pendingCount > 0) {
       degradations.add('${stats.pendingCount} message(s) waiting to be sent');

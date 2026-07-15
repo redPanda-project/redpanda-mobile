@@ -2,8 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:redpanda/services/channel_health.dart';
 import 'package:redpanda/shared/providers.dart';
-import 'package:redpanda_light_client/redpanda_light_client.dart'
-    hide Channel;
+import 'package:redpanda_light_client/redpanda_light_client.dart' hide Channel;
 
 /// Per-channel transparency page: shows when the important background jobs
 /// for this channel last ran (mailbox checks, own-mailbox renewal, send
@@ -213,11 +212,7 @@ class _HealthBanner extends StatelessWidget {
         Icons.error,
         'Attention needed',
       ),
-      ChannelHealthLevel.unknown => (
-        Colors.grey,
-        Icons.help,
-        'Status unknown',
-      ),
+      ChannelHealthLevel.unknown => (Colors.grey, Icons.help, 'Status unknown'),
     };
     return Container(
       color: color.withValues(alpha: 0.15),
@@ -229,10 +224,7 @@ class _HealthBanner extends StatelessWidget {
             children: [
               Icon(icon, color: color),
               const SizedBox(width: 8),
-              Text(
-                label,
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
+              Text(label, style: Theme.of(context).textTheme.titleMedium),
             ],
           ),
           for (final reason in health.reasons)
