@@ -19,16 +19,25 @@ class _ChannelHealthDot extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final health = ref.watch(channelHealthProvider(channelId));
-    final color = switch (health.level) {
-      ChannelHealthLevel.healthy => Colors.green,
-      ChannelHealthLevel.degraded => Colors.amber,
-      ChannelHealthLevel.problem => Colors.red,
-      ChannelHealthLevel.unknown => Colors.grey,
+    final (color, label) = switch (health.level) {
+      ChannelHealthLevel.healthy => (Colors.green, 'Channel healthy'),
+      ChannelHealthLevel.degraded => (
+        Colors.amber,
+        'Channel working with limitations',
+      ),
+      ChannelHealthLevel.problem => (Colors.red, 'Channel needs attention'),
+      ChannelHealthLevel.unknown => (Colors.grey, 'Channel status unknown'),
     };
-    return Container(
-      width: 12,
-      height: 12,
-      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+    return Semantics(
+      label: label,
+      child: Tooltip(
+        message: label,
+        child: Container(
+          width: 12,
+          height: 12,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+      ),
     );
   }
 }

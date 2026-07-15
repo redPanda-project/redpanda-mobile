@@ -124,6 +124,7 @@ class FakeRedPandaClient implements RedPandaClient {
   Future<void> disconnect() async {
     await incomingController.close();
     await updateController.close();
+    await fetchStatusController.close();
     await ratchetStateController.close();
     await garlicSessionController.close();
     await routingAckController.close();
