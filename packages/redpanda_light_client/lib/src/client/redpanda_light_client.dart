@@ -1417,14 +1417,37 @@ class RedPandaLightClient implements RedPandaClient {
       ..signature = signature;
   }
 
+  /// The connected peer hosting [oh]'s mailbox.
+  ///
+  /// OH state (mailbox, cursor, expiry) lives ONLY on the node the handle
+  /// was registered with — fetch/ack/renew against any other node returns
+  /// NOT_FOUND (observed in the field: after a reconnect the peer map
+  /// order changed and every mailbox check silently asked the wrong node).
+  /// When the host is currently not connected, a connection attempt is
+  /// kicked off and null is returned — the caller skips this cycle and the
+  /// next one reaches the host. Registrations without a recorded endpoint
+  /// (never talked to a node) fall back to the first verified peer.
+  ActivePeer? _peerForHandle(OHRegistration oh, String what) {
+    final endpoint = oh.serverEndpoint;
+    final verified = _peers.values.where((p) => p.isHandshakeVerified);
+    if (endpoint == null) return verified.firstOrNull;
+    final host = verified.where((p) => p.address == endpoint).firstOrNull;
+    if (host == null) {
+      RpLog.info(
+        'RedPandaLightClient: $what: host node $endpoint not connected — '
+        'requesting a connection',
+      );
+      unawaited(addPeer(endpoint));
+    }
+    return host;
+  }
+
   /// Re-registers [oh] with the same id and keypair to extend its TTL.
   /// On success, updates [OHRegistration.expiresAtMs] and emits an
   /// [OhMailboxUpdate] so the app layer can persist the new expiry.
   /// Returns true if the Full Node confirmed the renewal.
   Future<bool> renewOutboundHandle(OHRegistration oh) async {
-    final activePeer = _peers.values
-        .where((p) => p.isHandshakeVerified)
-        .firstOrNull;
+    final activePeer = _peerForHandle(oh, 'renewOutboundHandle()');
     if (activePeer == null) {
       RpLog.info('RedPandaLightClient: renewOutboundHandle() no active peer');
       return false;
@@ -1539,16 +1562,14 @@ class RedPandaLightClient implements RedPandaClient {
       request.cursor = fixnum.Int64(oh.lastCursor);
     }
 
-    // Send to best active peer
-    final activePeer = _peers.values
-        .where((p) => p.isHandshakeVerified)
-        .firstOrNull;
+    // The fetch must go to the node hosting this handle's mailbox.
+    final activePeer = _peerForHandle(oh, 'fetchMessages()');
 
     if (activePeer == null) {
       RpLog.info(
         'RedPandaLightClient: fetchMessages() no active peer available',
       );
-      _emitFetchStatus(oh, false, 'no active peer');
+      _emitFetchStatus(oh, false, 'host node not connected');
       return [];
     }
 
@@ -2787,9 +2808,7 @@ class RedPandaLightClient implements RedPandaClient {
   /// up to and including [ackedSequenceId]; the Full Node deletes them.
   /// Returns true if the node confirmed the acknowledgement.
   Future<bool> ackFetch(OHRegistration oh, int ackedSequenceId) async {
-    final activePeer = _peers.values
-        .where((p) => p.isHandshakeVerified)
-        .firstOrNull;
+    final activePeer = _peerForHandle(oh, 'ackFetch()');
     if (activePeer == null) {
       RpLog.info('RedPandaLightClient: ackFetch() no active peer available');
       return false;
