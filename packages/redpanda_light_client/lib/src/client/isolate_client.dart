@@ -14,6 +14,7 @@ import 'package:redpanda_light_client/src/crypto/ratchet.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
 import 'package:redpanda_light_client/src/domain/group_state.dart';
+import 'package:redpanda_light_client/src/domain/oh_fetch_status.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/domain/routing_ack.dart';
@@ -81,6 +82,8 @@ class RedPandaIsolateClient implements RedPandaClient {
 
   final _ohMailboxUpdateController =
       StreamController<OhMailboxUpdate>.broadcast();
+
+  final _ohFetchStatusController = StreamController<OhFetchStatus>.broadcast();
 
   final _ratchetStateController =
       StreamController<RatchetStateUpdate>.broadcast();
@@ -346,6 +349,16 @@ class RedPandaIsolateClient implements RedPandaClient {
       _groupStateController.add(event.update);
     } else if (event is EventGroupHandshake) {
       _groupHandshakeController.add(event.event);
+    } else if (event is EventOhFetchStatus) {
+      _ohFetchStatusController.add(
+        OhFetchStatus(
+          ohId: event.ohId,
+          channelId: event.channelId,
+          success: event.success,
+          atMs: event.atMs,
+          detail: event.detail,
+        ),
+      );
     } else if (event is EventOhMailboxUpdate) {
       final replay = _ohReplay[HEX.encode(event.ohId)];
       if (replay != null) {
@@ -570,6 +583,9 @@ class RedPandaIsolateClient implements RedPandaClient {
   @override
   Stream<OhMailboxUpdate> get ohMailboxUpdates =>
       _ohMailboxUpdateController.stream;
+
+  @override
+  Stream<OhFetchStatus> get ohFetchStatus => _ohFetchStatusController.stream;
 
   /// Register channel encryption keys in the isolate client.
   @override
@@ -819,6 +835,19 @@ void _runWorker(SendPort mainSendPort) {
             channelId: update.channelId,
             sessionTags: update.sessionTags,
             pendingRgbHex: update.pendingRgbHex,
+          ),
+        );
+      });
+
+      // Forward fetch attempt outcomes (per-channel health display)
+      client!.ohFetchStatus.listen((status) {
+        mainSendPort.send(
+          EventOhFetchStatus(
+            ohId: status.ohId,
+            channelId: status.channelId,
+            success: status.success,
+            atMs: status.atMs,
+            detail: status.detail,
           ),
         );
       });

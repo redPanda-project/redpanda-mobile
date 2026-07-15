@@ -333,6 +333,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             IconButton(
               icon: const Icon(Icons.info_outline),
               onPressed: () => context.push('/groups/${widget.peerUuid}/info'),
+            )
+          else
+            IconButton(
+              icon: const Icon(Icons.monitor_heart_outlined),
+              tooltip: 'Channel status',
+              onPressed: () =>
+                  context.push('/channels/${widget.peerUuid}/status'),
             ),
           channelAsync.when(
             data: (channel) {

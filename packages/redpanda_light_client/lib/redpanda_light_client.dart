@@ -29,6 +29,7 @@ export 'src/domain/garlic_session_update.dart';
 export 'src/domain/group_state.dart';
 export 'src/domain/oh_descriptor.dart';
 export 'src/domain/oh_registration.dart';
+export 'src/domain/oh_fetch_status.dart';
 export 'src/domain/oh_mailbox_update.dart';
 export 'src/domain/decrypted_message.dart';
 export 'src/domain/reverse_garlic_block.dart';
