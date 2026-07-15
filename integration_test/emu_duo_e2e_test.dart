@@ -8,11 +8,21 @@
 // (tool/emu_duo_e2e/coord_server.dart) — server-side timestamps, so the
 // latency numbers are immune to guest clock drift.
 //
-// Scenarios:
+// Scenarios (selected via the `scenarios` key on the coord server, which
+// run.sh fills from RP_SCENARIOS — S1 is the pairing foundation and always
+// runs):
 //   S1  fresh pairing (Alice creates the channel through the UI, Bob joins
 //       via the QR JSON) + first message Alice -> Bob, delivery timed.
 //   S2  10 messages ping-pong (odd from Alice, even from Bob), latency per
 //       message; the coord server computes p50/p95/max for the report.
+//   S3  kill/restart catch-up: the harness force-stops Bob's app, Alice
+//       sends while Bob is dead, the harness restarts the app (bob_phase =
+//       resume-s3) and the resumed process must show the message within the
+//       catch-up budget (proves the T18 restart-requeue, mobile PR #50).
+//   S4  airplane-mode reconnect: the harness cuts Bob's network, Alice
+//       sends into the silence, the harness restores the network and Bob
+//       must reconnect and receive (proves the T15 isolate resilience and
+//       the #55 host-node fix).
 //
 // Everything runs through the real UI except the QR *scan* itself (no
 // camera in a headless emulator): the joining side feeds the QR JSON
@@ -51,10 +61,20 @@ const seedsRaw = String.fromEnvironment(
 const channelLabel = 'Emu Duo E2E';
 const s1Message = 'e2e-s1';
 const s2Count = 10;
+const s3Message = 'e2e-s3';
+const s4Message = 'e2e-s4';
 
 String s2Message(int i) => 'e2e-s2-${i.toString().padLeft(2, '0')}';
 
 String role = 'unknown';
+
+/// Enabled scenarios, filled from the coord server before the app starts.
+/// S1 (pairing + first delivery) is the foundation and always runs.
+Set<String> scenarios = {'s1', 's2', 's3', 's4'};
+
+bool get runS2 => scenarios.contains('s2');
+bool get runS3 => scenarios.contains('s3');
+bool get runS4 => scenarios.contains('s4');
 
 void log(String msg) {
   // Prefixed so `adb logcat` greps stay trivial ("flutter: [emu-duo]").
@@ -69,13 +89,26 @@ final HttpClient _http = HttpClient()
   ..connectionTimeout = const Duration(seconds: 5);
 
 Future<void> kvPut(String name, String value) async {
-  final req = await _http.putUrl(Uri.parse('$coordBase/kv/$name'));
-  req.write(value);
-  final res = await req.close();
-  await res.drain<void>();
-  if (res.statusCode != 200) {
-    throw StateError('kvPut $name failed: HTTP ${res.statusCode}');
+  // Retried: after an airplane-mode toggle (S4) the client may hold stale
+  // pooled sockets whose first use fails — a fresh attempt gets a new one.
+  Object? lastError;
+  for (var attempt = 1; attempt <= 3; attempt++) {
+    try {
+      final req = await _http.putUrl(Uri.parse('$coordBase/kv/$name'));
+      req.write(value);
+      final res = await req.close();
+      await res.drain<void>();
+      if (res.statusCode != 200) {
+        throw StateError('kvPut $name failed: HTTP ${res.statusCode}');
+      }
+      return;
+    } catch (e) {
+      lastError = e;
+      log('kvPut $name attempt $attempt failed: $e');
+      await Future<void>.delayed(const Duration(seconds: 1));
+    }
   }
+  throw StateError('kvPut $name failed after retries: $lastError');
 }
 
 Future<String?> kvGet(String name) async {
@@ -414,23 +447,73 @@ Future<void> runAlice(WidgetTester tester) async {
   log('S1 delivered');
 
   // --- S2: ping-pong, Alice sends the odd messages ---
-  for (var i = 1; i <= s2Count; i++) {
-    if (i.isOdd) {
-      await sendChatMessage(tester, s2Message(i));
-    } else {
-      await awaitChatMessage(
-        tester,
-        s2Message(i),
-        timeout: const Duration(minutes: 5),
-      );
+  if (runS2) {
+    for (var i = 1; i <= s2Count; i++) {
+      if (i.isOdd) {
+        await sendChatMessage(tester, s2Message(i));
+      } else {
+        await awaitChatMessage(
+          tester,
+          s2Message(i),
+          timeout: const Duration(minutes: 5),
+        );
+      }
     }
+    // Delivery of our final send (s2-09) is confirmed by Bob's recv marker
+    // before he sends s2-10, and s2-10 arriving above closes the loop.
+    log('S2 complete ($s2Count messages)');
   }
-  // Delivery of our final send (s2-09) is confirmed by Bob's recv marker
-  // before he sends s2-10, and s2-10 arriving above closes the loop.
-  await writeResult(true, 'S1 + S2 complete ($s2Count messages)');
+
+  // --- S3: kill/restart catch-up — Bob is force-stopped by the harness,
+  // we send into the void, the restarted app must catch up. ---
+  if (runS3) {
+    if (await waitForKv(
+          tester,
+          's3-bob-killed',
+          timeout: const Duration(minutes: 5),
+        ) ==
+        null) {
+      throw StateError('harness never signalled s3-bob-killed');
+    }
+    await sendChatMessage(tester, s3Message);
+    if (await waitForKv(
+          tester,
+          'recv-$s3Message',
+          timeout: const Duration(minutes: 10),
+        ) ==
+        null) {
+      throw StateError('Bob never confirmed receipt of the S3 message');
+    }
+    log('S3 delivered (catch-up after restart)');
+  }
+
+  // --- S4: airplane-mode reconnect — the harness cuts Bob's network, we
+  // send into the silence, Bob must reconnect and receive. ---
+  if (runS4) {
+    if (await waitForKv(
+          tester,
+          's4-net-down',
+          timeout: const Duration(minutes: 5),
+        ) ==
+        null) {
+      throw StateError('harness never signalled s4-net-down');
+    }
+    await sendChatMessage(tester, s4Message);
+    if (await waitForKv(
+          tester,
+          'recv-$s4Message',
+          timeout: const Duration(minutes: 10),
+        ) ==
+        null) {
+      throw StateError('Bob never confirmed receipt of the S4 message');
+    }
+    log('S4 delivered (reconnect after airplane mode)');
+  }
+
+  await writeResult(true, 'scenarios complete: ${scenarios.join(',')}');
 
   // Stay alive until Bob has written his verdict too.
-  await waitForKv(tester, 'bob_result', timeout: const Duration(minutes: 3));
+  await waitForKv(tester, 'bob_result', timeout: const Duration(minutes: 5));
 }
 
 Future<void> runBob(WidgetTester tester) async {
@@ -511,31 +594,86 @@ Future<void> runBob(WidgetTester tester) async {
   );
 
   // --- S2: ping-pong, Bob sends the even messages ---
-  for (var i = 1; i <= s2Count; i++) {
-    if (i.isOdd) {
-      await awaitChatMessage(
-        tester,
-        s2Message(i),
-        timeout: const Duration(minutes: 5),
-      );
-    } else {
-      await sendChatMessage(tester, s2Message(i));
+  if (runS2) {
+    for (var i = 1; i <= s2Count; i++) {
+      if (i.isOdd) {
+        await awaitChatMessage(
+          tester,
+          s2Message(i),
+          timeout: const Duration(minutes: 5),
+        );
+      } else {
+        await sendChatMessage(tester, s2Message(i));
+      }
     }
+
+    // Our last send (s2-10) still needs to reach Alice — wait for her recv
+    // marker so we do not tear the app down while retries are pending.
+    final lastConfirmed = await waitForKv(
+      tester,
+      'recv-${s2Message(s2Count)}',
+      timeout: const Duration(minutes: 5),
+    );
+    if (lastConfirmed == null) {
+      throw StateError(
+        'Alice never confirmed receipt of ${s2Message(s2Count)}',
+      );
+    }
+    log('S2 complete ($s2Count messages)');
   }
 
-  // Our last send (s2-10) still needs to reach Alice — wait for her recv
-  // marker so we do not tear the app down while retries are pending.
-  final lastConfirmed = await waitForKv(
+  // --- S3: hand over to the harness — it force-stops this app (killing
+  // this very test process), lets Alice send, then restarts the app. The
+  // RESUMED process (bob_phase = resume-s3) continues in runBobResume. ---
+  if (runS3) {
+    await kvPut('bob_ready_s3', '1');
+    log('ready for S3 — waiting to be force-stopped by the harness');
+    await pumpFor(tester, const Duration(minutes: 30));
+    throw StateError('harness never force-stopped the app for S3');
+  }
+
+  await runBobLifecycleTail(tester);
+}
+
+/// Second app start for Bob (S3): the harness force-stopped the app while
+/// Alice's S3 message was in flight and restarted it with bob_phase =
+/// resume-s3. Everything is persisted (onboarding, channel, peer OH) — the
+/// app must come up, reconnect and catch up on the missed message. The
+/// harness measures recv(s3) - restart against the 60 s budget.
+Future<void> runBobResume(WidgetTester tester) async {
+  // No onboarding, no QR exchange — straight to the persisted channel.
+  await openChat(tester);
+  await awaitChatMessage(
     tester,
-    'recv-${s2Message(s2Count)}',
+    s3Message,
     timeout: const Duration(minutes: 5),
   );
-  if (lastConfirmed == null) {
-    throw StateError('Alice never confirmed receipt of ${s2Message(s2Count)}');
-  }
-  await writeResult(true, 'S1 + S2 complete ($s2Count messages)');
+  log('S3 catch-up message received after restart');
 
-  await waitForKv(tester, 'alice_result', timeout: const Duration(minutes: 3));
+  await runBobLifecycleTail(tester);
+}
+
+/// Shared tail for Bob: S4 (airplane-mode reconnect) if enabled, then the
+/// final verdict. Runs in the initial process when S3 is disabled, in the
+/// resumed process otherwise.
+Future<void> runBobLifecycleTail(WidgetTester tester) async {
+  if (runS4) {
+    await kvPut('bob_ready_s4', '1');
+    log('ready for S4 — harness will cut the network');
+    // The harness disables the network, Alice sends into the silence, the
+    // harness restores the network. All we can observe is the message
+    // finally showing up in the chat UI — awaitChatMessage stamps the
+    // recv marker the harness measures against s4-net-up.
+    await awaitChatMessage(
+      tester,
+      s4Message,
+      timeout: const Duration(minutes: 10),
+    );
+    log('S4 message received after reconnect');
+  }
+
+  await writeResult(true, 'scenarios complete: ${scenarios.join(',')}');
+  await waitForKv(tester, 'alice_result', timeout: const Duration(minutes: 5));
 }
 
 void main() {
@@ -544,7 +682,35 @@ void main() {
 
   testWidgets('emulator duo e2e', (tester) async {
     role = await detectRole();
-    log('starting app (coord=$coordBase seeds=$seedsRaw)');
+
+    // Scenario selection + phase come from the coord server (run.sh writes
+    // them before launching the apps) — no dart-define, so switching
+    // scenarios does not need an apk rebuild.
+    String? scenariosRaw;
+    String? bobPhase;
+    for (var attempt = 1; attempt <= 20; attempt++) {
+      try {
+        scenariosRaw = await kvGet('scenarios');
+        bobPhase = role == 'bob' ? await kvGet('bob_phase') : null;
+        if (scenariosRaw != null) break;
+      } catch (e) {
+        log('fetching scenarios attempt $attempt failed: $e');
+      }
+      await Future<void>.delayed(const Duration(seconds: 3));
+    }
+    if (scenariosRaw == null) {
+      throw StateError('coord server never provided the scenario list');
+    }
+    scenarios = scenariosRaw
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .where((s) => s.isNotEmpty)
+        .toSet();
+    final resume = bobPhase == 'resume-s3';
+    log(
+      'starting app (coord=$coordBase seeds=$seedsRaw '
+      'scenarios=${scenarios.join(',')} phase=${resume ? 'resume-s3' : 'initial'})',
+    );
 
     final seeds = seedsRaw
         .split(',')
@@ -566,6 +732,8 @@ void main() {
     try {
       if (role == 'alice') {
         await runAlice(tester);
+      } else if (resume) {
+        await runBobResume(tester);
       } else {
         await runBob(tester);
       }

@@ -1,4 +1,4 @@
-# Emulator Duo E2E Harness (T23)
+# Emulator Duo E2E Harness (T23/T24)
 
 Two headless Android emulators (Alice + Bob) chat with each other through a
 **local** backend node — the deterministic, host-only variant of the desktop
@@ -7,15 +7,43 @@ needs KVM, an Android system image and ~4 GB of free RAM).
 
 ## Scenarios
 
+Selected via `RP_SCENARIOS` (comma list, default `s1,s2,s3,s4`); S1 is the
+pairing foundation and always runs, even when omitted from the list.
+
 - **S1** — fresh pairing: Alice creates the channel through the real UI, Bob
   joins via the QR JSON (same code path as the scanner, minus the camera),
   Alice sends one message, delivery is timed.
 - **S2** — 10 messages ping-pong (odd from Alice, even from Bob), latency per
   message; report contains p50/p95/max (nearest-rank).
+- **S3** — kill/restart catch-up (T24): the harness force-stops Bob's app
+  (`am force-stop` — the in-app test process dies with it), Alice sends while
+  Bob is dead, the harness restarts the app. The restarted process detects
+  the resume phase via the coord key `bob_phase=resume-s3`, skips
+  onboarding/pairing (everything is persisted; **no** `pm clear` on resume)
+  and must show the message within the **60 s catch-up budget**
+  (`s3.catchupMs` = `recv` − `s3-bob-restart`, enforced by run.sh). Proves
+  the T18 restart-requeue (PR #50).
+- **S4** — airplane-mode reconnect (T24): with both apps running, the
+  harness enables airplane mode on Bob (`cmd connectivity airplane-mode
+  enable` — verified on the API 35 image to drop guest→host TCP, i.e.
+  10.0.2.2 becomes unreachable), Alice sends into the silence
+  (`RP_S4_SILENCE_SEC`, default 45 s), then airplane mode goes off again.
+  Bob must reconnect and receive; `s4.reconnectDeliveryMs` = `recv` −
+  `s4-net-up`. run.sh fails the scenario if the message arrived *before*
+  the network was restored (that would mean the disconnect never happened).
+  Proves the T15 isolate resilience + the #55 host-node fix.
+- **S5 (OH expiry / re-announce) is NOT covered**: the node clamps every OH
+  registration to `MIN_TTL_MS` = 10 min … `MAX_TTL_MS` = 7 d in
+  `OutboundService.java` (`private static final`, no env/property override),
+  so a short-expiry run is impossible without a redpandaj change — out of
+  scope for this harness by decision (T24).
 
 Latency timestamps are taken **on the host** by the coordination server when
 the `sent-<id>` / `recv-<id>` markers arrive, so guest clock drift cannot
 skew the numbers (resolution: UI poll interval of ~250 ms + one HTTP hop).
+The S3/S4 lifecycle markers (`s3-bob-killed`, `s3-bob-restart`,
+`s4-net-down`, `s4-net-up`) are PUT by run.sh itself and timestamped the
+same way.
 
 ## Prerequisites
 
@@ -34,9 +62,14 @@ skew the numbers (resolution: UI poll interval of ~250 ms + one HTTP hop).
 ## Run
 
 ```sh
-tool/emu_duo_e2e/run.sh             # local node — the default, deterministic
-tool/emu_duo_e2e/run.sh --testnet   # live testnet seeds instead (no local node)
+tool/emu_duo_e2e/run.sh                        # all scenarios, local node
+RP_SCENARIOS=s1,s2 tool/emu_duo_e2e/run.sh     # only pairing + ping-pong
+tool/emu_duo_e2e/run.sh --testnet              # live testnet seeds (no local node)
 ```
+
+The scenario list is served to the apps via the coord server key
+`scenarios` (no dart-define), so changing `RP_SCENARIOS` does not require
+an apk rebuild.
 
 The script:
 
@@ -54,16 +87,21 @@ The script:
    to its default known nodes (which include `127.0.0.1:59558`),
 4. boots the emulators sequentially (tight RAM), installs the apk (app data
    is wiped via `pm clear` so reused AVDs still start fresh), launches the
-   app on both, and
-5. waits for both verdicts, then writes the artifacts.
+   app on both,
+5. orchestrates the lifecycle scenarios: S3 (force-stop Bob → Alice sends →
+   restart with `bob_phase=resume-s3`) and S4 (airplane mode on → Alice
+   sends → silence → airplane mode off), and
+6. waits for both verdicts, then writes the artifacts.
 
-Exit code 0 iff both roles report `ok:true`.
+Exit code 0 iff both roles report `ok:true` AND (with s3 enabled) the
+catch-up stayed within the 60 s budget AND (with s4 enabled) delivery
+happened only after the network came back.
 
 ## Artifacts (`build/e2e-artifacts/`, git-ignored)
 
 | File | Content |
 | --- | --- |
-| `report.json` | S1 latency + S2 per-message latencies with p50/p95/max |
+| `report.json` | S1 latency, S2 per-message latencies with p50/p95/max, S3 `catchupMs`/`withinCatchupBudget`, S4 `silenceMs`/`reconnectDeliveryMs` |
 | `alice.logcat`, `bob.logcat` | full logcat per emulator (`flutter: [emu-duo]` lines are the test's own log) |
 | `node.log`, `coord.log`, `emulator-*.log` | host-side process logs |
 

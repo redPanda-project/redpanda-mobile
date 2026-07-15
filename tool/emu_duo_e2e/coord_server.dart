@@ -10,7 +10,7 @@
 //   PUT  /kv/<name>   store body (first write wins the timestamp)
 //   GET  /kv/<name>   200 body | 404
 //   GET  /events      all recorded (name, tMs) pairs
-//   GET  /report      S1/S2 latency report (p50/p95/max, nearest-rank)
+//   GET  /report      S1-S4 latency report (S2: p50/p95/max, nearest-rank)
 //
 // Usage: dart run tool/emu_duo_e2e/coord_server.dart [port]
 
@@ -127,8 +127,23 @@ Map<String, dynamic> buildReport() {
     }
   }
 
+  // Difference of two host-side marker timestamps, null while either is
+  // missing. Used for the S3/S4 lifecycle numbers.
+  int? span(String from, String to) {
+    final a = firstSeenMs[from];
+    final b = firstSeenMs[to];
+    if (a == null || b == null) return null;
+    return b - a;
+  }
+
+  // S3 acceptance (T24): catch-up after an app restart must complete within
+  // 60 s — this proves the T18 restart-requeue (mobile PR #50).
+  const s3CatchupBudgetMs = 60000;
+  final s3Catchup = span('s3-bob-restart', 'recv-e2e-s3');
+
   return {
     'generatedAt': DateTime.now().toIso8601String(),
+    'scenarios': store['scenarios'],
     's1': {
       'sentAtMs': firstSeenMs['sent-e2e-s1'],
       'recvAtMs': firstSeenMs['recv-e2e-s1'],
@@ -140,6 +155,30 @@ Map<String, dynamic> buildReport() {
       'p50Ms': pct(50),
       'p95Ms': pct(95),
       'maxMs': s2Latencies.isEmpty ? null : s2Latencies.last,
+    },
+    's3': {
+      'bobKilledAtMs': firstSeenMs['s3-bob-killed'],
+      'sentAtMs': firstSeenMs['sent-e2e-s3'],
+      'bobRestartAtMs': firstSeenMs['s3-bob-restart'],
+      'recvAtMs': firstSeenMs['recv-e2e-s3'],
+      // Acceptance number: app start -> message visible in the chat UI.
+      'catchupMs': s3Catchup,
+      'catchupBudgetMs': s3CatchupBudgetMs,
+      'withinCatchupBudget': s3Catchup == null
+          ? null
+          : s3Catchup <= s3CatchupBudgetMs,
+      // For reference: full send -> receive latency across the kill window.
+      'deliveryMs': latencyMs('e2e-s3'),
+    },
+    's4': {
+      'netDownAtMs': firstSeenMs['s4-net-down'],
+      'sentAtMs': firstSeenMs['sent-e2e-s4'],
+      'netUpAtMs': firstSeenMs['s4-net-up'],
+      'recvAtMs': firstSeenMs['recv-e2e-s4'],
+      'silenceMs': span('s4-net-down', 's4-net-up'),
+      // Acceptance number: network restored -> message visible on Bob.
+      'reconnectDeliveryMs': span('s4-net-up', 'recv-e2e-s4'),
+      'deliveryMs': latencyMs('e2e-s4'),
     },
     'results': {
       'alice': decodeResult('alice_result'),
