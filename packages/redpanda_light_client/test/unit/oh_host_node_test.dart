@@ -69,4 +69,17 @@ void main() {
       expect(renewed, isFalse);
     },
   );
+
+  test('re-registration after NOT_FOUND resets the fetch cursor', () async {
+    // A NOT_FOUND fetch means the host recreated (or lost) the mailbox —
+    // its sequence ids restart at 1, so the old cursor would silently
+    // swallow all new mail. The cursor must be reset even when the
+    // re-registration attempt itself cannot reach the host yet.
+    final oh = await registration();
+    oh.lastCursor = 57;
+
+    await client.reregisterLostHandle(oh);
+
+    expect(oh.lastCursor, 0);
+  });
 }
