@@ -198,7 +198,9 @@ void main() {
           .add(const Duration(days: 7))
           .millisecondsSinceEpoch,
       channelId: channelId,
-      serverEndpoint: '10.9.9.9:5000',
+      // Must be the connected scripted peer: fetches go only to the node
+      // hosting the handle's mailbox.
+      serverEndpoint: 'scripted:1',
     );
     await client.restoreOutboundHandle(oh);
     return oh;

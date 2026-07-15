@@ -47,7 +47,7 @@ void main() {
 
       expect(events, hasLength(1));
       expect(events.single.success, isFalse);
-      expect(events.single.detail, 'no active peer');
+      expect(events.single.detail, 'host node not connected');
       expect(events.single.channelId, 'health-channel');
       expect(events.single.ohId, oh.ohId);
       expect(events.single.atMs, greaterThanOrEqualTo(before));
