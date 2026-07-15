@@ -44,12 +44,21 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 NODE_PID=""
 COORD_PID=""
 LOGCAT_PIDS=()
+
+# Kills the emulator on a serial ONLY if it runs the given AVD — a developer
+# may have an unrelated emulator sitting on 5554/5556.
+kill_our_emulator() { # serial avd_name
+  local name
+  name="$(adb -s "$1" emu avd name 2>/dev/null | head -1 | tr -d '\r')"
+  [[ "$name" == "$2" ]] && adb -s "$1" emu kill >/dev/null 2>&1
+}
+
 cleanup() {
   set +e
   log "cleanup: stopping emulators, node, coord server"
   for pid in "${LOGCAT_PIDS[@]:-}"; do [[ -n "$pid" ]] && kill "$pid" 2>/dev/null; done
-  adb -s "$SERIAL_ALICE" emu kill >/dev/null 2>&1
-  adb -s "$SERIAL_BOB" emu kill >/dev/null 2>&1
+  kill_our_emulator "$SERIAL_ALICE" rp_alice
+  kill_our_emulator "$SERIAL_BOB" rp_bob
   [[ -n "$COORD_PID" ]] && kill "$COORD_PID" 2>/dev/null
   if [[ -n "$NODE_PID" ]]; then
     kill "$NODE_PID" 2>/dev/null
@@ -100,7 +109,8 @@ tune_avd() { # name
   for kv in "hw.ram.size=$AVD_RAM_MB" "hw.cpu.ncore=2" "hw.keyboard=yes" \
             "hw.gpu.mode=swiftshader_indirect" "disk.dataPartition.size=2048M"; do
     local key="${kv%%=*}"
-    grep -v "^${key}=" "$cfg" > "$cfg.tmp" || true
+    # Literal prefix match (keys contain '.', which is a regex wildcard).
+    awk -v p="$key=" 'index($0, p) != 1' "$cfg" > "$cfg.tmp"
     mv "$cfg.tmp" "$cfg"
     echo "$kv" >> "$cfg"
   done
@@ -155,8 +165,20 @@ wait_port "$COORD_PORT" "coord server" 30
 # ---------------------------------------------------------------------------
 # Emulators (booted sequentially — tight RAM budget on this host)
 # ---------------------------------------------------------------------------
-boot_avd() { # name port serial
-  log "booting AVD $1 on $3"
+boot_avd() { # name console_port serial
+  # Never boot over a foreign emulator that already occupies our serial.
+  if adb devices | grep -q "^$3[[:space:]]"; then
+    local name
+    name="$(adb -s "$3" emu avd name 2>/dev/null | head -1 | tr -d '\r')"
+    if [[ "$name" == "$1" ]]; then
+      log "AVD $1 already running on $3 — stopping stale instance"
+      adb -s "$3" emu kill >/dev/null 2>&1
+      sleep 5
+    else
+      die "serial $3 is occupied by another emulator ('$name') — free it first"
+    fi
+  fi
+  log "booting AVD $1 (serial $3, console port $2)"
   emulator -avd "$1" -port "$2" \
     -no-window -no-audio -no-snapshot -no-boot-anim -no-metrics \
     -gpu swiftshader_indirect -memory "$AVD_RAM_MB" -cores 2 \

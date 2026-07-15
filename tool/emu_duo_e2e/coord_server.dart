@@ -23,8 +23,10 @@ final Stopwatch clock = Stopwatch()..start();
 
 Future<void> main(List<String> args) async {
   final port = args.isNotEmpty ? int.parse(args[0]) : 8123;
-  final server = await HttpServer.bind(InternetAddress.anyIPv4, port);
-  stdout.writeln('coord server listening on :$port');
+  // Loopback only — the emulator reaches it via its 10.0.2.2 host alias,
+  // and nothing on the LAN should be able to write markers.
+  final server = await HttpServer.bind(InternetAddress.loopbackIPv4, port);
+  stdout.writeln('coord server listening on 127.0.0.1:$port');
 
   await for (final req in server) {
     try {
