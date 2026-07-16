@@ -595,7 +595,11 @@ class RedPandaLightClient implements RedPandaClient {
     // Exponential backoff: 2s, 4s, 8s...
     // 2 * (2^(count-1))
     int seconds = 2 * (1 << (count - 1));
-    if (seconds > 300) seconds = 300; // Cap at 5 mins
+    // Cap at 30 s (was 5 min): after a ~1 min outage the old cap made the
+    // next reconnect attempt wait up to several minutes — the dominant part
+    // of post-airplane-mode delivery delay (T27). A capped attempt is one
+    // TCP dial per address per 30 s, negligible traffic/battery.
+    if (seconds > 30) seconds = 30;
 
     _nextRetryTime[address] = DateTime.now().add(Duration(seconds: seconds));
   }
@@ -726,6 +730,10 @@ class RedPandaLightClient implements RedPandaClient {
   /// When the currently scheduled poll fires — lets fresh activity pull an
   /// already-scheduled (slow) poll forward.
   DateTime? _nextPollAt;
+
+  /// Serializes fire-and-forget batch acks (T27): AckFetch responses share
+  /// the single per-command completer slot, so acks must not overlap.
+  Future<void> _ackFetchTail = Future.value();
 
   /// OHs are renewed when they expire within this window.
   static const Duration renewalThreshold = Duration(days: 1);
@@ -1628,6 +1636,12 @@ class RedPandaLightClient implements RedPandaClient {
 
   @override
   Future<List<DecryptedMessage>> fetchMessages(OHRegistration oh) async {
+    // Phase telemetry (T27): durations only, logged at the end.
+    final fetchStarted = DateTime.now();
+    Duration sinceStart() => DateTime.now().difference(fetchStarted);
+    var signedAt = Duration.zero;
+    var respondedAt = Duration.zero;
+
     final random = Random.secure();
     final nonce = Uint8List.fromList(
       List<int>.generate(16, (_) => random.nextInt(256)),
@@ -1649,6 +1663,7 @@ class RedPandaLightClient implements RedPandaClient {
     final signature = await oh.keypair.sign(
       Uint8List.fromList(signingBuffer.toBytes()),
     );
+    signedAt = sinceStart();
 
     final request = FetchRequest()
       ..ohId = oh.ohId
@@ -1705,6 +1720,7 @@ class RedPandaLightClient implements RedPandaClient {
 
     // Parse FetchResponse protobuf
     final response = FetchResponse.fromBuffer(responseBytes);
+    respondedAt = sinceStart();
     RpLog.debug(
       'RedPandaLightClient: fetchMessages() status=${response.status} items=${response.items.length}',
     );
@@ -1899,11 +1915,41 @@ class RedPandaLightClient implements RedPandaClient {
       }
     }
 
+    final decryptedAt = sinceStart();
+
     // Acknowledge the fetched batch so the Full Node can delete it.
+    // Fire-and-forget (T27): the ack signs a second request and used to gate
+    // delivery — fetched messages reached the app only after it completed.
     // Failures are tolerated: items are re-delivered on the next fetch and
-    // deduplicated by message_id in the app layer.
+    // deduplicated by message_id in the app layer. The chain serializes
+    // overlapping acks, which share the per-command response slot (157).
     if (response.items.isNotEmpty) {
-      await ackFetch(oh, response.nextCursor.toInt());
+      final ackCursor = response.nextCursor.toInt();
+      _ackFetchTail = _ackFetchTail.then(
+        (_) => ackFetch(oh, ackCursor)
+            .then((ok) {
+              if (!ok) {
+                RpLog.info(
+                  'RedPandaLightClient: background ackFetch reported failure',
+                );
+              }
+            })
+            .catchError((Object e) {
+              RpLog.info('RedPandaLightClient: background ackFetch failed: $e');
+            }),
+      );
+    }
+
+    if (response.items.isNotEmpty ||
+        sinceStart() > const Duration(seconds: 3)) {
+      // Phase telemetry (T27): where fetch time goes — durations and item
+      // counts only, no identifiers.
+      RpLog.info(
+        'RedPandaLightClient: fetch phases for ${response.items.length} '
+        'item(s): sign ${signedAt.inMilliseconds}ms, response '
+        '${(respondedAt - signedAt).inMilliseconds}ms, decrypt+dispatch '
+        '${(decryptedAt - respondedAt).inMilliseconds}ms',
+      );
     }
 
     if (response.items.isNotEmpty ||

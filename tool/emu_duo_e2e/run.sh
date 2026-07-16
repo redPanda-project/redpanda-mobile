@@ -30,7 +30,11 @@ NODE_PORT="${RP_NODE_PORT:-59558}"
 SYSIMG="system-images;android-35;google_apis;x86_64"
 AVD_RAM_MB=1536
 JAR="$REPO/references/redPandaj/target/redpanda.jar"
-APK="$REPO/build/app/outputs/flutter-apk/app-debug.apk"
+# Profile build (T27): AOT-compiled like a release apk, so crypto costs
+# (Ed25519 signing, ratchet decrypt) match production. A debug/JIT build
+# inflates them ~10-50x (3-8 s per signature on these emulators) and
+# drowns the latency signal this harness exists to measure.
+APK="$REPO/build/app/outputs/flutter-apk/app-profile.apk"
 ART="$REPO/build/e2e-artifacts"
 RESULT_TIMEOUT_MIN="${RP_TIMEOUT_MIN:-45}"
 SCENARIOS="${RP_SCENARIOS:-s1,s2,s3,s4}"
@@ -198,7 +202,7 @@ ensure_avd rp_bob
 # Both emulators run this same apk; the role comes from the AVD name.
 # ---------------------------------------------------------------------------
 log "building test apk (target=integration_test/emu_duo_e2e_test.dart, seeds=$SEEDS)"
-(cd "$REPO" && flutter build apk --debug \
+(cd "$REPO" && flutter build apk --profile \
   --target=integration_test/emu_duo_e2e_test.dart \
   --dart-define=RP_SEEDS="$SEEDS" \
   --dart-define=RP_COORD="http://10.0.2.2:$COORD_PORT")
