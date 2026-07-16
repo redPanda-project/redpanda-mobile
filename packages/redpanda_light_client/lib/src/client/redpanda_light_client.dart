@@ -315,6 +315,13 @@ class RedPandaLightClient implements RedPandaClient {
             _retryCounts.remove(entry.key);
           }
         }
+
+        // T27: (re-)connected — run a catch-up poll right away instead of
+        // waiting for the next scheduled tick (up to 30 s). Deliberately
+        // does NOT start the fast-cadence window; a non-empty fetch does.
+        if (_pollingEnabled && !_pollInProgress) {
+          _schedulePoll(const Duration(seconds: 1));
+        }
       }
     } else if (status == ConnectionStatus.connecting) {
       if (_currentStatus != ConnectionStatus.connected) {
@@ -643,6 +650,8 @@ class RedPandaLightClient implements RedPandaClient {
   @override
   Future<void> disconnect() async {
     _connectionTimer?.cancel();
+    _pollingEnabled = false; // stop the self-rescheduling poll loop (T27)
+    _nextPollAt = null;
     _pollingTimer?.cancel();
     _pollingTimer = null;
     _renewalTimer?.cancel();
@@ -680,6 +689,34 @@ class RedPandaLightClient implements RedPandaClient {
   // per-command slot in _pendingResponses, so they must not race.
   bool _pollInProgress = false;
   bool _renewalInProgress = false;
+
+  /// Mailbox poll cadence while no conversation is active. Kept at 30 s so
+  /// idle traffic/metadata stays as before (T27).
+  static const Duration idlePollInterval = Duration(seconds: 30);
+
+  /// Faster poll cadence while a conversation is active (T27): the fixed
+  /// 30 s tick dominated delivery latency (emulator duo E2E S2 p95 ~28 s —
+  /// latency is simply the distance from a send to the receiver's next
+  /// tick). 5 s bounds active-chat latency at ~6 s without touching the
+  /// idle cadence. Node-side rate limiting only applies to OH registration
+  /// (5/min per connection), not to fetches.
+  static const Duration activePollInterval = Duration(seconds: 5);
+
+  /// How long after the last chat activity (own send, non-empty fetch,
+  /// fresh OH registration) the fast cadence is kept before falling back
+  /// to [idlePollInterval].
+  static const Duration pollActivityWindow = Duration(seconds: 60);
+
+  /// Whether the self-rescheduling poll loop is running (between
+  /// [_startPolling] and [disconnect]).
+  bool _pollingEnabled = false;
+
+  /// Timestamp of the last chat activity; drives [_pollInterval].
+  DateTime _lastChatActivity = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// When the currently scheduled poll fires — lets fresh activity pull an
+  /// already-scheduled (slow) poll forward.
+  DateTime? _nextPollAt;
 
   /// OHs are renewed when they expire within this window.
   static const Duration renewalThreshold = Duration(days: 1);
@@ -935,6 +972,10 @@ class RedPandaLightClient implements RedPandaClient {
         'sendMessage: channel $channelId has no encryption keys registered',
       );
     }
+
+    // T27: an own send starts/extends the active-conversation window — a
+    // reply is likely, so the mailbox poll switches to the fast cadence.
+    _notePollActivity();
 
     // MS05: attach a fresh Reverse Garlic Block when this channel has an own
     // OH mailbox to reply to — one RGB per message (master spec MS05, OQ 2),
@@ -1379,6 +1420,10 @@ class RedPandaLightClient implements RedPandaClient {
 
     _registeredOHs.add(registration);
     _startPolling();
+    // T27: a freshly registered handle means a brand-new channel — the
+    // partner's first message is expected shortly, so poll fast right away
+    // (fixes the ~30 s first-message latency after a channel join).
+    _notePollActivity();
 
     return registration;
   }
@@ -2939,58 +2984,102 @@ class RedPandaLightClient implements RedPandaClient {
   }
 
   void _startPolling() {
-    _pollingTimer ??= Timer.periodic(const Duration(seconds: 30), (_) async {
-      if (_pollInProgress) return; // previous cycle still running
-      _pollInProgress = true;
-      try {
-        for (final oh in List.of(_registeredOHs)) {
-          try {
-            final messages = await fetchMessages(oh);
-            for (final msg in messages) {
-              _incomingMessageController.add(msg);
-            }
-          } catch (e) {
-            RpLog.info('RedPandaLightClient: Polling error: $e');
-            _emitFetchStatus(oh, false, 'error: $e');
-          }
-        }
-        // MS05: prune session tags whose RGB expired long ago (48h).
-        for (final channelId in _sessionTagStore.cleanup()) {
-          _emitGarlicSession(channelId);
-        }
-        // MS06: sends whose R-ACK never arrived — score the involved hops
-        // down and tell the app layer so it can re-send over fresh hops.
-        final expired = _ackTagStore.takeExpired(ackTimeout);
-        for (final entry in expired) {
-          _nodeScorer.recordFailure(entry.hopNodeIdsHex);
-          // MS08: an unconfirmed rotation box simply stays pending — the
-          // periodic retry re-sends it; no message status to update.
-          if (entry.isRotation) continue;
-          if (!_routingAckController.isClosed) {
-            _routingAckController.add(
-              RoutingAckUpdate.timeout(
-                channelId: entry.channelId,
-                messageIdHex: entry.messageIdHex,
-                memberIdHex: entry.memberIdHex,
-              ),
-            );
-          }
-          RpLog.info(
-            'RedPandaLightClient: no R-ACK for message '
-            '${entry.messageIdHex} within ${ackTimeout.inSeconds}s',
-          );
-        }
-        if (expired.isNotEmpty) {
-          _emitNodeScores();
-        }
-      } finally {
-        _pollInProgress = false;
-      }
-    });
+    if (!_pollingEnabled) {
+      _pollingEnabled = true;
+      _schedulePoll(_pollInterval);
+    }
     _renewalTimer ??= Timer.periodic(
       renewalCheckInterval,
       (_) => checkAndRenewExpiringHandles(),
     );
+  }
+
+  /// Current poll cadence: fast while a conversation is active, slow when
+  /// idle (T27).
+  Duration get _pollInterval =>
+      DateTime.now().difference(_lastChatActivity) <= pollActivityWindow
+      ? activePollInterval
+      : idlePollInterval;
+
+  /// (Re-)schedules the next poll cycle in [delay]; each cycle reschedules
+  /// itself with the then-current [_pollInterval].
+  void _schedulePoll(Duration delay) {
+    if (!_pollingEnabled) return;
+    _pollingTimer?.cancel();
+    _nextPollAt = DateTime.now().add(delay);
+    _pollingTimer = Timer(delay, () async {
+      await _runPollCycle();
+      _schedulePoll(_pollInterval);
+    });
+  }
+
+  /// Records chat activity (own send / fresh registration) so the poll loop
+  /// switches to [activePollInterval], and pulls an already-scheduled slow
+  /// poll forward so the faster cadence takes effect immediately. A cycle
+  /// that is currently running reschedules itself with the fresh interval
+  /// when it completes.
+  void _notePollActivity() {
+    _lastChatActivity = DateTime.now();
+    final next = _nextPollAt;
+    if (_pollingEnabled &&
+        !_pollInProgress &&
+        (next == null ||
+            next.isAfter(DateTime.now().add(activePollInterval)))) {
+      _schedulePoll(activePollInterval);
+    }
+  }
+
+  Future<void> _runPollCycle() async {
+    if (_pollInProgress) return; // previous cycle still running
+    _pollInProgress = true;
+    try {
+      for (final oh in List.of(_registeredOHs)) {
+        try {
+          final messages = await fetchMessages(oh);
+          if (messages.isNotEmpty) {
+            // The partner is active — keep the fast cadence going (T27).
+            _lastChatActivity = DateTime.now();
+          }
+          for (final msg in messages) {
+            _incomingMessageController.add(msg);
+          }
+        } catch (e) {
+          RpLog.info('RedPandaLightClient: Polling error: $e');
+          _emitFetchStatus(oh, false, 'error: $e');
+        }
+      }
+      // MS05: prune session tags whose RGB expired long ago (48h).
+      for (final channelId in _sessionTagStore.cleanup()) {
+        _emitGarlicSession(channelId);
+      }
+      // MS06: sends whose R-ACK never arrived — score the involved hops
+      // down and tell the app layer so it can re-send over fresh hops.
+      final expired = _ackTagStore.takeExpired(ackTimeout);
+      for (final entry in expired) {
+        _nodeScorer.recordFailure(entry.hopNodeIdsHex);
+        // MS08: an unconfirmed rotation box simply stays pending — the
+        // periodic retry re-sends it; no message status to update.
+        if (entry.isRotation) continue;
+        if (!_routingAckController.isClosed) {
+          _routingAckController.add(
+            RoutingAckUpdate.timeout(
+              channelId: entry.channelId,
+              messageIdHex: entry.messageIdHex,
+              memberIdHex: entry.memberIdHex,
+            ),
+          );
+        }
+        RpLog.info(
+          'RedPandaLightClient: no R-ACK for message '
+          '${entry.messageIdHex} within ${ackTimeout.inSeconds}s',
+        );
+      }
+      if (expired.isNotEmpty) {
+        _emitNodeScores();
+      }
+    } finally {
+      _pollInProgress = false;
+    }
   }
 
   /// Converts an int to 8-byte big-endian representation.
