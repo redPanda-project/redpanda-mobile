@@ -3083,12 +3083,19 @@ class RedPandaLightClient implements RedPandaClient {
     _nextPollAt = DateTime.now().add(delay);
     _pollingTimer = Timer(delay, () async {
       final cycleStarted = DateTime.now();
-      await _runPollCycle();
-      final elapsed = DateTime.now().difference(cycleStarted);
-      final interval = _pollInterval;
-      _schedulePoll(
-        elapsed >= interval - minPollGap ? minPollGap : interval - elapsed,
-      );
+      try {
+        await _runPollCycle();
+      } catch (e) {
+        // Never let one bad cycle kill the loop — without this, an
+        // exception escaping the cycle would end polling until restart.
+        RpLog.info('RedPandaLightClient: poll cycle failed: $e');
+      } finally {
+        final elapsed = DateTime.now().difference(cycleStarted);
+        final interval = _pollInterval;
+        _schedulePoll(
+          elapsed >= interval - minPollGap ? minPollGap : interval - elapsed,
+        );
+      }
     });
   }
 
