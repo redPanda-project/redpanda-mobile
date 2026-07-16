@@ -707,6 +707,15 @@ class RedPandaLightClient implements RedPandaClient {
   /// to [idlePollInterval].
   static const Duration pollActivityWindow = Duration(seconds: 60);
 
+  /// Minimum pause between two poll cycles. Cycles are scheduled at a
+  /// fixed rate (the last cycle's duration is subtracted from the next
+  /// delay): a cycle involves multiple signed round-trips and decryptions,
+  /// which on slow devices/debug builds can take several seconds —
+  /// fixed-delay scheduling would silently stretch the effective cadence
+  /// by that amount (T27: it pushed the active cadence from 5 s to ~12 s
+  /// in the emulator harness).
+  static const Duration minPollGap = Duration(seconds: 1);
+
   /// Whether the self-rescheduling poll loop is running (between
   /// [_startPolling] and [disconnect]).
   bool _pollingEnabled = false;
@@ -2986,7 +2995,13 @@ class RedPandaLightClient implements RedPandaClient {
   void _startPolling() {
     if (!_pollingEnabled) {
       _pollingEnabled = true;
-      _schedulePoll(_pollInterval);
+      // Already connected when the first handle appears (e.g. restore on
+      // app start finishing after the connection is up): check the mailbox
+      // right away instead of waiting a full idle interval. Not yet
+      // connected: the connect edge in _updateStatus pulls the first poll
+      // forward once the connection is up.
+      final connected = _peers.values.any((p) => p.isHandshakeVerified);
+      _schedulePoll(connected ? const Duration(seconds: 2) : _pollInterval);
     }
     _renewalTimer ??= Timer.periodic(
       renewalCheckInterval,
@@ -3001,15 +3016,22 @@ class RedPandaLightClient implements RedPandaClient {
       ? activePollInterval
       : idlePollInterval;
 
-  /// (Re-)schedules the next poll cycle in [delay]; each cycle reschedules
-  /// itself with the then-current [_pollInterval].
+  /// (Re-)schedules the next poll cycle in [delay]. Cycles run at a fixed
+  /// rate: each cycle's duration is subtracted from the then-current
+  /// [_pollInterval] (never below [minPollGap]), so slow cycles do not
+  /// stretch the effective cadence.
   void _schedulePoll(Duration delay) {
     if (!_pollingEnabled) return;
     _pollingTimer?.cancel();
     _nextPollAt = DateTime.now().add(delay);
     _pollingTimer = Timer(delay, () async {
+      final cycleStarted = DateTime.now();
       await _runPollCycle();
-      _schedulePoll(_pollInterval);
+      final elapsed = DateTime.now().difference(cycleStarted);
+      final interval = _pollInterval;
+      _schedulePoll(
+        elapsed >= interval - minPollGap ? minPollGap : interval - elapsed,
+      );
     });
   }
 
@@ -3032,6 +3054,8 @@ class RedPandaLightClient implements RedPandaClient {
   Future<void> _runPollCycle() async {
     if (_pollInProgress) return; // previous cycle still running
     _pollInProgress = true;
+    final started = DateTime.now();
+    var fetched = 0;
     try {
       for (final oh in List.of(_registeredOHs)) {
         try {
@@ -3039,6 +3063,7 @@ class RedPandaLightClient implements RedPandaClient {
           if (messages.isNotEmpty) {
             // The partner is active — keep the fast cadence going (T27).
             _lastChatActivity = DateTime.now();
+            fetched += messages.length;
           }
           for (final msg in messages) {
             _incomingMessageController.add(msg);
@@ -3079,6 +3104,14 @@ class RedPandaLightClient implements RedPandaClient {
       }
     } finally {
       _pollInProgress = false;
+      // Cadence telemetry (T27): counts and durations only — no handle or
+      // channel identifiers, safe for field logging.
+      RpLog.info(
+        'RedPandaLightClient: poll cycle fetched $fetched message(s) from '
+        '${_registeredOHs.length} OH(s) in '
+        '${DateTime.now().difference(started).inMilliseconds}ms '
+        '(interval ${_pollInterval.inSeconds}s)',
+      );
     }
   }
 

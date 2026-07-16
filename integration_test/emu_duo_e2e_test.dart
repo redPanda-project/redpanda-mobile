@@ -42,6 +42,7 @@ import 'package:redpanda/database/database.dart' as appdb;
 import 'package:redpanda/main.dart';
 import 'package:redpanda/repositories/channel_repository.dart';
 import 'package:redpanda/repositories/outbound_handle_repository.dart';
+import 'package:redpanda/services/field_logging.dart';
 import 'package:redpanda/shared/providers.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
 
@@ -682,6 +683,11 @@ void main() {
 
   testWidgets('emulator duo e2e', (tester) async {
     role = await detectRole();
+
+    // Route RpLog info lines to logcat (T27): the harness artifacts
+    // (alice.logcat / bob.logcat) then carry poll-cadence and send/fetch
+    // telemetry for latency analysis.
+    await FieldLogging.setEnabled(true);
 
     // Scenario selection + phase come from the coord server (run.sh writes
     // them before launching the apps) — no dart-define, so switching

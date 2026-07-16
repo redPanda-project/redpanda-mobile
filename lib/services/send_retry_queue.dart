@@ -48,6 +48,8 @@ class SendRetryQueue {
 
   Timer? _timer;
   bool _passInProgress = false;
+  StreamSubscription<ConnectionStatus>? _connectionSub;
+  ConnectionStatus? _lastSeenStatus;
 
   SendRetryQueue(this._messages, this._client, this._groups);
 
@@ -60,11 +62,31 @@ class SendRetryQueue {
         ),
       ),
     );
+    // T27: on (re)connect, re-send pending messages immediately instead of
+    // waiting out their backoff window — a message that failed because the
+    // device was offline is deliverable the moment the connection is back
+    // (before this, an airplane-mode send waited up to a full backoff
+    // window of minutes after reconnecting).
+    _connectionSub ??= _client.connectionStatus.listen((status) {
+      final wasConnected = _lastSeenStatus == ConnectionStatus.connected;
+      _lastSeenStatus = status;
+      if (status == ConnectionStatus.connected && !wasConnected) {
+        unawaited(
+          retryPending(ignoreBackoff: true).catchError(
+            (Object e) =>
+                debugPrint('SendRetryQueue: reconnect pass failed: $e'),
+          ),
+        );
+      }
+    });
   }
 
   void stop() {
     _timer?.cancel();
     _timer = null;
+    unawaited(_connectionSub?.cancel());
+    _connectionSub = null;
+    _lastSeenStatus = null;
   }
 
   /// Backoff window after [retryCount] failed attempts.
@@ -99,7 +121,10 @@ class SendRetryQueue {
   /// Single retry pass over all pending messages. Public for testing;
   /// normally invoked by the periodic timer. Overlapping passes are
   /// skipped so slow sends cannot update the same rows out of order.
-  Future<void> retryPending() async {
+  ///
+  /// [ignoreBackoff] re-sends every pending message regardless of its
+  /// backoff window (used on reconnect); the [maxRetries] cap still holds.
+  Future<void> retryPending({bool ignoreBackoff = false}) async {
     if (_passInProgress) return;
     _passInProgress = true;
     try {
@@ -111,7 +136,7 @@ class SendRetryQueue {
           await _messages.updateMessageStatus(msg.id, MessageStatus.failed);
           continue;
         }
-        if (!isDue(msg, now)) continue;
+        if (!ignoreBackoff && !isDue(msg, now)) continue;
 
         try {
           // Reuse the stable network message id across attempts so re-sends
