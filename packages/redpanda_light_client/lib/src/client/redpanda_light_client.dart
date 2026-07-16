@@ -81,6 +81,9 @@ class RedPandaLightClient implements RedPandaClient {
   static const int roamingSlots = 2;
   static const Duration backoffDuration = Duration(seconds: 10);
 
+  /// TCP dial timeout for the default socket factory (see constructor).
+  static const Duration connectTimeout = Duration(seconds: 10);
+
   // State for mobile Optimization
   // bool _isBackgrounded = false; // To be set by flutter lifecycle
   bool _isBadInternetDetected = false;
@@ -175,7 +178,15 @@ class RedPandaLightClient implements RedPandaClient {
     this.depositResponseTimeout = const Duration(seconds: 10),
     // Extra predicate for garlic hop candidates (tests pin local nodes).
     bool Function(PeerStats peer)? hopCandidateFilter,
-  }) : _socketFactory = socketFactory ?? ((h, p) => Socket.connect(h, p)),
+  }) : _socketFactory =
+           socketFactory ??
+           // The explicit timeout matters (T27): without one, a dial started
+           // while the network is down hangs for the OS SYN timeout (~2 min
+           // on Linux/Android). The hanging ActivePeer occupies its _peers
+           // slot, _runConnectionCheck skips occupied addresses, and no
+           // fresh dial happens until the OS gives up — post-airplane-mode
+           // reconnects took ~2 min even though the network was back.
+           ((h, p) => Socket.connect(h, p, timeout: connectTimeout)),
        _peerRepository = peerRepository ?? InMemoryPeerRepository() {
     _hopSelector = HopSelector(
       _peerRepository,
