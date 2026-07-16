@@ -239,6 +239,18 @@ Future<String?> waitForKv(
 // UI flows (same widgets/texts as the real app — see duo_e2e_test.dart)
 // ---------------------------------------------------------------------------
 
+/// Sets [text] directly on the first visible text field's controller.
+///
+/// `tester.enterText` proved unreliable in profile builds (T27): it relies
+/// on the test text-input channel, and with a live frame policy on a real
+/// device the text silently never reached the widget — writing to the
+/// controller is build-mode-independent.
+Future<void> setTextField(WidgetTester tester, String text) async {
+  final editable = tester.widget<EditableText>(find.byType(EditableText).first);
+  editable.controller.text = text;
+  await tester.pump();
+}
+
 Future<void> completeOnboarding(WidgetTester tester, String name) async {
   if (!await pumpUntilVisible(
     tester,
@@ -248,7 +260,7 @@ Future<void> completeOnboarding(WidgetTester tester, String name) async {
   )) {
     throw StateError('onboarding screen never appeared');
   }
-  await tester.enterText(find.byType(TextField), name);
+  await setTextField(tester, name);
   await tester.pump();
   // Retry the tap until the home screen actually shows up.
   final deadline = DateTime.now().add(const Duration(seconds: 90));
@@ -305,7 +317,7 @@ Future<void> openChat(WidgetTester tester) async {
 /// Sends [text] through the chat UI and stamps `sent-<text>` on the coord
 /// server (server-side timestamp — the delivery clock starts here).
 Future<void> sendChatMessage(WidgetTester tester, String text) async {
-  await tester.enterText(find.byType(TextField), text);
+  await setTextField(tester, text);
   await tester.pump();
   await tester.tap(find.byIcon(Icons.send));
   await tester.pump();
@@ -353,7 +365,7 @@ Future<void> runAlice(WidgetTester tester) async {
     timeout: const Duration(seconds: 60),
     what: 'create-channel screen',
   );
-  await tester.enterText(find.byType(TextField), channelLabel);
+  await setTextField(tester, channelLabel);
   await tester.pump();
   await tester.tap(find.text('Generate Secure Channel'));
 
