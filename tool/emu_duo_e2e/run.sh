@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
-# Emulator duo E2E harness (T23): two headless Android emulators (Alice +
-# Bob) chat with each other through a LOCAL backend node on this host.
+# Emulator duo E2E harness (T23/T24): two headless Android emulators (Alice
+# + Bob) chat with each other through a LOCAL backend node on this host.
 # See README.md in this directory for prerequisites and details.
 #
 # Usage:
 #   tool/emu_duo_e2e/run.sh              # local node (default, deterministic)
 #   tool/emu_duo_e2e/run.sh --testnet    # against the live testnet seeds
+#
+# Scenario selection (RP_SCENARIOS, default all):
+#   RP_SCENARIOS=s1,s2 tool/emu_duo_e2e/run.sh
+#   s1 pairing + first delivery (always runs — it is the foundation)
+#   s2 10-message ping-pong with latency percentiles
+#   s3 kill/restart catch-up on Bob (T18 restart-requeue, budget 60 s)
+#   s4 airplane-mode reconnect on Bob (T15 isolate resilience)
 #
 # Artifacts land in build/e2e-artifacts/: report.json, alice.logcat,
 # bob.logcat, node.log, coord.log, emulator-*.log.
@@ -26,6 +33,8 @@ JAR="$REPO/references/redPandaj/target/redpanda.jar"
 APK="$REPO/build/app/outputs/flutter-apk/app-debug.apk"
 ART="$REPO/build/e2e-artifacts"
 RESULT_TIMEOUT_MIN="${RP_TIMEOUT_MIN:-45}"
+SCENARIOS="${RP_SCENARIOS:-s1,s2,s3,s4}"
+S4_SILENCE_SEC="${RP_S4_SILENCE_SEC:-45}"
 
 SEEDS="10.0.2.2:$NODE_PORT"
 START_NODE=1
@@ -78,6 +87,58 @@ wait_port() { # port what seconds
   die "$2 did not open port $1 within $3s"
 }
 
+has_scenario() { [[ ",$SCENARIOS," == *",$1,"* ]]; }
+
+# All coord-server curls are bounded — a wedged server must not hang the
+# harness (the surrounding waits are deadline-driven, curl was not).
+CURL=(curl -fs --connect-timeout 5 --max-time 15)
+
+kv_put() { # name value — first PUT wins the host-side timestamp
+  # --data-raw: never interpret a leading '@' as "read body from file".
+  "${CURL[@]}" -X PUT --data-raw "$2" "http://127.0.0.1:$COORD_PORT/kv/$1" >/dev/null \
+    || die "kv_put $1 failed — coord server down?"
+}
+
+save_report() {
+  # Fetch into a temp file — a failing curl must not truncate a previously
+  # saved report.json (it is the primary debugging artifact).
+  if "${CURL[@]}" "http://127.0.0.1:$COORD_PORT/report" >"$ART/report.json.tmp" 2>/dev/null; then
+    mv "$ART/report.json.tmp" "$ART/report.json"
+  else
+    rm -f "$ART/report.json.tmp"
+  fi
+}
+
+wait_kv() { # name seconds — aborts early if either role reported failure
+  local deadline=$(( $(date +%s) + $2 ))
+  while [[ $(date +%s) -lt $deadline ]]; do
+    if "${CURL[@]}" -o /dev/null "http://127.0.0.1:$COORD_PORT/kv/$1"; then
+      return 0
+    fi
+    local a b
+    a="$("${CURL[@]}" "http://127.0.0.1:$COORD_PORT/kv/alice_result" 2>/dev/null || true)"
+    b="$("${CURL[@]}" "http://127.0.0.1:$COORD_PORT/kv/bob_result" 2>/dev/null || true)"
+    if [[ "$a" == *'"ok":false'* || "$b" == *'"ok":false'* ]]; then
+      save_report
+      die "a role reported failure while waiting for kv '$1' (alice=$a bob=$b)"
+    fi
+    sleep 2
+  done
+  save_report
+  die "kv '$1' never appeared within $2s"
+}
+
+# S4 network cut on Bob. `cmd connectivity airplane-mode` works on API 35
+# and drops the emulated wifi+cellular NICs, which is exactly the
+# app-visible connection loss we need (10.0.2.2 becomes unreachable).
+bob_net() { # down|up
+  local mode=enable
+  [[ "$1" == up ]] && mode=disable
+  adb -s "$SERIAL_BOB" shell cmd connectivity airplane-mode "$mode" \
+    || die "airplane-mode $mode failed on $SERIAL_BOB"
+  log "S4: airplane-mode $mode -> state: $(adb -s "$SERIAL_BOB" shell cmd connectivity airplane-mode | tr -d '\r')"
+}
+
 # ---------------------------------------------------------------------------
 # Preflight
 # ---------------------------------------------------------------------------
@@ -96,6 +157,12 @@ if [[ "$START_NODE" == 1 ]]; then
   fi
 fi
 if port_open "$COORD_PORT"; then die "port $COORD_PORT already in use"; fi
+SCENARIOS="$(echo "$SCENARIOS" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+for s in ${SCENARIOS//,/ }; do
+  [[ "$s" =~ ^s[1-4]$ ]] || die "unknown scenario '$s' in RP_SCENARIOS (allowed: s1,s2,s3,s4)"
+done
+has_scenario s1 || SCENARIOS="s1,$SCENARIOS"  # s1 is the pairing foundation
+log "scenarios: $SCENARIOS"
 
 mkdir -p "$ART"
 rm -f "$ART"/report.json "$ART"/alice.logcat "$ART"/bob.logcat "$ART"/node.log "$ART"/coord.log
@@ -161,6 +228,9 @@ log "starting coord server on port $COORD_PORT"
 dart "$REPO/tool/emu_duo_e2e/coord_server.dart" "$COORD_PORT" >"$ART/coord.log" 2>&1 &
 COORD_PID=$!
 wait_port "$COORD_PORT" "coord server" 30
+# The apps read the scenario selection from the coord server at startup —
+# no dart-define, so changing RP_SCENARIOS does not require an apk rebuild.
+kv_put scenarios "$SCENARIOS"
 
 # ---------------------------------------------------------------------------
 # Emulators (booted sequentially — tight RAM budget on this host)
@@ -225,6 +295,47 @@ adb -s "$SERIAL_ALICE" shell am start -n com.example.redpanda/.MainActivity >/de
 adb -s "$SERIAL_BOB" shell am start -n com.example.redpanda/.MainActivity >/dev/null
 
 # ---------------------------------------------------------------------------
+# S3 orchestration: kill Bob's app, let Alice send, restart, measure catch-up
+# (the test process dies with the force-stop — the restarted app detects the
+# resume phase via the bob_phase key and skips onboarding/pairing).
+# ---------------------------------------------------------------------------
+if has_scenario s3; then
+  log "S3: waiting for Bob to finish the earlier scenarios"
+  wait_kv bob_ready_s3 1500
+  log "S3: force-stopping Bob's app"
+  adb -s "$SERIAL_BOB" shell am force-stop com.example.redpanda
+  sleep 2
+  kv_put s3-bob-killed host
+  wait_kv "sent-e2e-s3" 300
+  sleep 5   # give the message time to settle in the node-side OH mailbox
+  kv_put bob_phase resume-s3
+  log "S3: restarting Bob's app (catch-up clock starts now)"
+  kv_put s3-bob-restart host
+  adb -s "$SERIAL_BOB" shell am start -n com.example.redpanda/.MainActivity >/dev/null
+  wait_kv "recv-e2e-s3" 300
+  log "S3: catch-up message delivered"
+fi
+
+# ---------------------------------------------------------------------------
+# S4 orchestration: cut Bob's network (airplane mode), let Alice send into
+# the silence, restore the network, measure reconnect delivery.
+# ---------------------------------------------------------------------------
+if has_scenario s4; then
+  log "S4: waiting for Bob to be ready"
+  wait_kv bob_ready_s4 900
+  bob_net down
+  sleep 3   # let the disconnect propagate before Alice sends
+  kv_put s4-net-down host
+  wait_kv "sent-e2e-s4" 300
+  log "S4: radio silence for ${S4_SILENCE_SEC}s"
+  sleep "$S4_SILENCE_SEC"
+  bob_net up
+  kv_put s4-net-up host
+  wait_kv "recv-e2e-s4" 600
+  log "S4: message delivered after reconnect"
+fi
+
+# ---------------------------------------------------------------------------
 # Wait for both verdicts, then collect the report
 # ---------------------------------------------------------------------------
 log "waiting for results (max ${RESULT_TIMEOUT_MIN} min)"
@@ -232,34 +343,52 @@ deadline=$(( $(date +%s) + RESULT_TIMEOUT_MIN * 60 ))
 alice_result=""
 bob_result=""
 while [[ $(date +%s) -lt $deadline ]]; do
-  alice_result="$(curl -fs "http://127.0.0.1:$COORD_PORT/kv/alice_result" 2>/dev/null || true)"
-  bob_result="$(curl -fs "http://127.0.0.1:$COORD_PORT/kv/bob_result" 2>/dev/null || true)"
+  alice_result="$("${CURL[@]}" "http://127.0.0.1:$COORD_PORT/kv/alice_result" 2>/dev/null || true)"
+  bob_result="$("${CURL[@]}" "http://127.0.0.1:$COORD_PORT/kv/bob_result" 2>/dev/null || true)"
   [[ -n "$alice_result" && -n "$bob_result" ]] && break
   # A role that failed hard writes its verdict immediately — no point
   # waiting the full window for the other side once one side reports fail.
   if [[ "$alice_result" == *'"ok":false'* || "$bob_result" == *'"ok":false'* ]]; then
     log "one side reported failure — waiting 30s for the other verdict"
     sleep 30
-    alice_result="$(curl -fs "http://127.0.0.1:$COORD_PORT/kv/alice_result" 2>/dev/null || true)"
-    bob_result="$(curl -fs "http://127.0.0.1:$COORD_PORT/kv/bob_result" 2>/dev/null || true)"
+    alice_result="$("${CURL[@]}" "http://127.0.0.1:$COORD_PORT/kv/alice_result" 2>/dev/null || true)"
+    bob_result="$("${CURL[@]}" "http://127.0.0.1:$COORD_PORT/kv/bob_result" 2>/dev/null || true)"
     break
   fi
   sleep 10
 done
 
-curl -fs "http://127.0.0.1:$COORD_PORT/report" >"$ART/report.json" \
-  || die "could not fetch report from coord server"
+save_report
+[[ -f "$ART/report.json" ]] || die "could not fetch report from coord server"
 
 log "report written to $ART/report.json"
 echo "----- latency summary -----"
-grep -E '"(latencyMs|p50Ms|p95Ms|maxMs|measured)"' "$ART/report.json" || true
+grep -E '"(latencyMs|p50Ms|p95Ms|maxMs|measured|catchupMs|withinCatchupBudget|silenceMs|reconnectDeliveryMs)"' \
+  "$ART/report.json" || true
 echo "---------------------------"
 echo "alice: ${alice_result:-<no result>}"
 echo "bob:   ${bob_result:-<no result>}"
 
-if [[ "$alice_result" == *'"ok":true'* && "$bob_result" == *'"ok":true'* ]]; then
-  log "SUCCESS — both roles passed S1 + S2"
+failures=()
+[[ "$alice_result" == *'"ok":true'* ]] || failures+=("alice did not report ok")
+[[ "$bob_result" == *'"ok":true'* ]] || failures+=("bob did not report ok")
+if has_scenario s3; then
+  # Hard acceptance: catch-up after the app restart within the 60 s budget.
+  grep -q '"withinCatchupBudget": true' "$ART/report.json" \
+    || failures+=("S3 catch-up missed the 60s budget (see s3.catchupMs)")
+fi
+if has_scenario s4; then
+  # Delivery before s4-net-up would mean airplane mode never actually cut
+  # the connection — the scenario would not have tested a reconnect.
+  if grep -qE '"reconnectDeliveryMs": -' "$ART/report.json"; then
+    failures+=("S4 message arrived BEFORE the network was restored — no real disconnect")
+  fi
+fi
+
+if [[ ${#failures[@]} -eq 0 ]]; then
+  log "SUCCESS — scenarios passed: $SCENARIOS"
   exit 0
 fi
-log "FAILED — check $ART/alice.logcat, $ART/bob.logcat, $ART/node.log"
+for f in "${failures[@]}"; do log "FAILED: $f"; done
+log "check $ART/alice.logcat, $ART/bob.logcat, $ART/node.log"
 exit 1
