@@ -89,24 +89,35 @@ wait_port() { # port what seconds
 
 has_scenario() { [[ ",$SCENARIOS," == *",$1,"* ]]; }
 
+# All coord-server curls are bounded — a wedged server must not hang the
+# harness (the surrounding waits are deadline-driven, curl was not).
+CURL=(curl -fs --connect-timeout 5 --max-time 15)
+
 kv_put() { # name value — first PUT wins the host-side timestamp
-  curl -fs -X PUT --data "$2" "http://127.0.0.1:$COORD_PORT/kv/$1" >/dev/null \
+  # --data-raw: never interpret a leading '@' as "read body from file".
+  "${CURL[@]}" -X PUT --data-raw "$2" "http://127.0.0.1:$COORD_PORT/kv/$1" >/dev/null \
     || die "kv_put $1 failed — coord server down?"
 }
 
 save_report() {
-  curl -fs "http://127.0.0.1:$COORD_PORT/report" >"$ART/report.json" 2>/dev/null || true
+  # Fetch into a temp file — a failing curl must not truncate a previously
+  # saved report.json (it is the primary debugging artifact).
+  if "${CURL[@]}" "http://127.0.0.1:$COORD_PORT/report" >"$ART/report.json.tmp" 2>/dev/null; then
+    mv "$ART/report.json.tmp" "$ART/report.json"
+  else
+    rm -f "$ART/report.json.tmp"
+  fi
 }
 
 wait_kv() { # name seconds — aborts early if either role reported failure
   local deadline=$(( $(date +%s) + $2 ))
   while [[ $(date +%s) -lt $deadline ]]; do
-    if curl -fs -o /dev/null "http://127.0.0.1:$COORD_PORT/kv/$1"; then
+    if "${CURL[@]}" -o /dev/null "http://127.0.0.1:$COORD_PORT/kv/$1"; then
       return 0
     fi
     local a b
-    a="$(curl -fs "http://127.0.0.1:$COORD_PORT/kv/alice_result" 2>/dev/null || true)"
-    b="$(curl -fs "http://127.0.0.1:$COORD_PORT/kv/bob_result" 2>/dev/null || true)"
+    a="$("${CURL[@]}" "http://127.0.0.1:$COORD_PORT/kv/alice_result" 2>/dev/null || true)"
+    b="$("${CURL[@]}" "http://127.0.0.1:$COORD_PORT/kv/bob_result" 2>/dev/null || true)"
     if [[ "$a" == *'"ok":false'* || "$b" == *'"ok":false'* ]]; then
       save_report
       die "a role reported failure while waiting for kv '$1' (alice=$a bob=$b)"
@@ -332,23 +343,23 @@ deadline=$(( $(date +%s) + RESULT_TIMEOUT_MIN * 60 ))
 alice_result=""
 bob_result=""
 while [[ $(date +%s) -lt $deadline ]]; do
-  alice_result="$(curl -fs "http://127.0.0.1:$COORD_PORT/kv/alice_result" 2>/dev/null || true)"
-  bob_result="$(curl -fs "http://127.0.0.1:$COORD_PORT/kv/bob_result" 2>/dev/null || true)"
+  alice_result="$("${CURL[@]}" "http://127.0.0.1:$COORD_PORT/kv/alice_result" 2>/dev/null || true)"
+  bob_result="$("${CURL[@]}" "http://127.0.0.1:$COORD_PORT/kv/bob_result" 2>/dev/null || true)"
   [[ -n "$alice_result" && -n "$bob_result" ]] && break
   # A role that failed hard writes its verdict immediately — no point
   # waiting the full window for the other side once one side reports fail.
   if [[ "$alice_result" == *'"ok":false'* || "$bob_result" == *'"ok":false'* ]]; then
     log "one side reported failure — waiting 30s for the other verdict"
     sleep 30
-    alice_result="$(curl -fs "http://127.0.0.1:$COORD_PORT/kv/alice_result" 2>/dev/null || true)"
-    bob_result="$(curl -fs "http://127.0.0.1:$COORD_PORT/kv/bob_result" 2>/dev/null || true)"
+    alice_result="$("${CURL[@]}" "http://127.0.0.1:$COORD_PORT/kv/alice_result" 2>/dev/null || true)"
+    bob_result="$("${CURL[@]}" "http://127.0.0.1:$COORD_PORT/kv/bob_result" 2>/dev/null || true)"
     break
   fi
   sleep 10
 done
 
-curl -fs "http://127.0.0.1:$COORD_PORT/report" >"$ART/report.json" \
-  || die "could not fetch report from coord server"
+save_report
+[[ -f "$ART/report.json" ]] || die "could not fetch report from coord server"
 
 log "report written to $ART/report.json"
 echo "----- latency summary -----"
