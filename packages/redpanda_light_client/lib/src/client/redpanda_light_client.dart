@@ -773,9 +773,27 @@ class RedPandaLightClient implements RedPandaClient {
   final _ResponseQueue _registerResponses = _ResponseQueue();
 
   /// Pending SubscribeResponse (160) completers (Connection-Notify, T38).
-  /// Subscribes of several OHs can overlap (e.g. re-subscribe of every handle
-  /// on reconnect), so responses are matched FIFO rather than by command byte.
+  /// A SubscribeResponse carries no oh_id, so it is correlated purely by
+  /// order. Handles can live on different host nodes whose connections answer
+  /// independently, so ordering across connections is NOT guaranteed —
+  /// subscribes are therefore serialized through [_subscribeTail] so at most
+  /// one is ever in flight and this FIFO stays unambiguous.
   final _ResponseQueue _subscribeResponses = _ResponseQueue();
+
+  /// Serializes subscribes (T38): chains every subscribe so only one
+  /// SubscribeRequest is in flight at a time. Without this, two subscribes to
+  /// different host nodes could have their (oh_id-less) responses arrive out
+  /// of order and be mis-attributed by [_subscribeResponses].
+  Future<void> _subscribeTail = Future.value();
+
+  /// Enqueues a serialized subscribe of [oh] (see [_subscribeTail]).
+  void _enqueueSubscribe(OHRegistration oh) {
+    _subscribeTail = _subscribeTail.then((_) => _subscribe(oh)).catchError((
+      Object e,
+    ) {
+      RpLog.info('RedPandaLightClient: subscribe error: $e');
+    });
+  }
 
   void _handleCommandResponse(int command, List<int> payload) {
     if (command == 158) {
@@ -891,7 +909,15 @@ class RedPandaLightClient implements RedPandaClient {
       return;
     }
 
-    final response = SubscribeResponse.fromBuffer(responseBytes);
+    final SubscribeResponse response;
+    try {
+      response = SubscribeResponse.fromBuffer(responseBytes);
+    } catch (e) {
+      RpLog.info(
+        'RedPandaLightClient: dropping malformed SubscribeResponse: $e',
+      );
+      return;
+    }
     if (response.status == Status.OK) {
       RpLog.debug(
         'RedPandaLightClient: subscribed OH ${_hexEncode(oh.ohId)} for Notify',
@@ -916,7 +942,7 @@ class RedPandaLightClient implements RedPandaClient {
   /// reconnect must renew it.
   void _subscribeAllHandles() {
     for (final oh in List.of(_registeredOHs)) {
-      unawaited(_subscribe(oh));
+      _enqueueSubscribe(oh);
     }
   }
 
@@ -1735,7 +1761,7 @@ class RedPandaLightClient implements RedPandaClient {
     // (fixes the ~30 s first-message latency after a channel join).
     _notePollActivity();
     // T38: subscribe the new handle for real-time Notify.
-    unawaited(_subscribe(registration));
+    _enqueueSubscribe(registration);
 
     return registration;
   }
@@ -1908,7 +1934,7 @@ class RedPandaLightClient implements RedPandaClient {
     // covers the renewal timer, reregisterLostHandle (which renews with the
     // same id) and heals subscriptions lost to a partial host reconnect —
     // re-subscribe is idempotent on the node.
-    unawaited(_subscribe(oh));
+    _enqueueSubscribe(oh);
     return true;
   }
 

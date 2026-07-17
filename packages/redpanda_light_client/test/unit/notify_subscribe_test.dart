@@ -241,27 +241,24 @@ void main() {
     );
   });
 
-  group('T38 subscribe: SubscribeResponse FIFO correlation', () {
-    test('two overlapping subscribes each get their own response', () async {
+  group('T38 subscribe: serialized so responses cannot be mis-attributed', () {
+    test('the next subscribe waits for the previous response', () async {
       final (client, socket) = await connectedClient();
       addTearDown(client.disconnect);
 
-      final registerOhIds = <List<int>>[];
       final subscribeOhIds = <List<int>>[];
+      var autoAckSubscribes = false;
       socket.onCommandFrame = (command, payload) {
         if (command == 150) {
-          registerOhIds.add(RegisterOhRequest.fromBuffer(payload).ohId);
           socket.replyCommand(
             151,
             (RegisterOhResponse()..status = Status.OK).writeToBuffer(),
           );
         } else if (command == 159) {
-          final n = subscribeOhIds.length;
           subscribeOhIds.add(SubscribeRequest.fromBuffer(payload).ohId);
-          // The first two subscribes are answered manually below to control
-          // FIFO ordering; later ones (from the re-registration cascade) are
-          // acknowledged OK right away so no completer lingers.
-          if (n >= 2) {
+          // The first subscribe is answered manually below to prove the
+          // second one is withheld until then; later ones are acked at once.
+          if (autoAckSubscribes) {
             socket.replyCommand(
               160,
               (SubscribeResponse()..status = Status.OK).writeToBuffer(),
@@ -277,29 +274,33 @@ void main() {
 
       final a = await client.registerOutboundHandle(channelId: 'a');
       final b = await client.registerOutboundHandle(channelId: 'b');
+
+      // A's subscribe (oh_id-less response) must be answered before B's goes
+      // out — otherwise two responses could arrive out of order across host
+      // connections and be mis-attributed.
+      await pumpUntil(
+        () => subscribeOhIds.isNotEmpty,
+        reason: 'the first subscribe never went out',
+      );
+      await Future.delayed(const Duration(milliseconds: 150));
+      expect(
+        subscribeOhIds,
+        hasLength(1),
+        reason: 'B must not subscribe before A is answered',
+      );
+      expect(_sameBytes(subscribeOhIds.first, a.ohId), isTrue);
+
+      // Answer A; B's subscribe now proceeds and maps to B.
+      autoAckSubscribes = true;
+      socket.replyCommand(
+        160,
+        (SubscribeResponse()..status = Status.OK).writeToBuffer(),
+      );
       await pumpUntil(
         () => subscribeOhIds.length >= 2,
-        reason: 'both subscribes never went out',
+        reason: 'B should subscribe once A is answered',
       );
-
-      // FIFO: the first response belongs to A (subscribed first), the second
-      // to B. Both NOT_FOUND, so each must re-register ITS OWN handle. A
-      // single-slot matcher would drop one and only one handle would recover.
-      socket.replyCommand(
-        160,
-        (SubscribeResponse()..status = Status.NOT_FOUND).writeToBuffer(),
-      );
-      socket.replyCommand(
-        160,
-        (SubscribeResponse()..status = Status.NOT_FOUND).writeToBuffer(),
-      );
-
-      await pumpUntil(
-        () =>
-            registerOhIds.where((id) => _sameBytes(id, a.ohId)).length >= 2 &&
-            registerOhIds.where((id) => _sameBytes(id, b.ohId)).length >= 2,
-        reason: 'both handles should re-register after their NOT_FOUND',
-      );
+      expect(_sameBytes(subscribeOhIds[1], b.ohId), isTrue);
     });
   });
 

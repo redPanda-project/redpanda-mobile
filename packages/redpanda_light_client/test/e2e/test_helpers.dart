@@ -70,8 +70,9 @@ Future<bool> waitForEncryption(
 /// first — and only — consumer of a deposit. E2E tests therefore observe
 /// delivery here instead of racing the poll with an explicit fetch.
 ///
-/// Start collecting BEFORE the message is sent: the stream is a broadcast
-/// with no replay, so an item delivered before [start] is called is missed.
+/// Construct the collector BEFORE the message is sent: the stream is a
+/// broadcast with no replay, so an item delivered before the collector
+/// subscribes (in its constructor) is missed.
 class DeliveryCollector {
   DeliveryCollector(RedPandaLightClient client) {
     _sub = client.incomingMessages.listen((m) {
@@ -102,11 +103,16 @@ class DeliveryCollector {
   }) async {
     if (predicate(messages)) return messages;
     final completer = Completer<void>();
-    _waiters.add((completer: completer, predicate: predicate));
+    final waiter = (completer: completer, predicate: predicate);
+    _waiters.add(waiter);
     try {
       await completer.future.timeout(timeout);
     } on TimeoutException {
       // Fall through: the caller asserts on whatever arrived.
+    } finally {
+      // Keep the list bounded and stop a timed-out waiter from completing
+      // later against a stale message.
+      _waiters.remove(waiter);
     }
     return messages;
   }
