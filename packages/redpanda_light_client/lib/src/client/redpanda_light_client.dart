@@ -334,6 +334,11 @@ class RedPandaLightClient implements RedPandaClient {
         if (_pollingEnabled && !_pollInProgress) {
           _schedulePoll(const Duration(seconds: 1));
         }
+
+        // T38: a subscription lives only for its connection, so re-subscribe
+        // every handle for real-time Notify on (re-)connect. _peerForHandle
+        // routes each subscribe to the handle's own host node (#55).
+        _subscribeAllHandles();
       }
     } else if (status == ConnectionStatus.connecting) {
       if (_currentStatus != ConnectionStatus.connected) {
@@ -680,6 +685,7 @@ class RedPandaLightClient implements RedPandaClient {
     _pendingResponses.clear();
     _putResponses.clear();
     _registerResponses.clear();
+    _subscribeResponses.clear();
     _ratchetSessions.clear();
     _pendingRgbs.clear();
     _restoredGarlicSessions.clear();
@@ -766,6 +772,11 @@ class RedPandaLightClient implements RedPandaClient {
   /// of clobbering a single per-command slot.
   final _ResponseQueue _registerResponses = _ResponseQueue();
 
+  /// Pending SubscribeResponse (160) completers (Connection-Notify, T38).
+  /// Subscribes of several OHs can overlap (e.g. re-subscribe of every handle
+  /// on reconnect), so responses are matched FIFO rather than by command byte.
+  final _ResponseQueue _subscribeResponses = _ResponseQueue();
+
   void _handleCommandResponse(int command, List<int> payload) {
     if (command == 158) {
       _putResponses.handle(payload);
@@ -775,9 +786,137 @@ class RedPandaLightClient implements RedPandaClient {
       _registerResponses.handle(payload);
       return;
     }
+    if (command == 160) {
+      // Connection-Notify (T38): SubscribeResponse, FIFO-matched.
+      _subscribeResponses.handle(payload);
+      return;
+    }
+    if (command == 161) {
+      // Connection-Notify (T38): unsolicited Notify — new mail for an OH.
+      _handleNotify(payload);
+      return;
+    }
     final completer = _pendingResponses.remove(command);
     if (completer != null && !completer.isCompleted) {
       completer.complete(payload);
+    }
+  }
+
+  /// Handles an unsolicited Notify (command 161, T38): the node signals that
+  /// a subscribed mailbox received new mail. Pulls the mailbox poll forward
+  /// instead of firing a standalone fetch — the poll cycle serializes the
+  /// signed fetch round-trips (they share the per-command response slot 153),
+  /// so an out-of-band fetch could race a running cycle. A Notify for an
+  /// unknown OH is ignored (only logged). The regular poll loop stays as the
+  /// fallback for missed Notifies.
+  void _handleNotify(List<int> payload) {
+    final Notify notify;
+    try {
+      notify = Notify.fromBuffer(payload);
+    } catch (e) {
+      RpLog.info('RedPandaLightClient: dropping malformed Notify: $e');
+      return;
+    }
+    final known = _registeredOHs.any((oh) => _sameOhId(oh.ohId, notify.ohId));
+    if (!known) {
+      RpLog.info(
+        'RedPandaLightClient: Notify for unknown OH '
+        '${_hexEncode(notify.ohId)} — ignoring',
+      );
+      return;
+    }
+    RpLog.debug(
+      'RedPandaLightClient: Notify for OH ${_hexEncode(notify.ohId)} — '
+      'pulling mailbox poll forward',
+    );
+    // Keep the fast cadence going: a Notify means the conversation is live.
+    _lastChatActivity = DateTime.now();
+    // A cycle currently in flight will fetch this OH (it iterates all OHs);
+    // otherwise pull the next cycle forward to right now.
+    if (_pollingEnabled && !_pollInProgress) {
+      _schedulePoll(Duration.zero);
+    }
+  }
+
+  /// Subscribes [oh] for real-time Notify (Connection-Notify, T38). The
+  /// SubscribeRequest proves ownership exactly like a fetch (Ed25519 over
+  /// [CMD_BYTE(159) | oh_id | timestamp_ms(8 BE) | nonce], 0x02 prefix added
+  /// by [OHKeypair.sign]) and must reach the handle's host node. Any failure
+  /// (host not connected, timeout, non-OK) is tolerated — polling stays the
+  /// fallback. A NOT_FOUND means the host forgot the handle, so the same
+  /// recovery as a NOT_FOUND fetch is triggered.
+  Future<void> _subscribe(OHRegistration oh) async {
+    final activePeer = _peerForHandle(oh, 'subscribe()');
+    if (activePeer == null) {
+      // _peerForHandle already logged/kicked off the host connection.
+      return;
+    }
+
+    final random = Random.secure();
+    final nonce = Uint8List.fromList(
+      List<int>.generate(16, (_) => random.nextInt(256)),
+    );
+    final now = DateTime.now();
+
+    final signingBuffer = BytesBuilder();
+    signingBuffer.addByte(159); // OUTBOUND_SUBSCRIBE_REQ
+    signingBuffer.add(oh.ohId);
+    signingBuffer.add(_int64Bytes(now.millisecondsSinceEpoch));
+    signingBuffer.add(nonce);
+    final signature = await oh.keypair.sign(
+      Uint8List.fromList(signingBuffer.toBytes()),
+    );
+
+    final request = SubscribeRequest()
+      ..ohId = oh.ohId
+      ..timestampMs = _toInt64(now.millisecondsSinceEpoch)
+      ..nonce = nonce
+      ..signature = signature;
+
+    // FIFO-matched: several OH subscribes can be in flight at once.
+    final completer = _subscribeResponses.register();
+    activePeer.sendCommand(159, Uint8List.fromList(request.writeToBuffer()));
+
+    final List<int> responseBytes;
+    try {
+      responseBytes = await completer.future.timeout(
+        const Duration(seconds: 10),
+      );
+    } on TimeoutException {
+      _subscribeResponses.abandon(completer);
+      RpLog.info(
+        'RedPandaLightClient: subscribe() no response within 10s — '
+        'polling remains the fallback',
+      );
+      return;
+    }
+
+    final response = SubscribeResponse.fromBuffer(responseBytes);
+    if (response.status == Status.OK) {
+      RpLog.debug(
+        'RedPandaLightClient: subscribed OH ${_hexEncode(oh.ohId)} for Notify',
+      );
+      return;
+    }
+    if (response.status == Status.NOT_FOUND) {
+      RpLog.info(
+        'RedPandaLightClient: subscribe() NOT_FOUND for OH '
+        '${_hexEncode(oh.ohId)} — re-registering lost handle',
+      );
+      unawaited(reregisterLostHandle(oh));
+      return;
+    }
+    RpLog.info(
+      'RedPandaLightClient: subscribe() non-OK status: ${response.status}',
+    );
+  }
+
+  /// (Re-)subscribes every registered OH for real-time Notify (T38). Used on
+  /// the connect edge: a subscription lives only for its connection, so a
+  /// reconnect must renew it.
+  void _subscribeAllHandles() {
+    for (final oh in List.of(_registeredOHs)) {
+      unawaited(_subscribe(oh));
     }
   }
 
@@ -1595,6 +1734,8 @@ class RedPandaLightClient implements RedPandaClient {
     // partner's first message is expected shortly, so poll fast right away
     // (fixes the ~30 s first-message latency after a channel join).
     _notePollActivity();
+    // T38: subscribe the new handle for real-time Notify.
+    unawaited(_subscribe(registration));
 
     return registration;
   }
@@ -1763,6 +1904,11 @@ class RedPandaLightClient implements RedPandaClient {
         expiresAtMs: oh.expiresAtMs,
       ),
     );
+    // T38: (re-)subscribe for Notify after every confirmed renewal. This
+    // covers the renewal timer, reregisterLostHandle (which renews with the
+    // same id) and heals subscriptions lost to a partial host reconnect —
+    // re-subscribe is idempotent on the node.
+    unawaited(_subscribe(oh));
     return true;
   }
 

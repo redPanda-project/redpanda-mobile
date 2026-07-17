@@ -47,6 +47,11 @@ class ActivePeer {
   static const int _cmdOutboundFetchRes = 153;
   static const int _cmdOutboundAckFetchRes = 157;
   static const int _cmdFlaschenpostPutRes = 158;
+  // Connection-Notify (T38): 159 (SubscribeReq) is outbound only. 160
+  // (SubscribeRes) and 161 (Notify, one-way node → client) are inbound and
+  // framed like every other outbound response: [CMD][len:4][protobuf].
+  static const int _cmdOutboundSubscribeRes = 160;
+  static const int _cmdOutboundNotify = 161;
 
   final String address;
   final NodeId selfNodeId;
@@ -67,7 +72,8 @@ class ActivePeer {
   /// KademliaId (hex) of this peer, set once its public key was received.
   String? discoveredNodeId;
 
-  /// Callback for OH response commands (151, 153, 157, 158).
+  /// Callback for OH response commands (151, 153, 157, 158) and the
+  /// Connection-Notify inbound commands (160 SubscribeRes, 161 Notify).
   void Function(int command, List<int> payload)? onCommandResponse;
 
   Socket? _socket;
@@ -346,7 +352,9 @@ class ActivePeer {
           } else if (command == _cmdOutboundRegisterOhRes ||
               command == _cmdOutboundFetchRes ||
               command == _cmdOutboundAckFetchRes ||
-              command == _cmdFlaschenpostPutRes) {
+              command == _cmdFlaschenpostPutRes ||
+              command == _cmdOutboundSubscribeRes ||
+              command == _cmdOutboundNotify) {
             if (_buffer.length < 1 + 4) break;
             final lengthData = Uint8List.fromList(_buffer.sublist(1, 5));
             final length = ByteData.view(
