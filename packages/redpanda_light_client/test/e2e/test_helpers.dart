@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
+import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 
 /// Serializes the multi-node topology suites (MS04, MS05): both launch
 /// their entry node on 59558, the JAR's built-in local seed port — relays
@@ -56,4 +58,64 @@ Future<bool> waitForEncryption(
     if (client.isEncryptionActive) return true;
   }
   return false;
+}
+
+/// Accumulates messages delivered to [client] via its production delivery
+/// path — the mailbox poll loop, which decrypts fetched items and publishes
+/// them on [RedPandaClient.incomingMessages].
+///
+/// Connection-Notify (T38) makes the background poll drain the mailbox in
+/// real time (the node signals new mail, the client fetches and ACKs at
+/// once), so a manual `fetchMessages()` can no longer be relied on to be the
+/// first — and only — consumer of a deposit. E2E tests therefore observe
+/// delivery here instead of racing the poll with an explicit fetch.
+///
+/// Start collecting BEFORE the message is sent: the stream is a broadcast
+/// with no replay, so an item delivered before [start] is called is missed.
+class DeliveryCollector {
+  DeliveryCollector(RedPandaLightClient client) {
+    _sub = client.incomingMessages.listen((m) {
+      messages.add(m);
+      for (final w in _waiters) {
+        if (!w.completer.isCompleted && w.predicate(messages)) {
+          w.completer.complete();
+        }
+      }
+    });
+  }
+
+  late final StreamSubscription<DecryptedMessage> _sub;
+  final List<DecryptedMessage> messages = [];
+  final List<
+    ({
+      Completer<void> completer,
+      bool Function(List<DecryptedMessage>) predicate,
+    })
+  >
+  _waiters = [];
+
+  /// Waits until [predicate] holds over the accumulated messages, or until
+  /// [timeout]. Returns the accumulated list either way (callers assert on it).
+  Future<List<DecryptedMessage>> waitUntil(
+    bool Function(List<DecryptedMessage>) predicate, {
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    if (predicate(messages)) return messages;
+    final completer = Completer<void>();
+    _waiters.add((completer: completer, predicate: predicate));
+    try {
+      await completer.future.timeout(timeout);
+    } on TimeoutException {
+      // Fall through: the caller asserts on whatever arrived.
+    }
+    return messages;
+  }
+
+  /// Convenience: wait for at least [count] messages.
+  Future<List<DecryptedMessage>> waitForCount(
+    int count, {
+    Duration timeout = const Duration(seconds: 20),
+  }) => waitUntil((m) => m.length >= count, timeout: timeout);
+
+  Future<void> cancel() => _sub.cancel();
 }

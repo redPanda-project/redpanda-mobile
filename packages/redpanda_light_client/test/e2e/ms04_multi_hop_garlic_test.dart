@@ -10,7 +10,6 @@ import 'package:test/test.dart';
 
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/domain/channel.dart';
-import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
 import 'redpanda_node_launcher.dart';
@@ -148,13 +147,15 @@ void main() async {
 
         // Garlic delivery is fire-and-forget (no R-ACK before MS06), so the
         // test mirrors the MS02 retry queue: re-send the SAME logical
-        // message id until Bob's fetch sees it. Every attempt picks fresh
-        // hops, so a single struggling relay cannot fail the test.
+        // message id until Bob's poll (Connection-Notify auto-fetch) sees it.
+        // Every attempt picks fresh hops, so a single struggling relay cannot
+        // fail the test.
         const content = 'Multi-hop garlic hello!';
         String? messageId;
-        final received = <DecryptedMessage>[];
+        final received = DeliveryCollector(bob);
+        addTearDown(received.cancel);
 
-        for (var attempt = 0; attempt < 6 && received.isEmpty; attempt++) {
+        for (var attempt = 0; attempt < 6; attempt++) {
           messageId = await alice.sendMessage(
             channel.id,
             content,
@@ -165,19 +166,22 @@ void main() async {
             equals(3),
             reason: 'the message must travel the full 3-hop garlic path',
           );
-
-          for (var i = 0; i < 5 && received.isEmpty; i++) {
-            await Future.delayed(const Duration(seconds: 2));
-            received.addAll(await bob.fetchMessages(bobOH));
-          }
+          await received.waitUntil(
+            (m) => m.any((x) => x.content == content),
+            timeout: const Duration(seconds: 12),
+          );
+          if (received.messages.any((x) => x.content == content)) break;
         }
 
         expect(
-          received.map((m) => m.content),
+          received.messages.map((m) => m.content),
           contains(content),
           reason: 'the garlic-routed message must reach Bob\'s OH mailbox',
         );
-        expect(received.first.id, equals(messageId));
+        expect(
+          received.messages.firstWhere((m) => m.content == content).id,
+          equals(messageId),
+        );
       },
       skip: jarAvailable ? null : 'RedPanda JAR not found',
     );
