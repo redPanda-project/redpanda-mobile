@@ -27,6 +27,7 @@ export 'src/garlic/session_tag_store.dart';
 export 'src/domain/channel.dart';
 export 'src/domain/garlic_session_update.dart';
 export 'src/domain/group_state.dart';
+export 'src/domain/loopback_result.dart';
 export 'src/domain/oh_descriptor.dart';
 export 'src/domain/oh_registration.dart';
 export 'src/domain/oh_fetch_status.dart';

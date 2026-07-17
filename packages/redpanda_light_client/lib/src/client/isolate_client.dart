@@ -14,6 +14,7 @@ import 'package:redpanda_light_client/src/crypto/ratchet.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
 import 'package:redpanda_light_client/src/domain/group_state.dart';
+import 'package:redpanda_light_client/src/domain/loopback_result.dart';
 import 'package:redpanda_light_client/src/domain/oh_fetch_status.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
@@ -107,6 +108,9 @@ class RedPandaIsolateClient implements RedPandaClient {
 
   // Pending group operations (rotate/retry/handshake/rename), by requestId.
   final Map<int, Completer<void>> _pendingGroupOps = {};
+
+  // Pending loopback self-tests (T20), by requestId.
+  final Map<int, Completer<LoopbackResult>> _pendingLoopbackTests = {};
   int _nextRequestId = 0;
 
   // Cache last known status
@@ -233,6 +237,14 @@ class RedPandaIsolateClient implements RedPandaClient {
       if (!completer.isCompleted) completer.completeError(error());
     }
     _pendingOhRegistrations.clear();
+    for (final completer in _pendingLoopbackTests.values) {
+      if (!completer.isCompleted) {
+        completer.complete(
+          const LoopbackResult.failed('network worker restarted'),
+        );
+      }
+    }
+    _pendingLoopbackTests.clear();
   }
 
   /// Re-establishes the worker state after a respawn: known peers, channel
@@ -322,6 +334,21 @@ class RedPandaIsolateClient implements RedPandaClient {
       final completer = _pendingSends.remove(event.requestId);
       if (completer != null && !completer.isCompleted) {
         completer.complete(event.messageId);
+      }
+    } else if (event is EventLoopbackResult) {
+      final completer = _pendingLoopbackTests.remove(event.requestId);
+      if (completer != null && !completer.isCompleted) {
+        completer.complete(
+          event.success
+              ? LoopbackResult.ok(
+                  roundtripMs: event.roundtripMs!,
+                  hopCount: event.hopCount,
+                )
+              : LoopbackResult.failed(
+                  event.error ?? 'unknown error',
+                  hopCount: event.hopCount,
+                ),
+        );
       }
     } else if (event is EventMessageSendFailed) {
       final completer = _pendingSends.remove(event.requestId);
@@ -534,6 +561,24 @@ class RedPandaIsolateClient implements RedPandaClient {
           'sendMessage timed out',
           const Duration(seconds: 15),
         );
+      },
+    );
+  }
+
+  @override
+  Future<LoopbackResult> runLoopbackTest(String channelId) async {
+    await _isolateReady.future;
+    final requestId = _nextRequestId++;
+    final completer = Completer<LoopbackResult>();
+    _pendingLoopbackTests[requestId] = completer;
+    _send(CmdRunLoopbackTest(requestId, channelId));
+    // The worker-side test times out after RedPandaLightClient.loopbackTimeout
+    // (60 s); this outer guard only covers a lost worker response.
+    return completer.future.timeout(
+      const Duration(seconds: 75),
+      onTimeout: () {
+        _pendingLoopbackTests.remove(requestId);
+        return const LoopbackResult.failed('no response from network worker');
       },
     );
   }
@@ -950,6 +995,18 @@ void _runWorker(SendPort mainSendPort) {
             EventMessageSendFailed(message.requestId, e.toString()),
           );
         }
+      } else if (message is CmdRunLoopbackTest) {
+        // Never throws — failures travel inside the result.
+        final result = await client!.runLoopbackTest(message.channelId);
+        mainSendPort.send(
+          EventLoopbackResult(
+            requestId: message.requestId,
+            success: result.success,
+            roundtripMs: result.roundtripMs,
+            hopCount: result.hopCount,
+            error: result.error,
+          ),
+        );
       } else if (message is CmdRegisterOutboundHandle) {
         try {
           final registration = await client!.registerOutboundHandle(

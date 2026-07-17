@@ -21,6 +21,7 @@ import 'package:redpanda_light_client/src/logging/logger.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
 import 'package:redpanda_light_client/src/domain/group_state.dart';
+import 'package:redpanda_light_client/src/domain/loopback_result.dart';
 import 'package:redpanda_light_client/src/domain/oh_fetch_status.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
@@ -780,6 +781,17 @@ class RedPandaLightClient implements RedPandaClient {
     }
   }
 
+  /// Outstanding loopback self-tests (T20), keyed by message id (hex). The
+  /// fetch pipeline completes and removes the entry when the test message
+  /// comes back. Entries of timed-out tests stay registered so a late
+  /// arrival is still swallowed instead of surfacing as a chat message;
+  /// [_maxPendingLoopbacks] bounds the map (tests are manual one-shots, so
+  /// evicting the oldest stale entry is safe).
+  final Map<String, Completer<void>> _pendingLoopbacks = {};
+
+  /// Upper bound for [_pendingLoopbacks] (insertion-ordered eviction).
+  static const int _maxPendingLoopbacks = 16;
+
   /// Channel encryption keys indexed by channel ID.
   /// Populated externally or via addChannelKeys().
   final Map<String, List<int>> _channelEncryptionKeys = {};
@@ -1157,6 +1169,137 @@ class RedPandaLightClient implements RedPandaClient {
     }
 
     return messageIdHex;
+  }
+
+  /// How long [runLoopbackTest] waits for the test message to come back.
+  /// Matches the MS-MH hard delivery budget (60 s).
+  static const Duration loopbackTimeout = Duration(seconds: 60);
+
+  @override
+  Future<LoopbackResult> runLoopbackTest(
+    String channelId, {
+    Duration timeout = loopbackTimeout,
+  }) async {
+    final ownOh = _registeredOHs
+        .where((oh) => oh.channelId == channelId)
+        .firstOrNull;
+    if (ownOh == null) {
+      return const LoopbackResult.failed('no own mailbox registered');
+    }
+    final encKey = _channelEncryptionKeys[channelId];
+    if (encKey == null) {
+      return const LoopbackResult.failed('channel keys not registered');
+    }
+    final activePeer = _peers.values
+        .where((p) => p.isHandshakeVerified)
+        .firstOrNull;
+    if (activePeer == null) {
+      return const LoopbackResult.failed('not connected to any node');
+    }
+
+    // The test message is encrypted with the static channel key (v3), NOT
+    // the ratchet: ratchet chains are asymmetric between the two devices, so
+    // a self-addressed v4 payload could never be decrypted on fetch — and
+    // the ratchet must not advance for a diagnostic message anyway. The
+    // fetch pipeline dispatches on the version byte and decrypts v3 with
+    // the same static key.
+    final random = Random.secure();
+    final messageIdBytes = Uint8List.fromList(
+      List<int>.generate(16, (_) => random.nextInt(256)),
+    );
+    final messageIdHex = _hexEncode(messageIdBytes);
+    final payload = await MessageCryptoV3.encrypt(
+      ChannelMessage(
+        messageId: messageIdBytes,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        content: 'loopback self-test',
+      ),
+      encKey,
+      channelId,
+    );
+
+    // Bound the map: evict the oldest (stale) entries first — Dart maps
+    // iterate in insertion order.
+    while (_pendingLoopbacks.length >= _maxPendingLoopbacks) {
+      _pendingLoopbacks.remove(_pendingLoopbacks.keys.first);
+    }
+    final completer = Completer<void>();
+    _pendingLoopbacks[messageIdHex] = completer;
+    final started = DateTime.now();
+
+    // Deposit into the OWN mailbox over the same paths a regular send uses:
+    // garlic-routed when relay hops are known, direct FlaschenpostPut
+    // otherwise. No return path — the round trip itself is the proof.
+    final hops = _hopSelector.selectHops(
+      count: defaultHopCount,
+      excludeAddresses: {activePeer.address, ?ownOh.serverEndpoint},
+      excludeNodeIds: {?activePeer.discoveredNodeId},
+    );
+    try {
+      if (hops.isNotEmpty) {
+        await _sendViaGarlic(activePeer, hops, ownOh.ohId, payload, channelId);
+      } else {
+        await _depositDirect(activePeer, ownOh.ohId, payload);
+      }
+    } catch (e) {
+      _pendingLoopbacks.remove(messageIdHex);
+      return LoopbackResult.failed('deposit failed: $e', hopCount: hops.length);
+    }
+
+    // Pull the next mailbox poll forward so the result does not wait for
+    // the idle cadence; the active window keeps polling fast afterwards.
+    _notePollActivity();
+    _schedulePoll(const Duration(seconds: 1));
+
+    try {
+      await completer.future.timeout(timeout);
+    } on TimeoutException {
+      // Entry stays registered: a late arrival must still be swallowed.
+      return LoopbackResult.failed(
+        'not received within ${timeout.inSeconds}s',
+        hopCount: hops.length,
+      );
+    }
+    return LoopbackResult.ok(
+      roundtripMs: DateTime.now().difference(started).inMilliseconds,
+      hopCount: hops.length,
+    );
+  }
+
+  /// Deposits [payload] into the mailbox [ohId] as a direct FlaschenpostPut
+  /// (MS01/MS02b) and awaits the node's response. Mirrors the sendMessage
+  /// fallback semantics: a timeout counts as accepted (pre-MS02b nodes never
+  /// answer), a non-OK status throws a [DepositException].
+  Future<void> _depositDirect(
+    ActivePeer activePeer,
+    List<int> ohId,
+    Uint8List payload,
+  ) async {
+    final flaschenpost = FlaschenpostPut()
+      ..content = payload
+      ..ohId = ohId
+      ..wantResponse = true;
+    final completer = _putResponses.register();
+    activePeer.sendCommand(
+      141,
+      Uint8List.fromList(flaschenpost.writeToBuffer()),
+    );
+
+    final List<int> responseBytes;
+    try {
+      responseBytes = await completer.future.timeout(depositResponseTimeout);
+    } on TimeoutException {
+      _putResponses.abandon(completer);
+      RpLog.info(
+        'RedPandaLightClient: _depositDirect() no deposit response within '
+        '${depositResponseTimeout.inSeconds}s, assuming accepted (legacy node?)',
+      );
+      return;
+    }
+    final response = FlaschenpostPutResponse.fromBuffer(responseBytes);
+    if (response.status != Status.OK) {
+      throw DepositException(response.status.name);
+    }
   }
 
   /// Builds a fresh Reverse Garlic Block for [channelId] (MS05) and registers
@@ -1857,6 +2000,16 @@ class RedPandaLightClient implements RedPandaClient {
         if (tagHex != null) {
           _sessionTagStore.consume(tagHex);
           garlicStateChanged = true;
+        }
+        // T20: a loopback self-test message coming back — complete the
+        // pending test and swallow the item: it never surfaces as a chat
+        // message and is never channel-ACKed.
+        final loopback = _pendingLoopbacks.remove(
+          _hexEncode(channelMessage.messageId),
+        );
+        if (loopback != null) {
+          if (!loopback.isCompleted) loopback.complete();
+          continue;
         }
         // MS08: a group handshake rides the 1:1 channel — surface it as an
         // event, never as a chat message.

@@ -4,6 +4,7 @@ import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
 import 'package:redpanda_light_client/src/domain/group_state.dart';
 import 'package:redpanda_light_client/src/domain/oh_fetch_status.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
+import 'package:redpanda_light_client/src/domain/loopback_result.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/domain/routing_ack.dart';
 import 'package:redpanda_light_client/src/garlic/node_scorer.dart';
@@ -42,6 +43,16 @@ abstract class RedPandaClient {
 
   /// Adds a peer address (host:port) to the connection pool.
   Future<void> addPeer(String address);
+
+  /// Runs a loopback self-test for [channelId] (T20): deposits a test
+  /// message into the channel's OWN mailbox over the regular send path
+  /// (garlic-routed when hops are available, direct deposit otherwise) and
+  /// waits until the regular fetch pipeline receives and decrypts it. The
+  /// test message never surfaces as a chat message.
+  ///
+  /// Never throws — failures (no own mailbox, not connected, timeout) are
+  /// reported in [LoopbackResult.error].
+  Future<LoopbackResult> runLoopbackTest(String channelId);
 
   /// Stream of periodic peer stats snapshots from the network layer.
   Stream<PeerStatsSnapshot> get peerStatsStream;

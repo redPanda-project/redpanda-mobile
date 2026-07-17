@@ -29,6 +29,11 @@ class FakeRedPandaClient implements RedPandaClient {
   final List<NodeScore> restoredNodeScores = [];
 
   @override
+  Future<LoopbackResult> runLoopbackTest(String channelId) async {
+    return const LoopbackResult.ok(roundtripMs: 42, hopCount: 0);
+  }
+
+  @override
   Future<String> sendMessage(
     String channelId,
     String content, {

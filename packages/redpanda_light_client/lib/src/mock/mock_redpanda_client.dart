@@ -4,6 +4,7 @@ import 'package:redpanda_light_client/src/crypto/ratchet.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
 import 'package:redpanda_light_client/src/domain/group_state.dart';
+import 'package:redpanda_light_client/src/domain/loopback_result.dart';
 import 'package:redpanda_light_client/src/domain/oh_fetch_status.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
@@ -55,6 +56,12 @@ class MockRedPandaClient implements RedPandaClient {
   Future<void> addPeer(String address) async {
     // Mock implementation - do nothing or log
     RpLog.debug('MockRedPandaClient: Added peer $address');
+  }
+
+  @override
+  Future<LoopbackResult> runLoopbackTest(String channelId) async {
+    await Future.delayed(const Duration(seconds: 1));
+    return const LoopbackResult.ok(roundtripMs: 1000, hopCount: 2);
   }
 
   @override
