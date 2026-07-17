@@ -36,7 +36,7 @@ class ScriptedSocket implements Socket {
 
   /// Framed payload commands the client can send:
   /// deposit 141, flaschenpost v2 142, register OH 150, fetch 152, ack 156.
-  static const Set<int> _framedCommands = {141, 142, 150, 152, 156};
+  static const Set<int> _framedCommands = {141, 142, 150, 152, 156, 159};
 
   /// Called for every complete [cmd][len][payload] frame the client sends.
   void Function(int command, Uint8List payload)? onCommandFrame;
@@ -91,7 +91,16 @@ class ScriptedSocket implements Socket {
         if (_outBuffer.length < 5 + len) return;
         final payload = Uint8List.fromList(_outBuffer.sublist(5, 5 + len));
         _outBuffer.removeRange(0, 5 + len);
-        onCommandFrame?.call(command, payload);
+        if (command == 159) {
+          // T38: accept the subscribe (node → OK) so the mock's plaintext
+          // parser stays aligned; these flows don't exercise Notify.
+          replyCommand(
+            160,
+            (SubscribeResponse()..status = Status.OK).writeToBuffer(),
+          );
+        } else {
+          onCommandFrame?.call(command, payload);
+        }
       } else {
         _outBuffer.removeAt(0);
       }

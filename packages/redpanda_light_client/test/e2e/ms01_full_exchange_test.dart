@@ -106,20 +106,20 @@ void main() async {
           isChannelCreator: false,
         );
 
-        // 7. Alice sends message
+        // 7. Bob observes delivery on the production path (poll loop /
+        // Connection-Notify auto-fetch), started before Alice sends.
+        final delivery = DeliveryCollector(bob);
+        addTearDown(delivery.cancel);
+
+        // 8. Alice sends message
         final messageId = await alice.sendMessage(
           channelWithOH.id,
           'Hello Bob!',
         );
         expect(messageId, isNotEmpty);
 
-        // 8. Short delay for backend routing
-        await Future.delayed(const Duration(milliseconds: 500));
-
-        // 9. Bob fetches messages
-        final messages = await bob.fetchMessages(bobOH);
-
-        // 10. Verify Bob received and decrypted the message
+        // 9. Verify Bob received and decrypted the message
+        final messages = await delivery.waitForCount(1);
         expect(messages, hasLength(1));
         expect(messages.first.content, equals('Hello Bob!'));
       },

@@ -213,19 +213,21 @@ void main() async {
         // ── Step 1: Alice installs epoch 1 — sealed rotations via garlic. ──
         await alice.rotateGroupKey(groupId, members: fullRoster);
 
+        // Each client's poll loop (Connection-Notify auto-fetch, T38) fetches
+        // its group OH and installs epochs from the sealed rotation boxes; the
+        // groupStateUpdates stream reports the installed epoch. No explicit
+        // fetchMessages() is needed.
         Future<void> waitForEpoch(
           RedPandaLightClient client,
           String who,
           int epoch,
         ) async {
           for (var i = 0; i < 30 && epochs[who]! < epoch; i++) {
-            await client.fetchMessages(ohs[who]!);
             if (epochs[who]! >= epoch) break;
-            // A box lost in the garlic network stays pending until its
-            // R-ACK arrives; re-send it like the app's periodic retry does
-            // (fetching Alice's mailbox consumes the confirmations).
+            // A box lost in the garlic network stays pending until its R-ACK
+            // arrives; re-send it like the app's periodic retry does (Alice's
+            // poll consumes the confirmations).
             if (i > 0 && i % 3 == 0) {
-              await alice.fetchMessages(ohs['Alice']!);
               try {
                 await alice.retryPendingRotations(groupId);
               } on GroupSendException catch (_) {
@@ -250,14 +252,24 @@ void main() async {
         final ackSub = bob.routingAckUpdates.listen(bobAcks.add);
         final channelAckSub = bob.channelAckUpdates.listen(bobChannelAcks.add);
 
+        bool hasContent(List<DecryptedMessage> m, String c) =>
+            m.any((x) => x.content == c);
+
+        // Deliveries are observed on the production path (each client's poll
+        // loop decrypts group items and publishes them on incomingMessages).
+        // Collectors start before Bob fans the message out.
         const hello = 'Hallo Runde — von Bob!';
         String? helloId;
-        final aliceInbox = <DecryptedMessage>[];
-        final carolInbox = <DecryptedMessage>[];
+        final aliceInbox = DeliveryCollector(alice);
+        final carolInbox = DeliveryCollector(carol);
+        addTearDown(aliceInbox.cancel);
+        addTearDown(carolInbox.cancel);
 
         for (
           var attempt = 0;
-          attempt < 6 && (aliceInbox.isEmpty || carolInbox.isEmpty);
+          attempt < 6 &&
+              !(hasContent(aliceInbox.messages, hello) &&
+                  hasContent(carolInbox.messages, hello));
           attempt++
         ) {
           try {
@@ -270,43 +282,37 @@ void main() async {
             // Partial fan-out: keep the id and retry (dedup at receivers).
             helloId = e.messageIdHex ?? helloId;
           }
-          for (
-            var i = 0;
-            i < 5 && (aliceInbox.isEmpty || carolInbox.isEmpty);
-            i++
-          ) {
-            await Future.delayed(const Duration(seconds: 2));
-            if (aliceInbox.isEmpty) {
-              aliceInbox.addAll(await alice.fetchMessages(ohs['Alice']!));
-            }
-            if (carolInbox.isEmpty) {
-              carolInbox.addAll(await carol.fetchMessages(ohs['Carol']!));
-            }
-          }
+          await Future.wait([
+            aliceInbox.waitUntil(
+              (m) => hasContent(m, hello),
+              timeout: const Duration(seconds: 12),
+            ),
+            carolInbox.waitUntil(
+              (m) => hasContent(m, hello),
+              timeout: const Duration(seconds: 12),
+            ),
+          ]);
         }
 
-        expect(aliceInbox.map((m) => m.content), contains(hello));
-        expect(carolInbox.map((m) => m.content), contains(hello));
+        expect(aliceInbox.messages.map((m) => m.content), contains(hello));
+        expect(carolInbox.messages.map((m) => m.content), contains(hello));
         // Sender authenticity: both receivers attribute the message to Bob.
         expect(
-          aliceInbox.map((m) => m.senderMemberIdHex),
+          aliceInbox.messages.map((m) => m.senderMemberIdHex),
           contains(memberIds['Bob']),
         );
         expect(
-          carolInbox.map((m) => m.senderMemberIdHex),
+          carolInbox.messages.map((m) => m.senderMemberIdHex),
           contains(memberIds['Bob']),
         );
 
-        // ── Step 3: Bob's per-member feedback arrives in his mailbox. ──────
-        for (
-          var i = 0;
-          i < 20 &&
-              (bobAcks.where((a) => !a.timedOut).isEmpty ||
-                  bobChannelAcks.isEmpty);
-          i++
-        ) {
-          await bob.fetchMessages(ohs['Bob']!);
-          await Future.delayed(const Duration(seconds: 2));
+        // ── Step 3: Bob's per-member feedback arrives in his mailbox; his
+        // poll fetches and correlates the R-ACKs and Channel-ACKs. ─────────
+        final ackDeadline = DateTime.now().add(const Duration(seconds: 40));
+        while ((bobAcks.where((a) => !a.timedOut).isEmpty ||
+                bobChannelAcks.isEmpty) &&
+            DateTime.now().isBefore(ackDeadline)) {
+          await Future.delayed(const Duration(milliseconds: 500));
         }
         final storedAcks = bobAcks.where(
           (a) =>
@@ -342,8 +348,13 @@ void main() async {
 
         const secret = 'Nur noch für Bob.';
         String? secretId;
-        final bobInbox = <DecryptedMessage>[];
-        for (var attempt = 0; attempt < 6 && bobInbox.isEmpty; attempt++) {
+        final bobInbox = DeliveryCollector(bob);
+        addTearDown(bobInbox.cancel);
+        for (
+          var attempt = 0;
+          attempt < 6 && !hasContent(bobInbox.messages, secret);
+          attempt++
+        ) {
           try {
             secretId = await alice.sendGroupMessage(
               groupId,
@@ -353,18 +364,19 @@ void main() async {
           } on GroupSendException catch (e) {
             secretId = e.messageIdHex ?? secretId;
           }
-          for (var i = 0; i < 5 && bobInbox.isEmpty; i++) {
-            await Future.delayed(const Duration(seconds: 2));
-            bobInbox.addAll(await bob.fetchMessages(ohs['Bob']!));
-          }
+          await bobInbox.waitUntil(
+            (m) => hasContent(m, secret),
+            timeout: const Duration(seconds: 12),
+          );
         }
-        expect(bobInbox.map((m) => m.content), contains(secret));
+        expect(bobInbox.messages.map((m) => m.content), contains(secret));
 
-        // Carol still holds only epoch 1 — anything she fetches now is
-        // undecryptable for her and must never surface as a message.
-        final carolAfterRemoval = await carol.fetchMessages(ohs['Carol']!);
+        // Carol was removed and still holds only epoch 1 — the secret is never
+        // deposited to her and anything she polls stays undecryptable, so her
+        // continuously-listening collector must never surface it.
+        await Future.delayed(const Duration(seconds: 3));
         expect(
-          carolAfterRemoval.map((m) => m.content),
+          carolInbox.messages.map((m) => m.content),
           isNot(contains(secret)),
         );
         expect(epochs['Carol'], 1);

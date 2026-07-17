@@ -1854,6 +1854,197 @@ class GarlicMessage extends $pb.GeneratedMessage {
   void clearSignature() => $_clearField(6);
 }
 
+// --- SubscribeRequest ---
+// Connection-Notify (T38): hand-extended from outbound.proto (im.redpanda.outbound.v1).
+// Proves OH ownership exactly like FetchRequest — Ed25519 signature over the signing
+// bytes [CMD_BYTE=159 | oh_id | timestamp_ms(8 BE) | nonce] (0x02 version prefix added
+// by OHKeypair.sign). Sent as command 159.
+class SubscribeRequest extends $pb.GeneratedMessage {
+  factory SubscribeRequest({
+    $core.List<$core.int>? ohId,
+    $fixnum.Int64? timestampMs,
+    $core.List<$core.int>? nonce,
+    $core.List<$core.int>? signature,
+  }) {
+    final result = create();
+    if (ohId != null) result.ohId = ohId;
+    if (timestampMs != null) result.timestampMs = timestampMs;
+    if (nonce != null) result.nonce = nonce;
+    if (signature != null) result.signature = signature;
+    return result;
+  }
+
+  SubscribeRequest._();
+
+  factory SubscribeRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'SubscribeRequest',
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
+      createEmptyInstance: create)
+    ..a<$core.List<$core.int>>(
+        1, _omitFieldNames ? '' : 'ohId', $pb.PbFieldType.OY)
+    ..aInt64(2, _omitFieldNames ? '' : 'timestampMs')
+    ..a<$core.List<$core.int>>(
+        3, _omitFieldNames ? '' : 'nonce', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(
+        4, _omitFieldNames ? '' : 'signature', $pb.PbFieldType.OY)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SubscribeRequest clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SubscribeRequest copyWith(void Function(SubscribeRequest) updates) =>
+      super.copyWith((message) => updates(message as SubscribeRequest))
+          as SubscribeRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static SubscribeRequest create() => SubscribeRequest._();
+  @$core.override
+  SubscribeRequest createEmptyInstance() => create();
+  static SubscribeRequest? _defaultInstance;
+  @$core.pragma('dart2js:noInline')
+  static SubscribeRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<SubscribeRequest>(create);
+
+  @$pb.TagNumber(1)
+  $core.List<$core.int> get ohId => $_getN(0);
+  @$pb.TagNumber(1)
+  set ohId($core.List<$core.int> value) => $_setBytes(0, value);
+
+  @$pb.TagNumber(2)
+  $fixnum.Int64 get timestampMs => $_getI64(1);
+  @$pb.TagNumber(2)
+  set timestampMs($fixnum.Int64 value) => $_setInt64(1, value);
+
+  @$pb.TagNumber(3)
+  $core.List<$core.int> get nonce => $_getN(2);
+  @$pb.TagNumber(3)
+  set nonce($core.List<$core.int> value) => $_setBytes(2, value);
+
+  @$pb.TagNumber(4)
+  $core.List<$core.int> get signature => $_getN(3);
+  @$pb.TagNumber(4)
+  set signature($core.List<$core.int> value) => $_setBytes(3, value);
+}
+
+// --- SubscribeResponse ---
+// Connection-Notify (T38): node → client answer to a SubscribeRequest (command 160).
+class SubscribeResponse extends $pb.GeneratedMessage {
+  factory SubscribeResponse({
+    Status? status,
+    $fixnum.Int64? serverTimeMs,
+  }) {
+    final result = create();
+    if (status != null) result.status = status;
+    if (serverTimeMs != null) result.serverTimeMs = serverTimeMs;
+    return result;
+  }
+
+  SubscribeResponse._();
+
+  factory SubscribeResponse.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'SubscribeResponse',
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
+      createEmptyInstance: create)
+    ..e<Status>(1, _omitFieldNames ? '' : 'status', $pb.PbFieldType.OE,
+        defaultOrMaker: Status.STATUS_UNSPECIFIED,
+        valueOf: Status.valueOf,
+        enumValues: Status.values)
+    ..aInt64(2, _omitFieldNames ? '' : 'serverTimeMs')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SubscribeResponse clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SubscribeResponse copyWith(void Function(SubscribeResponse) updates) =>
+      super.copyWith((message) => updates(message as SubscribeResponse))
+          as SubscribeResponse;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static SubscribeResponse create() => SubscribeResponse._();
+  @$core.override
+  SubscribeResponse createEmptyInstance() => create();
+  static SubscribeResponse? _defaultInstance;
+  @$core.pragma('dart2js:noInline')
+  static SubscribeResponse getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<SubscribeResponse>(create);
+
+  @$pb.TagNumber(1)
+  Status get status => $_getN(0);
+  @$pb.TagNumber(1)
+  set status(Status value) => $_setField(1, value);
+
+  @$pb.TagNumber(2)
+  $fixnum.Int64 get serverTimeMs => $_getI64(1);
+  @$pb.TagNumber(2)
+  set serverTimeMs($fixnum.Int64 value) => $_setInt64(1, value);
+}
+
+// --- Notify ---
+// Connection-Notify (T38): one-way node → client (command 161). Carries ONLY the oh_id.
+class Notify extends $pb.GeneratedMessage {
+  factory Notify({
+    $core.List<$core.int>? ohId,
+  }) {
+    final result = create();
+    if (ohId != null) result.ohId = ohId;
+    return result;
+  }
+
+  Notify._();
+
+  factory Notify.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'Notify',
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
+      createEmptyInstance: create)
+    ..a<$core.List<$core.int>>(
+        1, _omitFieldNames ? '' : 'ohId', $pb.PbFieldType.OY)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  Notify clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  Notify copyWith(void Function(Notify) updates) =>
+      super.copyWith((message) => updates(message as Notify)) as Notify;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static Notify create() => Notify._();
+  @$core.override
+  Notify createEmptyInstance() => create();
+  static Notify? _defaultInstance;
+  @$core.pragma('dart2js:noInline')
+  static Notify getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<Notify>(create);
+
+  @$pb.TagNumber(1)
+  $core.List<$core.int> get ohId => $_getN(0);
+  @$pb.TagNumber(1)
+  set ohId($core.List<$core.int> value) => $_setBytes(0, value);
+}
+
 const $core.bool _omitFieldNames =
     $core.bool.fromEnvironment('protobuf.omit_field_names');
 const $core.bool _omitMessageNames =

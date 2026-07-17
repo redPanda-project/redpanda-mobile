@@ -8,7 +8,6 @@ import 'package:test/test.dart';
 
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/domain/channel.dart';
-import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
@@ -88,12 +87,14 @@ void main() async {
 
         final updates = <OhMailboxUpdate>[];
         final sub = bob.ohMailboxUpdates.listen(updates.add);
+        final delivery = DeliveryCollector(bob);
+        addTearDown(delivery.cancel);
 
         await alice.sendMessage(sharedChannel.id, 'Reliable hello!');
-        await Future.delayed(const Duration(milliseconds: 500));
 
-        // First fetch: message delivered, AckFetch sent automatically.
-        final messages = await bob.fetchMessages(bobOH);
+        // Delivered via the poll loop (Connection-Notify auto-fetch), which
+        // also sends the AckFetch automatically.
+        final messages = await delivery.waitForCount(1);
         expect(messages, hasLength(1));
         expect(messages.first.content, equals('Reliable hello!'));
         expect(messages.first.channelId, equals(sharedChannel.id));
@@ -106,7 +107,7 @@ void main() async {
         expect(updates.last.channelId, equals(sharedChannel.id));
         expect(updates.last.mailboxOverflow, isFalse);
 
-        // Second fetch from cursor 0: the acked item must be gone server-side.
+        // Fetch from cursor 0 again: the acked item must be gone server-side.
         final freshHandle = OHRegistration(
           ohId: bobOH.ohId,
           keypair: bobOH.keypair,
@@ -130,25 +131,20 @@ void main() async {
       'Bob receives BOTH of two messages Alice sends (C1 contract)',
       () async {
         final sharedChannel = await Channel.generate('MS03 Two Messages');
-        final bobOH = await setupExchange(sharedChannel);
+        await setupExchange(sharedChannel);
 
         // Alice sends two distinct messages. Each gets its own stable inner
         // ChannelMessage.message_id; the reference node does NOT set
         // MailItem.message_id, so dedup must rely on the decrypted id.
+        final delivery = DeliveryCollector(bob);
+        addTearDown(delivery.cancel);
+
         final id1 = await alice.sendMessage(sharedChannel.id, 'First message');
         final id2 = await alice.sendMessage(sharedChannel.id, 'Second message');
         expect(id1, isNot(equals(id2)));
-        await Future.delayed(const Duration(milliseconds: 800));
 
-        // Collect across fetches: the node may return them in one or more
-        // batches. Fetch a couple of times to drain the mailbox.
-        final received = <DecryptedMessage>[];
-        for (var i = 0; i < 3 && received.length < 2; i++) {
-          received.addAll(await bob.fetchMessages(bobOH));
-          if (received.length < 2) {
-            await Future.delayed(const Duration(milliseconds: 300));
-          }
-        }
+        // Both messages are delivered via the poll loop (Connection-Notify).
+        final received = await delivery.waitForCount(2);
 
         final contents = received.map((m) => m.content).toSet();
         expect(
@@ -168,19 +164,21 @@ void main() async {
       'a re-sent message (same id) is deduplicated to one delivery',
       () async {
         final sharedChannel = await Channel.generate('MS03 Resend Dedup');
-        final bobOH = await setupExchange(sharedChannel);
+        await setupExchange(sharedChannel);
+
+        final delivery = DeliveryCollector(bob);
+        addTearDown(delivery.cancel);
 
         // Simulate a retry: send the SAME logical message id twice with fresh
         // IVs (the network layer re-encrypts each attempt).
         final id = await alice.sendMessage(sharedChannel.id, 'Only once');
         await alice.sendMessage(sharedChannel.id, 'Only once', messageId: id);
-        await Future.delayed(const Duration(milliseconds: 800));
 
-        final received = <DecryptedMessage>[];
-        for (var i = 0; i < 3; i++) {
-          received.addAll(await bob.fetchMessages(bobOH));
-          await Future.delayed(const Duration(milliseconds: 200));
-        }
+        // Wait for the first copy, then give a possible second copy time to
+        // land too (the node does not dedup, so both may arrive on the wire).
+        await delivery.waitForCount(1);
+        await Future.delayed(const Duration(seconds: 1));
+        final received = delivery.messages;
 
         // Both copies may arrive on the wire (the node does not dedup), but
         // they carry the SAME decrypted id, so the app layer collapses them.
@@ -215,9 +213,10 @@ void main() async {
         expect(update.expiresAtMs, equals(bobOH.expiresAtMs));
 
         // The renewed handle must still accept deposits and fetches.
+        final delivery = DeliveryCollector(bob);
+        addTearDown(delivery.cancel);
         await alice.sendMessage(sharedChannel.id, 'After renewal');
-        await Future.delayed(const Duration(milliseconds: 500));
-        final messages = await bob.fetchMessages(bobOH);
+        final messages = await delivery.waitForCount(1);
         expect(messages, hasLength(1));
         expect(messages.first.content, equals('After renewal'));
       },

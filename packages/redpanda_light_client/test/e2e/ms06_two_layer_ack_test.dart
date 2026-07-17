@@ -10,7 +10,6 @@ import 'package:test/test.dart';
 
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/domain/channel.dart';
-import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/routing_ack.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
@@ -153,16 +152,20 @@ void main() async {
       ]);
       await Future.delayed(const Duration(seconds: 5));
 
-      // Collect Alice's routing-ack feedback for the message she sends.
+      // Collect Alice's routing-ack feedback for the message she sends, and
+      // Bob's deliveries on the production path (poll loop / Connection-Notify
+      // auto-fetch). Alice's own poll fetches her mailbox and processes the
+      // R-ACK automatically, so no explicit fetchMessages() is needed.
       final routingAcks = <RoutingAckUpdate>[];
       final ackSub = alice.routingAckUpdates.listen(routingAcks.add);
+      final bobInbox = DeliveryCollector(bob);
+      addTearDown(bobInbox.cancel);
 
       // ── Step 1: Alice → Bob, R-ACK requested. ────────────────────────
       const hello = 'Hello Bob — please ack the route!';
       String? helloId;
-      final bobInbox = <DecryptedMessage>[];
 
-      for (var attempt = 0; attempt < 6 && bobInbox.isEmpty; attempt++) {
+      for (var attempt = 0; attempt < 6; attempt++) {
         helloId = await alice.sendMessage(
           channel.id,
           hello,
@@ -174,23 +177,26 @@ void main() async {
           isTrue,
           reason: 'Alice has her own OH, so the send requests an R-ACK',
         );
-
-        for (var i = 0; i < 5 && bobInbox.isEmpty; i++) {
-          await Future.delayed(const Duration(seconds: 2));
-          bobInbox.addAll(await bob.fetchMessages(bobOH));
-        }
+        await bobInbox.waitUntil(
+          (m) => m.any((x) => x.content == hello),
+          timeout: const Duration(seconds: 12),
+        );
+        if (bobInbox.messages.any((x) => x.content == hello)) break;
       }
-      expect(bobInbox.map((m) => m.content), contains(hello));
+      expect(bobInbox.messages.map((m) => m.content), contains(hello));
 
-      // ── Step 2: Alice fetches her own mailbox — the R-ACK is there. ───
+      // ── Step 2: the R-ACK lands in Alice's mailbox; her poll fetches and
+      // correlates it, firing routingAckUpdates. ───────────────────────
+      final ackDeadline = DateTime.now().add(const Duration(seconds: 40));
       RoutingAckUpdate? storedAck;
-      for (var i = 0; i < 15 && storedAck == null; i++) {
-        await alice.fetchMessages(aliceOH);
+      while (storedAck == null && DateTime.now().isBefore(ackDeadline)) {
         storedAck = routingAcks
             .where((a) => !a.timedOut && a.messageIdHex == helloId)
             .cast<RoutingAckUpdate?>()
             .firstWhere((_) => true, orElse: () => null);
-        if (storedAck == null) await Future.delayed(const Duration(seconds: 2));
+        if (storedAck == null) {
+          await Future.delayed(const Duration(milliseconds: 500));
+        }
       }
 
       expect(

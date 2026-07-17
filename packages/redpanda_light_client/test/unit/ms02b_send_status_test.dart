@@ -76,7 +76,8 @@ class ScriptedSocket implements Socket {
       if (command == 141 ||
           command == 150 ||
           command == 152 ||
-          command == 156) {
+          command == 156 ||
+          command == 159) {
         if (_outBuffer.length < 5) return;
         final len = ByteData.sublistView(
           Uint8List.fromList(_outBuffer.sublist(1, 5)),
@@ -84,7 +85,16 @@ class ScriptedSocket implements Socket {
         if (_outBuffer.length < 5 + len) return;
         final payload = Uint8List.fromList(_outBuffer.sublist(5, 5 + len));
         _outBuffer.removeRange(0, 5 + len);
-        onCommandFrame?.call(command, payload);
+        if (command == 159) {
+          // T38: accept the subscribe (node → OK) so the mock's plaintext
+          // parser stays aligned; these flows don't exercise Notify.
+          replyCommand(
+            160,
+            (SubscribeResponse()..status = Status.OK).writeToBuffer(),
+          );
+        } else {
+          onCommandFrame?.call(command, payload);
+        }
       } else {
         _outBuffer.removeAt(0);
       }

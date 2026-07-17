@@ -132,7 +132,9 @@ void main() async {
 
       final channel = await Channel.generate('MS05 Reverse Garlic');
       final bobOH = await bob.registerOutboundHandle(channelId: channel.id);
-      final aliceOH = await alice.registerOutboundHandle(channelId: channel.id);
+      // Alice registers her own OH too: her poll delivers the tagged reply and
+      // her sends attach a Reverse Garlic Block pointing at this mailbox.
+      await alice.registerOutboundHandle(channelId: channel.id);
 
       alice.addChannelKeys(
         channel.id,
@@ -158,15 +160,27 @@ void main() async {
       // Give the OH announces and the relay interconnections a moment.
       await Future.delayed(const Duration(seconds: 5));
 
+      // Delivery is observed on the production path: both clients' poll loops
+      // (Connection-Notify auto-fetch, T38) fetch, decrypt and — crucially for
+      // this test — store any received Reverse Garlic Block, so no explicit
+      // fetchMessages() is needed to drive the RGB exchange. Collectors are
+      // started before any send (broadcast streams do not replay).
+      final bobInbox = DeliveryCollector(bob);
+      final aliceInbox = DeliveryCollector(alice);
+      addTearDown(bobInbox.cancel);
+      addTearDown(aliceInbox.cancel);
+
+      bool hasContent(List<DecryptedMessage> m, String c) =>
+          m.any((x) => x.content == c);
+
       // ── Step 1: Alice → Bob over the forward garlic path, with RGB. ──
       // Garlic delivery is fire-and-forget (no R-ACK before MS06): re-send
-      // the SAME logical message id until Bob's fetch sees it; every
-      // attempt picks fresh hops and carries a fresh RGB.
+      // the SAME logical message id until Bob's poll sees it; every attempt
+      // picks fresh hops and carries a fresh RGB.
       const hello = 'Hello Bob — reply through my hops!';
       String? helloId;
-      final bobInbox = <DecryptedMessage>[];
 
-      for (var attempt = 0; attempt < 8 && bobInbox.isEmpty; attempt++) {
+      for (var attempt = 0; attempt < 8; attempt++) {
         helloId = await alice.sendMessage(
           channel.id,
           hello,
@@ -178,42 +192,45 @@ void main() async {
           isFalse,
           reason: 'the first message has no reply path to use yet',
         );
-
-        for (var i = 0; i < 6 && bobInbox.isEmpty; i++) {
-          await Future.delayed(const Duration(seconds: 2));
-          bobInbox.addAll(await bob.fetchMessages(bobOH));
-        }
+        await bobInbox.waitUntil(
+          (m) => hasContent(m, hello),
+          timeout: const Duration(seconds: 14),
+        );
+        if (hasContent(bobInbox.messages, hello)) break;
       }
 
-      expect(bobInbox.map((m) => m.content), contains(hello));
+      final helloMsgs = bobInbox.messages
+          .where((m) => m.content == hello)
+          .toList();
+      expect(helloMsgs, isNotEmpty);
       expect(
-        bobInbox.first.viaSessionTag,
+        helloMsgs.first.viaSessionTag,
         isFalse,
         reason: 'the forward direction is untagged',
       );
 
       // ── Step 2: Bob → Alice via the RGB (reverse path). ──────────────
-      // Bob holds Alice's freshest RGB. The RGB is single-use, so each retry
-      // first REPLENISHES it (Alice re-sends hello, Bob re-fetches) before
-      // Bob replies again — otherwise the consumed RGB would force the reply
-      // onto a path Bob (no peer OH id) cannot take. We require the reply to
-      // travel the RGB at least once and to reach Alice, rather than
-      // asserting the single-use RGB is present on every retry iteration.
+      // Bob holds Alice's freshest RGB (stored by his poll while delivering
+      // hello). The RGB is single-use, so each retry first REPLENISHES it
+      // (Alice re-sends hello, Bob's poll re-fetches) before Bob replies
+      // again — otherwise the consumed RGB would force the reply onto a path
+      // Bob (no peer OH id) cannot take. We require the reply to travel the
+      // RGB at least once and to reach Alice.
       const reply = 'Hi Alice — routed over your return hops!';
       String? replyId;
-      final aliceInbox = <DecryptedMessage>[];
       var repliedViaRgb = false;
 
-      for (var attempt = 0; attempt < 8 && aliceInbox.isEmpty; attempt++) {
+      for (var attempt = 0; attempt < 8; attempt++) {
         if (attempt > 0) {
-          // Refresh Bob's single-use RGB before retrying (same hello id —
-          // the app layer would deduplicate; the fetch just refreshes the
-          // pending RGB).
+          // Refresh Bob's single-use RGB: Alice re-sends hello (same id — the
+          // app layer would deduplicate; the point is Bob's poll re-fetches
+          // and refreshes the pending RGB).
+          final before = bobInbox.messages.length;
           await alice.sendMessage(channel.id, hello, messageId: helloId);
-          for (var i = 0; i < 6; i++) {
-            await Future.delayed(const Duration(seconds: 2));
-            if ((await bob.fetchMessages(bobOH)).isNotEmpty) break;
-          }
+          await bobInbox.waitUntil(
+            (m) => m.length > before,
+            timeout: const Duration(seconds: 14),
+          );
         }
 
         replyId = await bob.sendMessage(channel.id, reply, messageId: replyId);
@@ -226,10 +243,11 @@ void main() async {
           repliedViaRgb = true;
         }
 
-        for (var i = 0; i < 6 && aliceInbox.isEmpty; i++) {
-          await Future.delayed(const Duration(seconds: 2));
-          aliceInbox.addAll(await alice.fetchMessages(aliceOH));
-        }
+        await aliceInbox.waitUntil(
+          (m) => hasContent(m, reply),
+          timeout: const Duration(seconds: 14),
+        );
+        if (hasContent(aliceInbox.messages, reply)) break;
       }
 
       expect(
@@ -237,8 +255,8 @@ void main() async {
         isTrue,
         reason: 'Bob (no peer OH id) must reply via the RGB at least once',
       );
-      expect(aliceInbox.map((m) => m.content), contains(reply));
-      final tagged = aliceInbox.firstWhere((m) => m.content == reply);
+      expect(aliceInbox.messages.map((m) => m.content), contains(reply));
+      final tagged = aliceInbox.messages.firstWhere((m) => m.content == reply);
       expect(
         tagged.viaSessionTag,
         isTrue,
@@ -248,11 +266,11 @@ void main() async {
       expect(tagged.id, replyId);
 
       // ── Step 3: Alice → Bob over Bob's counter-RGB. ───────────────────
-      // Bob's reply carried his own fresh RGB, so Alice's next message
-      // takes the reverse path into Bob's mailbox (two-way conversation).
+      // Bob's reply carried his own fresh RGB (stored by Alice's poll while
+      // delivering it), so Alice's next message takes the reverse path into
+      // Bob's mailbox (two-way conversation).
       const followUp = 'Got it — answering over YOUR return hops!';
       String? followUpId;
-      final bobInbox2 = <DecryptedMessage>[];
 
       followUpId = await alice.sendMessage(
         channel.id,
@@ -265,23 +283,18 @@ void main() async {
         reason: 'Alice must use the RGB from Bob\'s reply',
       );
 
-      for (var attempt = 0; attempt < 6 && bobInbox2.isEmpty; attempt++) {
-        for (var i = 0; i < 5 && bobInbox2.isEmpty; i++) {
-          await Future.delayed(const Duration(seconds: 2));
-          bobInbox2.addAll(
-            (await bob.fetchMessages(
-              bobOH,
-            )).where((m) => m.content == followUp),
-          );
-        }
-        if (bobInbox2.isEmpty) {
-          // The single-use RGB is consumed; retries fall back to the
-          // forward garlic path (OQ 3) with the same logical id.
-          await alice.sendMessage(channel.id, followUp, messageId: followUpId);
-        }
+      for (var attempt = 0; attempt < 6; attempt++) {
+        await bobInbox.waitUntil(
+          (m) => hasContent(m, followUp),
+          timeout: const Duration(seconds: 12),
+        );
+        if (hasContent(bobInbox.messages, followUp)) break;
+        // The single-use RGB is consumed; retries fall back to the forward
+        // garlic path (OQ 3) with the same logical id.
+        await alice.sendMessage(channel.id, followUp, messageId: followUpId);
       }
 
-      expect(bobInbox2.map((m) => m.content), contains(followUp));
+      expect(bobInbox.messages.map((m) => m.content), contains(followUp));
     }, skip: jarAvailable ? null : 'RedPanda JAR not found');
   });
 }
