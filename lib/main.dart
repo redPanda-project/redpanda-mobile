@@ -76,17 +76,22 @@ class _MyAppState extends ConsumerState<MyApp> {
     // T16: keep the process (and with it the network isolate) alive in the
     // background on Android once there is at least one channel to receive
     // for; stop when the last channel is gone.
-    ref.listenManual(channelsProvider, fireImmediately: true, (_, next) {
-      final channels = next.value;
-      if (channels == null) return;
-      unawaited(_foregroundService.setEnabled(channels.isNotEmpty));
-    });
+    _channelsSubscription = ref.listenManual(
+      channelsProvider,
+      fireImmediately: true,
+      (_, next) {
+        final channels = next.value;
+        if (channels == null) return;
+        unawaited(_foregroundService.setEnabled(channels.isNotEmpty));
+      },
+    );
 
     // Lifecycle listener
     _lifecycleListener = AppLifecycleListener(onStateChange: _onStateChanged);
   }
 
   final _foregroundService = ForegroundReceptionService();
+  ProviderSubscription<AsyncValue<List<Channel>>>? _channelsSubscription;
 
   late final AppLifecycleListener _lifecycleListener;
 
@@ -105,6 +110,7 @@ class _MyAppState extends ConsumerState<MyApp> {
 
   @override
   void dispose() {
+    _channelsSubscription?.close();
     _lifecycleListener.dispose();
     super.dispose();
   }

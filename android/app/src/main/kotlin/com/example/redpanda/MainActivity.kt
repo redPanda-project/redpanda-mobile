@@ -18,14 +18,21 @@ class MainActivity : FlutterActivity() {
         ).setMethodCallHandler { call, result ->
             when (call.method) {
                 "start" -> {
-                    ensureNotificationPermission()
-                    val intent = Intent(this, RpForegroundService::class.java)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        startForegroundService(intent)
-                    } else {
-                        startService(intent)
+                    // Never crash the app over best-effort background
+                    // reception: starting can throw (e.g. background-start
+                    // restrictions, ForegroundServiceStartNotAllowedException).
+                    try {
+                        ensureNotificationPermission()
+                        val intent = Intent(this, RpForegroundService::class.java)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            startForegroundService(intent)
+                        } else {
+                            startService(intent)
+                        }
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("start_failed", e.toString(), null)
                     }
-                    result.success(true)
                 }
                 "stop" -> {
                     stopService(Intent(this, RpForegroundService::class.java))

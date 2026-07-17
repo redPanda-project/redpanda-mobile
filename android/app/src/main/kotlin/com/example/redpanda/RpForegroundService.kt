@@ -69,7 +69,10 @@ class RpForegroundService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
-        return START_STICKY
+        // NOT_STICKY: after a process death the Flutter engine is gone, so a
+        // system-restarted service could not receive anything — it would
+        // only resurrect the notification as a zombie.
+        return START_NOT_STICKY
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
