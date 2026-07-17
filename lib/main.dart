@@ -2,9 +2,11 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:redpanda/repositories/channel_repository.dart';
 import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/router.dart';
 import 'package:redpanda/services/field_logging.dart';
+import 'package:redpanda/services/foreground_service.dart';
 import 'package:redpanda/services/group_service.dart';
 import 'package:redpanda/services/message_sync_service.dart';
 import 'package:redpanda/services/send_retry_queue.dart';
@@ -71,9 +73,20 @@ class _MyAppState extends ConsumerState<MyApp> {
     );
     ref.read(sendRetryQueueProvider).start();
 
+    // T16: keep the process (and with it the network isolate) alive in the
+    // background on Android once there is at least one channel to receive
+    // for; stop when the last channel is gone.
+    ref.listenManual(channelsProvider, fireImmediately: true, (_, next) {
+      final channels = next.value;
+      if (channels == null) return;
+      unawaited(_foregroundService.setEnabled(channels.isNotEmpty));
+    });
+
     // Lifecycle listener
     _lifecycleListener = AppLifecycleListener(onStateChange: _onStateChanged);
   }
+
+  final _foregroundService = ForegroundReceptionService();
 
   late final AppLifecycleListener _lifecycleListener;
 
