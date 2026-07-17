@@ -287,6 +287,10 @@ for serial in "$SERIAL_ALICE" "$SERIAL_BOB"; do
   # AVDs are reused across runs — wipe app state so every run starts with a
   # fresh onboarding, an empty DB and an empty peer repository.
   adb -s "$serial" shell pm clear com.example.redpanda >/dev/null
+  # T16: pre-grant the notification permission so the foreground service's
+  # permission dialog never overlays (and pauses) the app mid-scenario.
+  adb -s "$serial" shell pm grant com.example.redpanda \
+    android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true
 done
 
 adb -s "$SERIAL_ALICE" logcat -c || true
