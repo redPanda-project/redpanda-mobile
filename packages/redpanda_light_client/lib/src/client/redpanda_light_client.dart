@@ -784,8 +784,13 @@ class RedPandaLightClient implements RedPandaClient {
   /// Outstanding loopback self-tests (T20), keyed by message id (hex). The
   /// fetch pipeline completes and removes the entry when the test message
   /// comes back. Entries of timed-out tests stay registered so a late
-  /// arrival is still swallowed instead of surfacing as a chat message.
+  /// arrival is still swallowed instead of surfacing as a chat message;
+  /// [_maxPendingLoopbacks] bounds the map (tests are manual one-shots, so
+  /// evicting the oldest stale entry is safe).
   final Map<String, Completer<void>> _pendingLoopbacks = {};
+
+  /// Upper bound for [_pendingLoopbacks] (insertion-ordered eviction).
+  static const int _maxPendingLoopbacks = 16;
 
   /// Channel encryption keys indexed by channel ID.
   /// Populated externally or via addChannelKeys().
@@ -1213,6 +1218,11 @@ class RedPandaLightClient implements RedPandaClient {
       channelId,
     );
 
+    // Bound the map: evict the oldest (stale) entries first — Dart maps
+    // iterate in insertion order.
+    while (_pendingLoopbacks.length >= _maxPendingLoopbacks) {
+      _pendingLoopbacks.remove(_pendingLoopbacks.keys.first);
+    }
     final completer = Completer<void>();
     _pendingLoopbacks[messageIdHex] = completer;
     final started = DateTime.now();
