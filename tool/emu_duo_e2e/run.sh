@@ -222,8 +222,10 @@ if [[ "$START_NODE" == 1 ]]; then
   # wrong or unreachable from inside an emulator and send garlic routes /
   # deposits into the void. An EMPTY list does not work -- Settings falls
   # back to the defaults when the parsed list is empty.
+  # -Xmx512m: cap the node heap -- the host has ~7.5 GiB and an uncapped JVM
+  # next to two emulators swap-thrashes the whole run (findings of runs 6/7).
   (cd "$NODE_DIR" && PORT="$NODE_PORT" REDPANDA_KNOWN_NODES="127.0.0.1:9" \
-    exec java -jar "$JAR") >"$ART/node.log" 2>&1 &
+    exec java -Xmx512m -jar "$JAR") >"$ART/node.log" 2>&1 &
   NODE_PID=$!
   wait_port "$NODE_PORT" "backend node" 60
 fi
