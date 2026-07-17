@@ -47,6 +47,13 @@ class CmdSendMessage extends IsolateCommand {
   });
 }
 
+/// Runs a loopback self-test (T20); answered with [EventLoopbackResult].
+class CmdRunLoopbackTest extends IsolateCommand {
+  final int requestId;
+  final String channelId;
+  CmdRunLoopbackTest(this.requestId, this.channelId);
+}
+
 class CmdRegisterOutboundHandle extends IsolateCommand {
   final int requestId;
   final String? channelId;
@@ -231,6 +238,23 @@ class EventMessageSendFailed extends IsolateEvent {
     this.statusCode,
     this.failedMemberIds,
     this.messageIdHex,
+  });
+}
+
+/// Outcome of a loopback self-test (T20). Mirrors [LoopbackResult] as
+/// isolate-sendable primitives.
+class EventLoopbackResult extends IsolateEvent {
+  final int requestId;
+  final bool success;
+  final int? roundtripMs;
+  final int? hopCount;
+  final String? error;
+  EventLoopbackResult({
+    required this.requestId,
+    required this.success,
+    this.roundtripMs,
+    this.hopCount,
+    this.error,
   });
 }
 
