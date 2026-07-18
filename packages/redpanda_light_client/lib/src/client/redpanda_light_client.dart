@@ -1118,9 +1118,10 @@ class RedPandaLightClient implements RedPandaClient {
   /// Reports the outcome of one fetch attempt (success AND failure — unlike
   /// [ohMailboxUpdates], which only fires on state changes).
   void _emitFetchStatus(OHRegistration oh, bool success, [String? detail]) {
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
     final channelId = oh.channelId;
     if (success && channelId != null) {
-      _lastFetchOkAtMs[channelId] = DateTime.now().millisecondsSinceEpoch;
+      _lastFetchOkAtMs[channelId] = nowMs;
     }
     if (_ohFetchStatusController.isClosed) return;
     _ohFetchStatusController.add(
@@ -1128,7 +1129,7 @@ class RedPandaLightClient implements RedPandaClient {
         ohId: oh.ohId,
         channelId: oh.channelId,
         success: success,
-        atMs: DateTime.now().millisecondsSinceEpoch,
+        atMs: nowMs,
         detail: detail,
       ),
     );
@@ -1497,16 +1498,19 @@ class RedPandaLightClient implements RedPandaClient {
         );
       }
     } else {
-      // No own mailbox yet, so the specific host node is unknown; fall back to
-      // reporting general network connectivity.
+      // The specific host node is unknown: either no own mailbox exists yet,
+      // or the registration carries no host endpoint (e.g. one restored
+      // without a serverEndpoint). Fall back to general connectivity.
+      final reason = ownOh == null
+          ? 'No own mailbox yet, so no dedicated host node.'
+          : 'Own mailbox has no recorded host node.';
       stages.add(
         verifiedCount > 0
             ? _stage(
                 'Host node reachable',
                 DoctorStatus.warn,
                 sw,
-                'No own mailbox yet, so no dedicated host node. '
-                    'Connected to $verifiedCount node(s).',
+                '$reason Connected to $verifiedCount node(s).',
               )
             : _stage(
                 'Host node reachable',
