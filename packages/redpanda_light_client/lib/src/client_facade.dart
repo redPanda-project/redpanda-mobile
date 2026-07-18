@@ -1,6 +1,7 @@
 import 'package:redpanda_light_client/src/crypto/ratchet.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
+import 'package:redpanda_light_client/src/domain/channel_doctor_report.dart';
 import 'package:redpanda_light_client/src/domain/group_state.dart';
 import 'package:redpanda_light_client/src/domain/oh_fetch_status.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
@@ -53,6 +54,17 @@ abstract class RedPandaClient {
   /// Never throws — failures (no own mailbox, not connected, timeout) are
   /// reported in [LoopbackResult.error].
   Future<LoopbackResult> runLoopbackTest(String channelId);
+
+  /// Runs the connection doctor for [channelId] (T25): a sequence of
+  /// diagnostic stages — host node reachable (TCP + handshake), own OH
+  /// announced/renewed, peer OH known, last successful fetch age, and the
+  /// loopback self-test (T20, reused) — each reported with a traffic-light
+  /// [DoctorStatus], its runtime and a human-readable detail instead of a
+  /// silent fail. Reuses only existing client state and the existing loopback
+  /// path; introduces no new wire commands.
+  ///
+  /// Never throws — a broken stage is reported inside the returned report.
+  Future<ChannelDoctorReport> runChannelDoctor(String channelId);
 
   /// Stream of periodic peer stats snapshots from the network layer.
   Stream<PeerStatsSnapshot> get peerStatsStream;

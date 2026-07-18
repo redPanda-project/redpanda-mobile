@@ -11,6 +11,7 @@ import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/client_facade.dart';
 import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
 import 'package:redpanda_light_client/src/crypto/ratchet.dart';
+import 'package:redpanda_light_client/src/domain/channel_doctor_report.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
 import 'package:redpanda_light_client/src/domain/group_state.dart';
@@ -111,6 +112,9 @@ class RedPandaIsolateClient implements RedPandaClient {
 
   // Pending loopback self-tests (T20), by requestId.
   final Map<int, Completer<LoopbackResult>> _pendingLoopbackTests = {};
+
+  // Pending connection-doctor runs (T25), by requestId.
+  final Map<int, Completer<ChannelDoctorReport>> _pendingChannelDoctors = {};
   int _nextRequestId = 0;
 
   // Cache last known status
@@ -245,7 +249,25 @@ class RedPandaIsolateClient implements RedPandaClient {
       }
     }
     _pendingLoopbackTests.clear();
+    for (final completer in _pendingChannelDoctors.values) {
+      if (!completer.isCompleted) {
+        completer.complete(_doctorErrorReport('network worker restarted'));
+      }
+    }
+    _pendingChannelDoctors.clear();
   }
+
+  /// Single-stage failure report used when the worker never answers a doctor
+  /// run (respawn, lost response).
+  static ChannelDoctorReport _doctorErrorReport(String detail) =>
+      ChannelDoctorReport([
+        DoctorStage(
+          name: 'Connection doctor',
+          status: DoctorStatus.fail,
+          durationMs: 0,
+          detail: detail,
+        ),
+      ]);
 
   /// Re-establishes the worker state after a respawn: known peers, channel
   /// keys (with the latest ratchet/garlic state), OH registrations, groups,
@@ -349,6 +371,11 @@ class RedPandaIsolateClient implements RedPandaClient {
                   hopCount: event.hopCount,
                 ),
         );
+      }
+    } else if (event is EventChannelDoctorResult) {
+      final completer = _pendingChannelDoctors.remove(event.requestId);
+      if (completer != null && !completer.isCompleted) {
+        completer.complete(event.report);
       }
     } else if (event is EventMessageSendFailed) {
       final completer = _pendingSends.remove(event.requestId);
@@ -579,6 +606,24 @@ class RedPandaIsolateClient implements RedPandaClient {
       onTimeout: () {
         _pendingLoopbackTests.remove(requestId);
         return const LoopbackResult.failed('no response from network worker');
+      },
+    );
+  }
+
+  @override
+  Future<ChannelDoctorReport> runChannelDoctor(String channelId) async {
+    await _isolateReady.future;
+    final requestId = _nextRequestId++;
+    final completer = Completer<ChannelDoctorReport>();
+    _pendingChannelDoctors[requestId] = completer;
+    _send(CmdRunChannelDoctor(requestId, channelId));
+    // The doctor's loopback stage is bounded by loopbackTimeout (60 s); this
+    // outer guard only covers a lost worker response.
+    return completer.future.timeout(
+      const Duration(seconds: 90),
+      onTimeout: () {
+        _pendingChannelDoctors.remove(requestId);
+        return _doctorErrorReport('no response from network worker');
       },
     );
   }
@@ -1005,6 +1050,15 @@ void _runWorker(SendPort mainSendPort) {
             roundtripMs: result.roundtripMs,
             hopCount: result.hopCount,
             error: result.error,
+          ),
+        );
+      } else if (message is CmdRunChannelDoctor) {
+        // Never throws — failures travel inside the report's stages.
+        final report = await client!.runChannelDoctor(message.channelId);
+        mainSendPort.send(
+          EventChannelDoctorResult(
+            requestId: message.requestId,
+            report: report,
           ),
         );
       } else if (message is CmdRegisterOutboundHandle) {

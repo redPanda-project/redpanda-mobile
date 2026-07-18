@@ -33,6 +33,31 @@ class FakeRedPandaClient implements RedPandaClient {
     return const LoopbackResult.ok(roundtripMs: 42, hopCount: 0);
   }
 
+  /// Report returned by [runChannelDoctor]; overridable per test.
+  ChannelDoctorReport doctorReport = const ChannelDoctorReport([
+    DoctorStage(
+      name: 'Host node reachable',
+      status: DoctorStatus.ok,
+      durationMs: 1,
+      detail: 'Connected to fake-node (handshake verified).',
+    ),
+    DoctorStage(
+      name: 'Loopback self-test',
+      status: DoctorStatus.ok,
+      durationMs: 42,
+      detail: 'Round trip in 0.0 s via 0 relay hop(s).',
+    ),
+  ]);
+
+  /// Number of times [runChannelDoctor] was invoked.
+  int doctorRunCount = 0;
+
+  @override
+  Future<ChannelDoctorReport> runChannelDoctor(String channelId) async {
+    doctorRunCount++;
+    return doctorReport;
+  }
+
   @override
   Future<String> sendMessage(
     String channelId,

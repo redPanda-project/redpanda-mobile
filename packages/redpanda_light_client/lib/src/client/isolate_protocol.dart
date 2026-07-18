@@ -1,3 +1,4 @@
+import 'package:redpanda_light_client/src/domain/channel_doctor_report.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/group_state.dart';
 import 'package:redpanda_light_client/src/garlic/node_scorer.dart';
@@ -52,6 +53,13 @@ class CmdRunLoopbackTest extends IsolateCommand {
   final int requestId;
   final String channelId;
   CmdRunLoopbackTest(this.requestId, this.channelId);
+}
+
+/// Runs the connection doctor (T25); answered with [EventChannelDoctorResult].
+class CmdRunChannelDoctor extends IsolateCommand {
+  final int requestId;
+  final String channelId;
+  CmdRunChannelDoctor(this.requestId, this.channelId);
 }
 
 class CmdRegisterOutboundHandle extends IsolateCommand {
@@ -256,6 +264,15 @@ class EventLoopbackResult extends IsolateEvent {
     this.hopCount,
     this.error,
   });
+}
+
+/// Outcome of runChannelDoctor (T25). [ChannelDoctorReport] carries only
+/// isolate-sendable primitives (plain data classes + an enum), so it travels
+/// as-is like [GroupStateUpdate].
+class EventChannelDoctorResult extends IsolateEvent {
+  final int requestId;
+  final ChannelDoctorReport report;
+  EventChannelDoctorResult({required this.requestId, required this.report});
 }
 
 class EventIncomingMessage extends IsolateEvent {

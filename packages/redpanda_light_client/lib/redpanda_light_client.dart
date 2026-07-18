@@ -25,6 +25,7 @@ export 'src/garlic/return_path.dart';
 export 'src/garlic/rgb_builder.dart';
 export 'src/garlic/session_tag_store.dart';
 export 'src/domain/channel.dart';
+export 'src/domain/channel_doctor_report.dart';
 export 'src/domain/garlic_session_update.dart';
 export 'src/domain/group_state.dart';
 export 'src/domain/loopback_result.dart';
