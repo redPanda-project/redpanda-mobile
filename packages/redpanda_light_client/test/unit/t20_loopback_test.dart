@@ -6,6 +6,8 @@ import 'package:fixnum/fixnum.dart' as fixnum;
 import 'package:test/test.dart';
 
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
+import 'package:redpanda_light_client/src/crypto/channel_message.dart';
+import 'package:redpanda_light_client/src/crypto/message_crypto_v3.dart';
 import 'package:redpanda_light_client/src/domain/channel.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/generated/commands.pb.dart';
@@ -170,6 +172,10 @@ class LoopbackNodeScript {
     socket.onCommandFrame = _handle;
   }
 
+  /// Pre-seeds the mailbox with a payload, as if deposited earlier (e.g. a
+  /// stale self-test replayed by a T40 cursor heal).
+  void seed(List<int> content) => _mailbox.add(content);
+
   void _handle(int command, Uint8List payload) {
     if (command == 150) {
       final response = RegisterOhResponse()..status = Status.OK;
@@ -229,6 +235,46 @@ void main() {
       expect(result.hopCount, equals(0));
 
       // The test message must have been swallowed by the fetch pipeline.
+      await Future.delayed(const Duration(milliseconds: 100));
+      expect(incoming, isEmpty);
+    });
+
+    test('a re-delivered self-test without a pending entry is swallowed, '
+        'not surfaced as a chat message', () async {
+      final (client, socket) = await connectedClient();
+      addTearDown(client.disconnect);
+      final node = LoopbackNodeScript(socket, deliverOnFetch: true);
+
+      final channel = await Channel.generate('Test');
+      client.addChannelKeys(
+        channel.id,
+        channel.encryptionKey,
+        isChannelCreator: true,
+      );
+      await client.registerOutboundHandle(channelId: channel.id);
+
+      // A stale self-test deposit from a previous app run: same payload
+      // content, but its message id has no pending completer (e.g. replayed
+      // after a T40 cursor heal on the node).
+      final stale = await MessageCryptoV3.encrypt(
+        ChannelMessage(
+          messageId: Uint8List.fromList(List<int>.generate(16, (i) => i)),
+          timestampMs: DateTime.now().millisecondsSinceEpoch,
+          content: 'loopback self-test',
+        ),
+        channel.encryptionKey,
+        channel.id,
+      );
+      node.seed(stale);
+
+      final incoming = <DecryptedMessage>[];
+      final sub = client.incomingMessages.listen(incoming.add);
+      addTearDown(sub.cancel);
+
+      // The fresh loopback run flushes both the stale and the fresh item.
+      final result = await client.runLoopbackTest(channel.id);
+      expect(result.success, isTrue, reason: 'error: ${result.error}');
+
       await Future.delayed(const Duration(milliseconds: 100));
       expect(incoming, isEmpty);
     });

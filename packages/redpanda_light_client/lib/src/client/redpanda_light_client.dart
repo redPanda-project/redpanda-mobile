@@ -958,6 +958,12 @@ class RedPandaLightClient implements RedPandaClient {
   /// Upper bound for [_pendingLoopbacks] (insertion-ordered eviction).
   static const int _maxPendingLoopbacks = 16;
 
+  /// Payload of every T20 loopback self-test message. Also used to swallow
+  /// re-delivered test messages whose pending entry no longer exists (app
+  /// restart, eviction, or a T40 cursor heal replaying old deposits) — they
+  /// are diagnostics and must never surface as chat messages.
+  static const String _loopbackContent = 'loopback self-test';
+
   /// Channel encryption keys indexed by channel ID.
   /// Populated externally or via addChannelKeys().
   final Map<String, List<int>> _channelEncryptionKeys = {};
@@ -1388,7 +1394,7 @@ class RedPandaLightClient implements RedPandaClient {
       ChannelMessage(
         messageId: messageIdBytes,
         timestampMs: DateTime.now().millisecondsSinceEpoch,
-        content: 'loopback self-test',
+        content: _loopbackContent,
       ),
       encKey,
       channelId,
@@ -2420,12 +2426,14 @@ class RedPandaLightClient implements RedPandaClient {
         }
         // T20: a loopback self-test message coming back — complete the
         // pending test and swallow the item: it never surfaces as a chat
-        // message and is never channel-ACKed.
+        // message and is never channel-ACKed. Test messages without a
+        // pending entry (app restart, eviction, or old deposits replayed
+        // by a T40 cursor heal) are swallowed as well.
         final loopback = _pendingLoopbacks.remove(
           _hexEncode(channelMessage.messageId),
         );
-        if (loopback != null) {
-          if (!loopback.isCompleted) loopback.complete();
+        if (loopback != null || channelMessage.content == _loopbackContent) {
+          if (loopback != null && !loopback.isCompleted) loopback.complete();
           continue;
         }
         // MS08: a group handshake rides the 1:1 channel — surface it as an
