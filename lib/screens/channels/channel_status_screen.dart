@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:redpanda/services/channel_health.dart';
 import 'package:redpanda/shared/providers.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart' hide Channel;
@@ -133,6 +134,15 @@ class ChannelStatusScreen extends ConsumerWidget {
           _LoopbackTile(
             channelUuid: channelUuid,
             hasOwnMailbox: ownHandle != null,
+          ),
+          ListTile(
+            leading: const Icon(Icons.health_and_safety),
+            title: const Text('Connection doctor'),
+            subtitle: const Text(
+              'Run step-by-step checks and see where a problem is.',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/channels/$channelUuid/doctor'),
           ),
         ],
       ),

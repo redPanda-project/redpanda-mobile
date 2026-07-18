@@ -6,6 +6,7 @@ import 'package:redpanda/screens/home/home_screen.dart';
 import 'package:redpanda/screens/chat/chat_screen.dart';
 import 'package:redpanda/screens/debug_peer_stats_screen.dart';
 import 'package:redpanda/screens/channels/channel_status_screen.dart';
+import 'package:redpanda/screens/channels/connection_doctor_screen.dart';
 import 'package:redpanda/screens/channels/create_channel_screen.dart';
 import 'package:redpanda/screens/channels/join_channel_screen.dart';
 import 'package:redpanda/screens/group/create_group_screen.dart';
@@ -45,6 +46,13 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state) {
           final uuid = state.pathParameters['uuid']!;
           return ChannelStatusScreen(channelUuid: uuid);
+        },
+      ),
+      GoRoute(
+        path: '/channels/:uuid/doctor',
+        builder: (context, state) {
+          final uuid = state.pathParameters['uuid']!;
+          return ConnectionDoctorScreen(channelUuid: uuid);
         },
       ),
       GoRoute(

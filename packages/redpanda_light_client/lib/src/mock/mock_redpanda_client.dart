@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:redpanda_light_client/src/client_facade.dart';
 import 'package:redpanda_light_client/src/crypto/ratchet.dart';
+import 'package:redpanda_light_client/src/domain/channel_doctor_report.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
 import 'package:redpanda_light_client/src/domain/group_state.dart';
@@ -62,6 +63,43 @@ class MockRedPandaClient implements RedPandaClient {
   Future<LoopbackResult> runLoopbackTest(String channelId) async {
     await Future.delayed(const Duration(seconds: 1));
     return const LoopbackResult.ok(roundtripMs: 1000, hopCount: 2);
+  }
+
+  @override
+  Future<ChannelDoctorReport> runChannelDoctor(String channelId) async {
+    await Future.delayed(const Duration(milliseconds: 500));
+    return const ChannelDoctorReport([
+      DoctorStage(
+        name: 'Host node reachable',
+        status: DoctorStatus.ok,
+        durationMs: 1,
+        detail: 'Connected to mock-node (handshake verified).',
+      ),
+      DoctorStage(
+        name: 'Own mailbox announced',
+        status: DoctorStatus.ok,
+        durationMs: 0,
+        detail: 'Announced on mock-node, valid for 6 d.',
+      ),
+      DoctorStage(
+        name: 'Peer mailbox known',
+        status: DoctorStatus.ok,
+        durationMs: 0,
+        detail: 'Peer mailbox on mock-node.',
+      ),
+      DoctorStage(
+        name: 'Last fetch success',
+        status: DoctorStatus.ok,
+        durationMs: 0,
+        detail: 'Last successful mailbox check 3 s ago.',
+      ),
+      DoctorStage(
+        name: 'Loopback self-test',
+        status: DoctorStatus.ok,
+        durationMs: 1000,
+        detail: 'Round trip in 1.0 s via 2 relay hop(s).',
+      ),
+    ]);
   }
 
   @override

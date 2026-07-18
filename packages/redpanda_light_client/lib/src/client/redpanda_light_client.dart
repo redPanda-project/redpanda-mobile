@@ -18,6 +18,7 @@ import 'package:redpanda_light_client/src/crypto/message_crypto_v4.dart';
 import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
 import 'package:redpanda_light_client/src/crypto/ratchet.dart';
 import 'package:redpanda_light_client/src/logging/logger.dart';
+import 'package:redpanda_light_client/src/domain/channel_doctor_report.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
 import 'package:redpanda_light_client/src/domain/group_state.dart';
@@ -1109,16 +1110,26 @@ class RedPandaLightClient implements RedPandaClient {
   @override
   Stream<OhFetchStatus> get ohFetchStatus => _ohFetchStatusController.stream;
 
+  /// Timestamp (ms since epoch) of the last successful mailbox fetch per
+  /// channel id. Fed by [_emitFetchStatus]; read by [runChannelDoctor] to
+  /// judge how fresh the receiving pipeline is. Purely diagnostic.
+  final Map<String, int> _lastFetchOkAtMs = {};
+
   /// Reports the outcome of one fetch attempt (success AND failure — unlike
   /// [ohMailboxUpdates], which only fires on state changes).
   void _emitFetchStatus(OHRegistration oh, bool success, [String? detail]) {
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final channelId = oh.channelId;
+    if (success && channelId != null) {
+      _lastFetchOkAtMs[channelId] = nowMs;
+    }
     if (_ohFetchStatusController.isClosed) return;
     _ohFetchStatusController.add(
       OhFetchStatus(
         ohId: oh.ohId,
         channelId: oh.channelId,
         success: success,
-        atMs: DateTime.now().millisecondsSinceEpoch,
+        atMs: nowMs,
         detail: detail,
       ),
     );
@@ -1429,6 +1440,240 @@ class RedPandaLightClient implements RedPandaClient {
       roundtripMs: DateTime.now().difference(started).inMilliseconds,
       hopCount: hops.length,
     );
+  }
+
+  /// A successful mailbox fetch newer than this counts as green in the
+  /// doctor's "last fetch" stage (roughly three idle poll cycles).
+  static const Duration _doctorFetchFreshWindow = Duration(seconds: 90);
+
+  /// A last successful fetch older than [_doctorFetchFreshWindow] but newer
+  /// than this counts as amber; older than this is red.
+  static const Duration _doctorFetchStaleWindow = Duration(minutes: 5);
+
+  @override
+  Future<ChannelDoctorReport> runChannelDoctor(
+    String channelId, {
+    Duration timeout = loopbackTimeout,
+  }) async {
+    final stages = <DoctorStage>[];
+    final sw = Stopwatch()..start();
+
+    // Stage 1: Host node reachable (TCP + handshake). The channel's host node
+    // is the Full Node hosting our own mailbox (OHRegistration.serverEndpoint).
+    final ownOh = _registeredOHs
+        .where((oh) => oh.channelId == channelId)
+        .firstOrNull;
+    final hostEndpoint = ownOh?.serverEndpoint;
+    final verifiedCount = _peers.values
+        .where((p) => p.isHandshakeVerified)
+        .length;
+    if (hostEndpoint != null) {
+      final hostPeer = _peers[hostEndpoint];
+      if (hostPeer != null && hostPeer.isHandshakeVerified) {
+        stages.add(
+          _stage(
+            'Host node reachable',
+            DoctorStatus.ok,
+            sw,
+            'Connected to $hostEndpoint (handshake verified).',
+          ),
+        );
+      } else if (hostPeer != null && !hostPeer.isDisconnected) {
+        stages.add(
+          _stage(
+            'Host node reachable',
+            DoctorStatus.warn,
+            sw,
+            'Connecting to host node $hostEndpoint…',
+          ),
+        );
+      } else {
+        stages.add(
+          _stage(
+            'Host node reachable',
+            DoctorStatus.fail,
+            sw,
+            'Host node $hostEndpoint is not connected.',
+          ),
+        );
+      }
+    } else {
+      // The specific host node is unknown: either no own mailbox exists yet,
+      // or the registration carries no host endpoint (e.g. one restored
+      // without a serverEndpoint). Fall back to general connectivity.
+      final reason = ownOh == null
+          ? 'No own mailbox yet, so no dedicated host node.'
+          : 'Own mailbox has no recorded host node.';
+      stages.add(
+        verifiedCount > 0
+            ? _stage(
+                'Host node reachable',
+                DoctorStatus.warn,
+                sw,
+                '$reason Connected to $verifiedCount node(s).',
+              )
+            : _stage(
+                'Host node reachable',
+                DoctorStatus.fail,
+                sw,
+                'Not connected to any node.',
+              ),
+      );
+    }
+
+    // Stage 2: Own OH announced / renewed.
+    sw
+      ..reset()
+      ..start();
+    if (ownOh == null) {
+      stages.add(
+        _stage(
+          'Own mailbox announced',
+          DoctorStatus.fail,
+          sw,
+          'No own mailbox registered for this channel.',
+        ),
+      );
+    } else {
+      final remaining = Duration(
+        milliseconds: ownOh.expiresAtMs - DateTime.now().millisecondsSinceEpoch,
+      );
+      if (remaining.isNegative || remaining == Duration.zero) {
+        stages.add(
+          _stage(
+            'Own mailbox announced',
+            DoctorStatus.fail,
+            sw,
+            'Registration expired ${_fmtDuration(-remaining)} ago.',
+          ),
+        );
+      } else if (remaining <= renewalThreshold) {
+        stages.add(
+          _stage(
+            'Own mailbox announced',
+            DoctorStatus.warn,
+            sw,
+            'Registration renews soon (valid for '
+                '${_fmtDuration(remaining)}).',
+          ),
+        );
+      } else {
+        stages.add(
+          _stage(
+            'Own mailbox announced',
+            DoctorStatus.ok,
+            sw,
+            'Announced on ${ownOh.serverEndpoint ?? 'a node'}, valid for '
+                '${_fmtDuration(remaining)}.',
+          ),
+        );
+      }
+    }
+
+    // Stage 3: Peer OH known (required for sending).
+    sw
+      ..reset()
+      ..start();
+    final peerOhId = _channelPeerOhIds[channelId];
+    final peerEndpoint = _channelPeerOhEndpoints[channelId];
+    stages.add(
+      (peerOhId != null && peerOhId.isNotEmpty)
+          ? _stage(
+              'Peer mailbox known',
+              DoctorStatus.ok,
+              sw,
+              peerEndpoint != null
+                  ? 'Peer mailbox on $peerEndpoint.'
+                  : 'Peer mailbox id known.',
+            )
+          : _stage(
+              'Peer mailbox known',
+              DoctorStatus.warn,
+              sw,
+              'Peer mailbox unknown — scan the peer\'s QR code to enable '
+                  'sending. Receiving still works.',
+            ),
+    );
+
+    // Stage 4: Last successful fetch age.
+    sw
+      ..reset()
+      ..start();
+    final lastOk = _lastFetchOkAtMs[channelId];
+    if (lastOk == null) {
+      stages.add(
+        _stage(
+          'Last fetch success',
+          DoctorStatus.warn,
+          sw,
+          'No successful mailbox check since app start.',
+        ),
+      );
+    } else {
+      final age = Duration(
+        milliseconds: DateTime.now().millisecondsSinceEpoch - lastOk,
+      );
+      final status = age <= _doctorFetchFreshWindow
+          ? DoctorStatus.ok
+          : age <= _doctorFetchStaleWindow
+          ? DoctorStatus.warn
+          : DoctorStatus.fail;
+      stages.add(
+        _stage(
+          'Last fetch success',
+          status,
+          sw,
+          'Last successful mailbox check ${_fmtDuration(age)} ago.',
+        ),
+      );
+    }
+
+    // Stage 5: Loopback self-test (reuses the T20 path end to end).
+    sw
+      ..reset()
+      ..start();
+    final loopback = await runLoopbackTest(channelId, timeout: timeout);
+    final loopbackMs = loopback.roundtripMs ?? sw.elapsedMilliseconds;
+    stages.add(
+      loopback.success
+          ? DoctorStage(
+              name: 'Loopback self-test',
+              status: DoctorStatus.ok,
+              durationMs: loopbackMs,
+              detail:
+                  'Round trip in ${(loopbackMs / 1000).toStringAsFixed(1)} s '
+                  'via ${loopback.hopCount} relay hop(s).',
+            )
+          : DoctorStage(
+              name: 'Loopback self-test',
+              status: DoctorStatus.fail,
+              durationMs: loopbackMs,
+              detail: 'Failed: ${loopback.error ?? 'unknown error'}',
+            ),
+    );
+
+    return ChannelDoctorReport(stages);
+  }
+
+  /// Builds a [DoctorStage] and stamps it with the elapsed [sw] runtime.
+  static DoctorStage _stage(
+    String name,
+    DoctorStatus status,
+    Stopwatch sw,
+    String detail,
+  ) => DoctorStage(
+    name: name,
+    status: status,
+    durationMs: sw.elapsedMilliseconds,
+    detail: detail,
+  );
+
+  /// "12 s" / "3 min" / "2 h" / "5 d" — coarse, human-readable duration.
+  static String _fmtDuration(Duration d) {
+    if (d.inSeconds < 60) return '${d.inSeconds} s';
+    if (d.inMinutes < 60) return '${d.inMinutes} min';
+    if (d.inHours < 48) return '${d.inHours} h';
+    return '${d.inDays} d';
   }
 
   /// Deposits [payload] into the mailbox [ohId] as a direct FlaschenpostPut
