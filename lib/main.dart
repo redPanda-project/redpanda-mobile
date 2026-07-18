@@ -28,8 +28,9 @@ Future<void> main() async {
   } catch (e) {
     debugPrint('Failed to restore field logging setting: $e');
   }
-  if (kDebugMode) {
-    // Debug/E2E runs report crashes locally; keep Sentry to field builds.
+  if (!kReleaseMode) {
+    // Debug and profile runs (dev, E2E gate) report crashes locally;
+    // keep Sentry to field release builds.
     runApp(const ProviderScope(child: MyApp()));
     return;
   }
