@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:redpanda/repositories/channel_repository.dart';
@@ -12,6 +13,14 @@ import 'package:redpanda/services/message_sync_service.dart';
 import 'package:redpanda/services/send_retry_queue.dart';
 import 'package:redpanda/shared/providers.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
+import 'package:sentry/sentry.dart';
+
+/// Public client key for the redpanda-mobile Sentry project (crash reporting
+/// only — no tracing, no PII). Pure Dart `sentry` package on purpose: the
+/// `sentry_flutter` native plugin (JNI interop since 9.x) destabilized the
+/// light client's worker-isolate networking in the emulator E2E gate.
+const _sentryDsn =
+    'https://193dc757933e3ea94c9b1c7ca51aba5d@o235168.ingest.us.sentry.io/4511756564496384';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -21,6 +30,27 @@ Future<void> main() async {
   } catch (e) {
     debugPrint('Failed to restore field logging setting: $e');
   }
+  if (!kReleaseMode) {
+    // Debug and profile runs (dev, E2E gate) report crashes locally;
+    // keep Sentry to field release builds.
+    runApp(const ProviderScope(child: MyApp()));
+    return;
+  }
+  await Sentry.init((options) {
+    options.dsn = _sentryDsn;
+    options.tracesSampleRate = 0;
+    options.sendDefaultPii = false;
+  });
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+    unawaited(
+      Sentry.captureException(details.exception, stackTrace: details.stack),
+    );
+  };
+  PlatformDispatcher.instance.onError = (error, stack) {
+    unawaited(Sentry.captureException(error, stackTrace: stack));
+    return true;
+  };
   runApp(const ProviderScope(child: MyApp()));
 }
 
