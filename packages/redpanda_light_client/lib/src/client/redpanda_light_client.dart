@@ -2650,9 +2650,9 @@ class RedPandaLightClient implements RedPandaClient {
           .where((p) => p.isHandshakeVerified)
           .firstOrNull;
       if (submitVia == null) return;
-      final now = DateTime.now().millisecondsSinceEpoch;
-      final store = await _rendezvous.buildSignedStore(channelId, now);
-      if (store == null) return;
+      // Select hops BEFORE building the record so the per-poll-cycle retry does
+      // no signing/AEAD work while no relay path exists (e.g. a single-node
+      // network) — it just no-ops until hops appear.
       final hops = _selectGarlicHops(channelId, submitVia);
       if (hops.isEmpty) {
         RpLog.info(
@@ -2661,6 +2661,9 @@ class RedPandaLightClient implements RedPandaClient {
         );
         return;
       }
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final store = await _rendezvous.buildSignedStore(channelId, now);
+      if (store == null) return;
       final packet = await GarlicBuilder.buildRecordStore(
         hops: hops,
         kademliaStore: store,
