@@ -78,13 +78,15 @@ The script:
 2. builds ONE debug apk with `integration_test/emu_duo_e2e_test.dart` as the
    entrypoint (`RP_SEEDS`/`RP_COORD` are dart-defines; the role is derived
    from the AVD name at runtime, so both emulators run the identical apk),
-3. starts the local node (`PORT=59558 REDPANDA_KNOWN_NODES="127.0.0.1:9"
+3. starts the local node (`PORT=59558 REDPANDA_KNOWN_NODES=none
    java -jar redpanda.jar`) and the coord server
-   (`tool/emu_duo_e2e/coord_server.dart`). The blackhole seed keeps the
-   node isolated: peers gossiped from other nodes have addresses that are
-   wrong or unreachable from inside an emulator and break garlic routing.
-   An empty `REDPANDA_KNOWN_NODES` does NOT isolate — the jar falls back
-   to its default known nodes (which include `127.0.0.1:59558`),
+   (`tool/emu_duo_e2e/coord_server.dart`). `none` (T29) starts the node
+   without any bootstrap peers and keeps it isolated: peers gossiped from
+   other nodes have addresses that are wrong or unreachable from inside an
+   emulator and break garlic routing. An empty `REDPANDA_KNOWN_NODES` does
+   NOT isolate — the jar falls back to its default known nodes (which
+   include `127.0.0.1:59558`); before T29 the harness used the blackhole
+   seed `127.0.0.1:9` instead (requires the jar from release ≥ 2026-07-19),
 4. boots the emulators sequentially (tight RAM), installs the apk (app data
    is wiped via `pm clear` so reused AVDs still start fresh), launches the
    app on both,
