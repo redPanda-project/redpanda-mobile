@@ -2697,17 +2697,33 @@ class RedPandaLightClient implements RedPandaClient {
         .where((oh) => oh.channelId == channelId && oh.serverEndpoint != null)
         .firstOrNull;
     if (ownOh == null) return; // need an own mailbox to receive the answer
-    final now = DateTime.now().millisecondsSinceEpoch;
+
+    // Select the relay path FIRST. A record_lookup can only travel
+    // garlic-wrapped to a remote node, so with no eligible hops (e.g. a
+    // single-node network) recovery is impossible — bail out BEFORE the
+    // key-derivation work. This is critical: the derivations below run pure-
+    // Dart Ed25519/X25519 keygen on the single-threaded network isolate, and
+    // recovery is triggered on every send failure — doing that keygen when we
+    // could never send would stall the isolate (fetch/register timeouts).
+    final hops = _selectGarlicHops(channelId, submitVia);
+    if (hops.isEmpty) return;
+
+    // Throttle: recovery fires on every failing send/deposit; without a floor
+    // a retry burst would repeatedly redo the keygen + DHT lookups.
+    final nowDt = DateTime.now();
+    final last = _lastRecoveryAttempt[channelId];
+    if (last != null && nowDt.difference(last) < _recoveryMinInterval) return;
+    _lastRecoveryAttempt[channelId] = nowDt;
+
+    final returnHops = _hopSelector.selectHops(
+      count: defaultHopCount,
+      excludeAddresses: {?ownOh.serverEndpoint, submitVia.address},
+      excludeNodeIds: {?submitVia.discoveredNodeId},
+    );
+    final now = nowDt.millisecondsSinceEpoch;
     final keys = await _rendezvous.lookupKeys(channelId, now);
     for (final recordKey in keys) {
       try {
-        final hops = _selectGarlicHops(channelId, submitVia);
-        if (hops.isEmpty) continue;
-        final returnHops = _hopSelector.selectHops(
-          count: defaultHopCount,
-          excludeAddresses: {?ownOh.serverEndpoint, submitVia.address},
-          excludeNodeIds: {?submitVia.discoveredNodeId},
-        );
         final ackTag = CryptoUtils.randomBytes(GarlicBuilder.sessionTagLength);
         final ackTagHex = _hexEncode(ackTag);
         _recordLookupTags[ackTagHex] = channelId;
@@ -2731,6 +2747,10 @@ class RedPandaLightClient implements RedPandaClient {
       }
     }
   }
+
+  /// Minimum spacing between rendezvous recovery attempts per channel.
+  static const Duration _recoveryMinInterval = Duration(seconds: 30);
+  final Map<String, DateTime> _lastRecoveryAttempt = {};
 
   /// T44: handles a `record_lookup` reverse-garlic answer
   /// (`[1 status][KademliaStore]`). On a found + valid + newer record, adopts
