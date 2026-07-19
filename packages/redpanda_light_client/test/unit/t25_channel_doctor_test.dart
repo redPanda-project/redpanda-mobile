@@ -199,7 +199,7 @@ DoctorStage stageNamed(ChannelDoctorReport report, String name) =>
 
 void main() {
   group('T25 runChannelDoctor', () {
-    test('healthy channel: all five stages are green', () async {
+    test('healthy channel: all six stages are green', () async {
       final (client, socket) = await connectedClient();
       addTearDown(client.disconnect);
       DoctorNodeScript(socket, deliverOnFetch: true);
@@ -208,6 +208,8 @@ void main() {
       client.addChannelKeys(
         channel.id,
         channel.encryptionKey,
+        // T44: channel secret enables the rendezvous doctor stage.
+        channelSecret: channel.channelSecret,
         peerOhId: List<int>.generate(20, (i) => i),
         peerOhEndpoint: 'peer:9',
         isChannelCreator: true,
@@ -218,7 +220,7 @@ void main() {
 
       final report = await client.runChannelDoctor(channel.id);
 
-      expect(report.stages, hasLength(5));
+      expect(report.stages, hasLength(6));
       for (final stage in report.stages) {
         expect(
           stage.status,
@@ -231,6 +233,7 @@ void main() {
         stageNamed(report, 'Loopback self-test').detail,
         contains('Round trip'),
       );
+      expect(stageNamed(report, 'Rendezvous').status, DoctorStatus.ok);
     });
 
     test('not connected: node stage and mailbox stage are red', () async {

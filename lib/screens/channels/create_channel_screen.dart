@@ -36,21 +36,22 @@ class _CreateChannelScreenState extends ConsumerState<CreateChannelScreen> {
     if (!mounted) return;
     setState(() {
       _createdChannel = channel;
-      // Show the QR right away; the peer OH is embedded once registered.
+      // QR v4: the code is just the channel secret — the peer discovers our
+      // OH via the rendezvous DHT record, not the QR.
       _qrData = channel.toJson();
     });
 
     // Add to repository
     await ref.read(channelRepositoryProvider).addChannel(channel);
 
-    // Fire-and-forget by design: the QR is usable without the OH and gets
-    // upgraded in place once registration succeeds.
+    // Fire-and-forget: register our own OH and publish the rendezvous record
+    // so a joiner can discover us over the DHT.
     unawaited(_registerOwnOh(channel));
   }
 
-  /// Registers our own Outbound Handle for this channel and embeds it into
-  /// the QR code (v3 `oh` field), so the scanning peer knows where to send
-  /// messages.
+  /// Registers our own Outbound Handle for this channel. The OH is published
+  /// into the rendezvous DHT record (by the network client) rather than
+  /// embedded in the QR, so the scanning peer discovers it over the DHT.
   Future<void> _registerOwnOh(Channel channel) async {
     final client = ref.read(redPandaClientProvider);
     final ownDescriptor = await ref
@@ -61,10 +62,6 @@ class _CreateChannelScreenState extends ConsumerState<CreateChannelScreen> {
     if (_createdChannel?.id != channel.id) return;
 
     setState(() {
-      // Transient copy for the QR only: in the QR JSON, `oh` means "the OH
-      // of whoever generated this code". Our persisted channel keeps
-      // peerOhDescriptor = null until we scan the peer's code.
-      _qrData = channel.copyWith(peerOhDescriptor: ownDescriptor).toJson();
       _ohRegistered = true;
     });
   }

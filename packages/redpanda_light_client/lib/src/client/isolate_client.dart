@@ -564,6 +564,8 @@ class RedPandaIsolateClient implements RedPandaClient {
     _channelReplay[channelId] = CmdAddChannelKeys(
       old.channelId,
       old.encryptionKey,
+      channelSecret: old.channelSecret,
+      ownDisplayName: old.ownDisplayName,
       peerOhId: patchPeerOh ? peerOhId : old.peerOhId,
       peerOhEndpoint: patchPeerOh ? peerOhEndpoint : old.peerOhEndpoint,
       peerOhSet: patchPeerOh ? peerOhSet : old.peerOhSet,
@@ -784,6 +786,8 @@ class RedPandaIsolateClient implements RedPandaClient {
   void addChannelKeys(
     String channelId,
     List<int> encryptionKey, {
+    List<int>? channelSecret,
+    String? ownDisplayName,
     List<int>? peerOhId,
     String? peerOhEndpoint,
     List<OHDescriptor>? peerOhSet,
@@ -795,6 +799,8 @@ class RedPandaIsolateClient implements RedPandaClient {
     final cmd = CmdAddChannelKeys(
       channelId,
       encryptionKey,
+      channelSecret: channelSecret,
+      ownDisplayName: ownDisplayName,
       peerOhId: peerOhId,
       peerOhEndpoint: peerOhEndpoint,
       peerOhSet: peerOhSet
@@ -1243,6 +1249,8 @@ void _runWorker(SendPort mainSendPort) {
         client!.addChannelKeys(
           message.channelId,
           message.encryptionKey,
+          channelSecret: message.channelSecret,
+          ownDisplayName: message.ownDisplayName,
           peerOhId: message.peerOhId,
           peerOhEndpoint: message.peerOhEndpoint,
           peerOhSet: message.peerOhSet

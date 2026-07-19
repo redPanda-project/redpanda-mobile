@@ -16,11 +16,18 @@ class Users extends Table {
 class Channels extends Table {
   TextColumn get uuid => text()(); // The Channel ID (Hash of keys)
   TextColumn get label => text()();
-  TextColumn get encryptionKey => text()(); // HEX encoded, 32 bytes
+  TextColumn get encryptionKey => text()(); // HEX encoded, 32 bytes (k_enc)
 
-  // Ed25519 channel auth keypair (MS03). The private seed exists only on
-  // the device that generated the channel; peers joining via QR code hold
-  // only the public key.
+  // T44 (QR v4): the 32-byte channel secret shared by the QR. Everything else
+  // (k_enc, the channel identity keypair, the rendezvous record keypair) is
+  // derived from it. HEX encoded. Nullable only for the migration path; every
+  // v4 channel has it.
+  TextColumn get channelSecret => text().nullable()(); // HEX encoded, 32 bytes
+
+  // Ed25519 channel identity keypair (T44: derived from channelSecret). The
+  // private seed exists only on the device that generated the channel — it is
+  // the local role marker (creator vs joiner); peers joining via QR hold only
+  // the public key.
   TextColumn get authPrivateKey => text().nullable()(); // HEX encoded
   TextColumn get authPublicKey => text()(); // HEX encoded, 32 bytes
 
@@ -263,7 +270,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 16;
+  int get schemaVersion => 17;
 
   @override
   MigrationStrategy get migration {
@@ -406,6 +413,28 @@ class AppDatabase extends _$AppDatabase {
           if (from >= 2) {
             await m.addColumn(channels, channels.peerOhSet);
           }
+        }
+        if (from < 17 && to >= 17) {
+          // T44 (QR v4): the channel is a keypair; the 32-byte channel secret
+          // is now the source of truth (k_enc, identity and rendezvous keys are
+          // derived from it). QR v3 is invalid without a migration path
+          // (spec Decision 1) — existing channels cannot be upgraded and are
+          // dropped so peers re-pair with a fresh v4 QR. Destructive by design.
+          for (final table in <TableInfo>[
+            messages,
+            channels,
+            outboundHandles,
+          ]) {
+            try {
+              await m.deleteTable(table.actualTableName);
+            } catch (_) {
+              // table might not exist on odd upgrade paths
+            }
+          }
+          await m.createTable(channels);
+          await m.createTable(messages);
+          await m.createTable(outboundHandles);
+          await m.createIndex(idxMessagesConvMessageId);
         }
       },
     );

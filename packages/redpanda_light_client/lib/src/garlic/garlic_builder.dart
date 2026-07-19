@@ -98,6 +98,16 @@ class GarlicBuilder {
   /// return-path block — the depositing node sends an R-ACK back over it.
   static const int cmdDeliverAcked = 0x04;
 
+  /// Layer command (T44): final hop — store a channel-rendezvous record in the
+  /// DHT. Plaintext `[1 cmd][4 len][KademliaStore proto]`. Best-effort, no
+  /// response (the client confirms by a later lookup).
+  static const int cmdRecordStore = 0x05;
+
+  /// Layer command (T44): final hop — look a channel-rendezvous record up in
+  /// the DHT and answer via the return path. Plaintext
+  /// `[1 cmd][20 recordKey][ReturnPath]`.
+  static const int cmdRecordLookup = 0x06;
+
   /// Reverse-garlic session tags are exactly this many bytes (backend
   /// `FlaschenpostV2.SESSION_TAG_LEN`).
   static const int sessionTagLength = 16;
@@ -232,14 +242,68 @@ class GarlicBuilder {
     deliver
       ..add(_uint32be(payload.length))
       ..add(payload);
+    return _wrap(hops, deliver.toBytes());
+  }
+
+  /// Builds a garlic packet whose innermost layer is `CMD_RECORD_STORE` (T44):
+  /// a channel-rendezvous record is stored in the DHT on behalf of this
+  /// DHT-fremd client. The record travels to a **remote** node so the directly
+  /// connected node never sees the query interest. Best-effort, no response.
+  ///
+  /// [kademliaStore] is the serialized backend `KademliaStore` proto
+  /// (timestamp, 64-byte record pubkey, 512-byte content, 64-byte signature).
+  static Future<Uint8List> buildRecordStore({
+    required List<GarlicHop> hops,
+    required List<int> kademliaStore,
+  }) {
+    if (hops.isEmpty) {
+      throw ArgumentError.value(hops.length, 'hops', 'need at least one hop');
+    }
+    final inner = BytesBuilder()
+      ..addByte(cmdRecordStore)
+      ..add(_uint32be(kademliaStore.length))
+      ..add(kademliaStore);
+    return _wrap(hops, inner.toBytes());
+  }
+
+  /// Builds a garlic packet whose innermost layer is `CMD_RECORD_LOOKUP` (T44):
+  /// the remote node resolves the rendezvous record for [recordKey] and answers
+  /// via [returnPath] (reverse garlic into the client's own OH mailbox).
+  static Future<Uint8List> buildRecordLookup({
+    required List<GarlicHop> hops,
+    required List<int> recordKey,
+    required ReturnPathBlock returnPath,
+  }) {
+    if (hops.isEmpty) {
+      throw ArgumentError.value(hops.length, 'hops', 'need at least one hop');
+    }
+    if (recordKey.length != GarlicHop.nodeIdLength) {
+      throw ArgumentError.value(
+        recordKey.length,
+        'recordKey',
+        'record key must be ${GarlicHop.nodeIdLength} bytes',
+      );
+    }
+    final inner = BytesBuilder()
+      ..addByte(cmdRecordLookup)
+      ..add(recordKey)
+      ..add(returnPath.serialize());
+    return _wrap(hops, inner.toBytes());
+  }
+
+  /// Wraps an already-built innermost layer plaintext in CMD_FORWARD layers
+  /// from the second-to-last hop outward and assembles the fixed-size packet.
+  /// The plaintext of each FORWARD layer is exactly the next layer's body — no
+  /// own padding (the relay re-pads to [packetSize]).
+  static Future<Uint8List> _wrap(
+    List<GarlicHop> hops,
+    List<int> innermostPlaintext,
+  ) async {
     var body = await encryptLayer(
       hops.last.encryptionPublicKey,
       hops.last.nodeId,
-      deliver.toBytes(),
+      innermostPlaintext,
     );
-
-    // FORWARD layers from the second-to-last hop outward. The plaintext is
-    // exactly the next layer's body — no own padding (the relay re-pads).
     for (var i = hops.length - 2; i >= 0; i--) {
       final forward = BytesBuilder()
         ..addByte(cmdForward)
@@ -251,7 +315,6 @@ class GarlicBuilder {
         forward.toBytes(),
       );
     }
-
     return buildPacket(hops.first.nodeId, body);
   }
 

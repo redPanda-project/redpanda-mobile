@@ -8,7 +8,6 @@ import 'package:hex/hex.dart';
 import 'package:redpanda/database/database.dart';
 import 'package:redpanda/repositories/group_repository.dart';
 import 'package:redpanda/repositories/message_repository.dart';
-import 'package:redpanda/repositories/outbound_handle_repository.dart';
 import 'package:redpanda/screens/chat/share_qr_dialog.dart';
 import 'package:redpanda/services/message_sync_service.dart';
 import 'package:redpanda/services/send_retry_queue.dart';
@@ -284,6 +283,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         client.addChannelKeys(
           channel.uuid,
           encKey,
+          // T44: the channel secret enables the rendezvous DHT layer.
+          channelSecret: channel.channelSecret != null
+              ? HEX.decode(channel.channelSecret!)
+              : null,
           peerOhId: peerOhId,
           peerOhEndpoint: channel.peerOhEndpoint,
           // T42: restore the full peer OH set so sends fan out to every
@@ -354,31 +357,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               if (channel == null) return const SizedBox.shrink();
               return IconButton(
                 icon: const Icon(Icons.qr_code),
-                onPressed: () async {
-                  // QR v3 (MS03): only K_enc + public material — the channel
-                  // auth private key never leaves this device.
-                  final map = <String, dynamic>{
+                onPressed: () {
+                  // QR v4 (T44): the code carries only the 32-byte channel
+                  // secret; the peer derives k_enc, the identity and the
+                  // rendezvous keys from it, and discovers our OH via the
+                  // rendezvous DHT record (no OH is embedded in the QR).
+                  final jsonString = jsonEncode(<String, dynamic>{
+                    'v': 4,
                     'l': channel.label,
-                    'k_enc': channel.encryptionKey,
-                    'k_auth_pub': channel.authPublicKey,
-                  };
-
-                  // Embed our OWN outbound handle so the scanning peer
-                  // knows where to deposit messages for us. Registers one
-                  // on the fly if we don't have a valid OH yet.
-                  final ownDescriptor = await ref
-                      .read(outboundHandleRepositoryProvider)
-                      .ensureOwnDescriptor(
-                        ref.read(redPandaClientProvider),
-                        channel.uuid,
-                      );
-
-                  if (ownDescriptor != null) {
-                    map['oh'] = ownDescriptor.toJsonMap();
-                  }
-                  map['v'] = 3;
-
-                  final jsonString = jsonEncode(map);
+                    'sk': channel.channelSecret,
+                  });
 
                   if (!context.mounted) return;
                   showDialog(

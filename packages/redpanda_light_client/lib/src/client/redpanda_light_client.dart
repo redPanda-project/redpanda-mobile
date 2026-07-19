@@ -11,6 +11,7 @@ import 'dart:convert' show jsonDecode, jsonEncode, utf8;
 import 'package:redpanda_light_client/src/client_facade.dart';
 import 'package:redpanda_light_client/src/crypto/channel_message.dart';
 import 'package:redpanda_light_client/src/crypto/crypto_utils.dart';
+import 'package:redpanda_light_client/src/crypto/rendezvous_manager.dart';
 import 'package:redpanda_light_client/src/crypto/group_control.dart';
 import 'package:redpanda_light_client/src/crypto/group_crypto.dart';
 import 'package:redpanda_light_client/src/crypto/message_crypto_v3.dart';
@@ -160,6 +161,20 @@ class RedPandaLightClient implements RedPandaClient {
 
   /// Outstanding R-ACK expectations: ack tag → message + hops (MS06).
   final AckTagStore _ackTagStore = AckTagStore();
+
+  /// T44: channel-rendezvous state (publish/refresh + recovery merge logic).
+  final RendezvousManager _rendezvous = RendezvousManager();
+
+  /// T44: outstanding `record_lookup` answers, ack session-tag hex → the
+  /// channel that issued the lookup. The reverse-garlic answer arrives as a
+  /// tagged mail item in our own OH mailbox and is correlated here, ahead of
+  /// the R-ACK / channel-reply tag checks.
+  final Map<String, String> _recordLookupTags = {};
+
+  /// T44: how long a record-lookup ack tag stays outstanding before it is
+  /// evicted (an answer is always sent, so this only bounds a lost packet).
+  static const Duration _recordLookupTtl = Duration(minutes: 5);
+  final Map<String, DateTime> _recordLookupTagCreatedAt = {};
 
   /// R-ACK-based node reliability (MS06); feeds the hop selector.
   final NodeScorer _nodeScorer = NodeScorer();
@@ -1151,6 +1166,8 @@ class RedPandaLightClient implements RedPandaClient {
   void addChannelKeys(
     String channelId,
     List<int> encryptionKey, {
+    List<int>? channelSecret,
+    String? ownDisplayName,
     List<int>? peerOhId,
     String? peerOhEndpoint,
     List<OHDescriptor>? peerOhSet,
@@ -1160,6 +1177,16 @@ class RedPandaLightClient implements RedPandaClient {
     String? pendingRgbHex,
   }) {
     _channelEncryptionKeys[channelId] = encryptionKey;
+    // T44: register the rendezvous state (QR v4). Without the channel secret
+    // (legacy caller) the rendezvous DHT layer stays dormant for this channel.
+    if (channelSecret != null && channelSecret.length == 32) {
+      _rendezvous.register(
+        channelId,
+        channelSecret: channelSecret,
+        isCreator: isChannelCreator,
+        ownName: ownDisplayName ?? '',
+      );
+    }
     // T42: restore the full persisted peer OH set first (multi-OH), then seed
     // the primary. Both are applied only when nothing richer is live yet —
     // an `oh_update` learned this session always wins.
@@ -1496,6 +1523,9 @@ class RedPandaLightClient implements RedPandaClient {
         'peer OH — refusing the direct-deposit fallback, message stays '
         'pending for retry',
       );
+      // T44: all of the peer's OHs are unknown/dead — kick off a rendezvous
+      // DHT recovery so a subsequent retry finds the peer's current mailboxes.
+      unawaited(_recoverViaRendezvous(channelId));
       throw UnknownPeerException(channelId);
     }
     lastSendHopCount = 0;
@@ -1886,6 +1916,44 @@ class RedPandaLightClient implements RedPandaClient {
             ),
     );
 
+    // Stage 6 (T44): Rendezvous — can the channel heal over the DHT if every
+    // host node dies? Green once we know the channel secret AND have an own OH
+    // set to publish (and therefore a record peers can resolve).
+    sw
+      ..reset()
+      ..start();
+    if (!_rendezvous.knows(channelId)) {
+      stages.add(
+        _stage(
+          'Rendezvous',
+          DoctorStatus.warn,
+          sw,
+          'No channel secret registered — DHT rendezvous is unavailable '
+              '(re-pair with a v4 QR code).',
+        ),
+      );
+    } else if (_ownDescriptorsFor(channelId).isEmpty) {
+      stages.add(
+        _stage(
+          'Rendezvous',
+          DoctorStatus.warn,
+          sw,
+          'Channel secret known, but no own mailbox is published yet — the '
+              'DHT record cannot advertise a reply address.',
+        ),
+      );
+    } else {
+      stages.add(
+        _stage(
+          'Rendezvous',
+          DoctorStatus.ok,
+          sw,
+          'Own mailbox set is published to the DHT rendezvous record; the '
+              'channel can heal even if every host node goes down.',
+        ),
+      );
+    }
+
     return ChannelDoctorReport(stages);
   }
 
@@ -2010,6 +2078,10 @@ class RedPandaLightClient implements RedPandaClient {
           if (ok && !firstOk.isCompleted) {
             firstOk.complete();
           } else if (remaining == 0 && !firstOk.isCompleted) {
+            // T44: every known peer OH host is unreachable — the in-band path
+            // is exhausted. Recover the peer's current mailboxes from the
+            // rendezvous DHT record so the next retry has fresh targets.
+            unawaited(_recoverViaRendezvous(channelId));
             firstOk.completeError(
               DepositException(
                 'all ${targets.length} peer OH deposits failed for channel '
@@ -2323,6 +2395,12 @@ class RedPandaLightClient implements RedPandaClient {
 
     _registeredOHs.add(registration);
     _startPolling();
+    // T44: a freshly registered mailbox is a new own-OH — publish/refresh the
+    // rendezvous record so peers can discover us over the DHT (idempotent:
+    // only republishes when the own-OH set actually changed).
+    if (channelId != null) {
+      unawaited(_publishRendezvousIfChanged(channelId));
+    }
     // T27: a freshly registered handle means a brand-new channel — the
     // partner's first message is expected shortly, so poll fast right away
     // (fixes the ~30 s first-message latency after a channel join).
@@ -2536,6 +2614,141 @@ class RedPandaLightClient implements RedPandaClient {
         .where((oh) => oh.channelId == channelId)
         .toList(growable: false);
     _ohRegistrationController.add(set);
+    // T44: our OH set just changed — refresh the rendezvous record so peers
+    // can still find us over the DHT (publish on every own-OH change).
+    unawaited(_publishRendezvousIfChanged(channelId));
+  }
+
+  /// T44: if our OH set for [channelId] changed, republish the rendezvous
+  /// record. Best-effort — a failed publish is retried on the next change and
+  /// by the daily refresh.
+  Future<void> _publishRendezvousIfChanged(String channelId) async {
+    if (!_rendezvous.knows(channelId)) return;
+    final descriptors = _ownDescriptorsFor(channelId);
+    if (descriptors.isEmpty) return;
+    if (!_rendezvous.setOwnOhs(channelId, descriptors)) return;
+    await _publishRendezvous(channelId);
+  }
+
+  /// T44: builds the signed rendezvous record and stores it in the DHT via a
+  /// `record_store` garlic packet routed to a REMOTE node (the connected node
+  /// never sees the query interest). Best-effort, no response.
+  Future<void> _publishRendezvous(String channelId) async {
+    try {
+      final submitVia = _peers.values
+          .where((p) => p.isHandshakeVerified)
+          .firstOrNull;
+      if (submitVia == null) return;
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final store = await _rendezvous.buildSignedStore(channelId, now);
+      if (store == null) return;
+      final hops = _selectGarlicHops(channelId, submitVia);
+      if (hops.isEmpty) {
+        RpLog.info(
+          'RedPandaLightClient: rendezvous publish for $channelId skipped — '
+          'no relay hops known',
+        );
+        return;
+      }
+      final packet = await GarlicBuilder.buildRecordStore(
+        hops: hops,
+        kademliaStore: store,
+      );
+      submitVia.sendCommand(142, packet);
+      RpLog.debug(
+        'RedPandaLightClient: published rendezvous record for $channelId over '
+        '${hops.length} hops',
+      );
+    } catch (e) {
+      RpLog.info('RedPandaLightClient: rendezvous publish failed: $e');
+    }
+  }
+
+  /// T44: recovery — all of a peer's OHs are unreachable, so look the channel's
+  /// rendezvous record up over the DHT (today's key, then yesterday's) and
+  /// adopt the peer's current OH list. The lookups travel garlic-wrapped to a
+  /// remote node; the answer returns via a reverse-garlic return path into our
+  /// own OH mailbox and is correlated in the fetch loop by its ack tag.
+  Future<void> _recoverViaRendezvous(String channelId) async {
+    if (!_rendezvous.knows(channelId)) return;
+    final submitVia = _peers.values
+        .where((p) => p.isHandshakeVerified)
+        .firstOrNull;
+    if (submitVia == null) return;
+    final ownOh = _registeredOHs
+        .where((oh) => oh.channelId == channelId && oh.serverEndpoint != null)
+        .firstOrNull;
+    if (ownOh == null) return; // need an own mailbox to receive the answer
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final keys = await _rendezvous.lookupKeys(channelId, now);
+    for (final recordKey in keys) {
+      try {
+        final hops = _selectGarlicHops(channelId, submitVia);
+        if (hops.isEmpty) continue;
+        final returnHops = _hopSelector.selectHops(
+          count: defaultHopCount,
+          excludeAddresses: {?ownOh.serverEndpoint, submitVia.address},
+          excludeNodeIds: {?submitVia.discoveredNodeId},
+        );
+        final ackTag = CryptoUtils.randomBytes(GarlicBuilder.sessionTagLength);
+        final ackTagHex = _hexEncode(ackTag);
+        _recordLookupTags[ackTagHex] = channelId;
+        _recordLookupTagCreatedAt[ackTagHex] = DateTime.now();
+        final packet = await GarlicBuilder.buildRecordLookup(
+          hops: hops,
+          recordKey: recordKey,
+          returnPath: ReturnPathBlock(
+            ackOhId: ownOh.ohId,
+            ackSessionTag: ackTag,
+            hops: returnHops,
+          ),
+        );
+        submitVia.sendCommand(142, packet);
+        RpLog.debug(
+          'RedPandaLightClient: rendezvous lookup for $channelId sent over '
+          '${hops.length} hops',
+        );
+      } catch (e) {
+        RpLog.info('RedPandaLightClient: rendezvous lookup failed: $e');
+      }
+    }
+  }
+
+  /// T44: handles a `record_lookup` reverse-garlic answer
+  /// (`[1 status][KademliaStore]`). On a found + valid + newer record, adopts
+  /// the peer's OH list into the deposit fan-out set.
+  Future<void> _handleRecordLookupAnswer(
+    String channelId,
+    List<int> payload,
+  ) async {
+    try {
+      if (payload.isEmpty) return;
+      final status = payload[0];
+      if (status == 0 || payload.length < 2) {
+        RpLog.debug(
+          'RedPandaLightClient: rendezvous lookup for $channelId — no record',
+        );
+        return;
+      }
+      final record = RendezvousManager.recordFromStoreBytes(payload.sublist(1));
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final peerOhs = await _rendezvous.applyResolvedRecord(
+        channelId,
+        record,
+        now,
+      );
+      if (peerOhs == null || peerOhs.isEmpty) return;
+      final changed = _replacePeerOhSet(channelId, peerOhs);
+      if (changed) {
+        _emitPeerOhUpdate(channelId, peerOhs);
+        RpLog.info(
+          'RedPandaLightClient: rendezvous recovery for $channelId adopted '
+          '${peerOhs.length} peer OH(s) from the DHT record',
+        );
+      }
+    } catch (e) {
+      RpLog.info('RedPandaLightClient: rendezvous answer decode failed: $e');
+    }
   }
 
   /// Queues an `oh_update` announce of the current own-OH descriptor array
@@ -2732,6 +2945,13 @@ class RedPandaLightClient implements RedPandaClient {
       'RedPandaLightClient: channel $channelId peer mailbox set updated to '
       '${descriptors.length} OH(s) (in-band oh_update)',
     );
+    _emitPeerOhUpdate(channelId, descriptors);
+  }
+
+  /// Publishes a peer-OH-set change to the app layer (persists the new deposit
+  /// fan-out set). Shared by the in-band `oh_update` path and T44 rendezvous
+  /// recovery.
+  void _emitPeerOhUpdate(String channelId, List<OHDescriptor> descriptors) {
     if (!_peerOhUpdateController.isClosed) {
       _peerOhUpdateController.add(
         PeerOhUpdate(channelId: channelId, descriptors: descriptors),
@@ -3001,6 +3221,16 @@ class RedPandaLightClient implements RedPandaClient {
       final String? tagHex;
       if (viaSessionTag) {
         tagHex = _hexEncode(item.sessionTag);
+        // T44: an outstanding record-lookup ack tag marks this item as a
+        // rendezvous `record_lookup` answer (`[1 status][KademliaStore]`),
+        // delivered via reverse garlic into our own OH mailbox — never
+        // channel-encrypted. Checked ahead of the R-ACK/channel-reply tags.
+        final recordLookupChannel = _recordLookupTags.remove(tagHex);
+        if (recordLookupChannel != null) {
+          _recordLookupTagCreatedAt.remove(tagHex);
+          await _handleRecordLookupAnswer(recordLookupChannel, item.payload);
+          continue;
+        }
         // MS06: an outstanding ack tag marks this item as an R-ACK for one
         // of our sends — a plaintext RoutingAck, never channel-encrypted
         // (master spec MS06, Decision 3: correlation via ack_session_tag).
@@ -4277,11 +4507,34 @@ class RedPandaLightClient implements RedPandaClient {
       final connected = _peers.values.any((p) => p.isHandshakeVerified);
       _schedulePoll(connected ? const Duration(seconds: 2) : _pollInterval);
     }
-    _renewalTimer ??= Timer.periodic(
-      renewalCheckInterval,
-      (_) => checkAndRenewExpiringHandles(),
-    );
+    _renewalTimer ??= Timer.periodic(renewalCheckInterval, (_) {
+      checkAndRenewExpiringHandles();
+      _republishDueRendezvousRecords();
+    });
   }
+
+  /// T44: republishes each channel's rendezvous record at most once per
+  /// ~24 h (records rotate under the UTC-day key and expire after 48 h). A
+  /// change-driven publish (`_publishRendezvousIfChanged`) refreshes the
+  /// timestamp too, so this only covers idle channels.
+  void _republishDueRendezvousRecords() {
+    final now = DateTime.now();
+    // Evict record-lookup ack tags whose answer never arrived (a lost packet).
+    _recordLookupTagCreatedAt.removeWhere((tagHex, created) {
+      if (now.difference(created) <= _recordLookupTtl) return false;
+      _recordLookupTags.remove(tagHex);
+      return true;
+    });
+    const interval = Duration(hours: 20);
+    for (final channelId in _rendezvous.channels.toList()) {
+      final last = _lastRendezvousPublish[channelId];
+      if (last != null && now.difference(last) < interval) continue;
+      _lastRendezvousPublish[channelId] = now;
+      unawaited(_publishRendezvous(channelId));
+    }
+  }
+
+  final Map<String, DateTime> _lastRendezvousPublish = {};
 
   /// Current poll cadence: fast while a conversation is active, slow when
   /// idle (T27).

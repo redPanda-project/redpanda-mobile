@@ -160,6 +160,8 @@ class MockRedPandaClient implements RedPandaClient {
   void addChannelKeys(
     String channelId,
     List<int> encryptionKey, {
+    List<int>? channelSecret,
+    String? ownDisplayName,
     List<int>? peerOhId,
     String? peerOhEndpoint,
     List<OHDescriptor>? peerOhSet,

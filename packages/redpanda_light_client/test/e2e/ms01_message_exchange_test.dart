@@ -125,36 +125,31 @@ void main() async {
           authPublicKey: bobOH.keypair.publicKeyBytes.toList(),
         );
 
-        // Alice creates a channel and attaches Bob's OH descriptor
+        // Alice creates a channel (QR v4 carries only the channel secret).
         final channel = await Channel.generate('Alice-Bob Chat');
-        final channelWithOH = channel.copyWith(peerOhDescriptor: bobDescriptor);
 
-        // Verify the QR JSON is v3
-        final qrJson = channelWithOH.toJson();
-        expect(qrJson.contains('"v":3'), isTrue);
-        expect(qrJson.contains('"oh"'), isTrue);
+        // Verify the QR JSON is v4 and carries no OH.
+        final qrJson = channel.toJson();
+        expect(qrJson.contains('"v":4'), isTrue);
+        expect(qrJson.contains('"oh"'), isFalse);
 
-        // Reconstruct from QR
-        final scannedChannel = Channel.fromJson(qrJson);
-        expect(scannedChannel.peerOhDescriptor, isNotNull);
-        expect(
-          scannedChannel.peerOhDescriptor!.serverEndpoint,
-          '127.0.0.1:$nodePort',
-        );
-        expect(scannedChannel.peerOhDescriptor!.handleId, bobOH.ohId);
+        // Reconstruct from QR (async in v4); both sides derive the same id.
+        final scannedChannel = await Channel.fromJson(qrJson);
+        expect(scannedChannel.id, channel.id);
+        expect(scannedChannel.peerOhDescriptor, isNull);
 
-        // Alice registers channel keys and sends message
+        // Alice registers channel keys and sends message. Bob's OH is
+        // discovered out of band (rendezvous DHT) — here passed directly.
         alice.addChannelKeys(
-          channelWithOH.id,
-          channelWithOH.encryptionKey,
+          channel.id,
+          channel.encryptionKey,
+          channelSecret: channel.channelSecret,
           peerOhId: bobOH.ohId,
+          peerOhEndpoint: bobDescriptor.serverEndpoint,
           isChannelCreator: true,
         );
 
-        final messageId = await alice.sendMessage(
-          channelWithOH.id,
-          'Hello Bob!',
-        );
+        final messageId = await alice.sendMessage(channel.id, 'Hello Bob!');
         expect(messageId, isNotEmpty);
       },
       skip: jarAvailable ? null : 'RedPanda JAR not found',
@@ -173,27 +168,27 @@ void main() async {
         // 1. Bob registers OH
         final bobOH = await bob.registerOutboundHandle();
 
-        // 2. Bob creates channel + shares via QR (simulated)
+        // 2. Bob creates channel + shares via QR v4 (secret only)
         final sharedChannel = await Channel.generate('Shared Channel');
         final bobDescriptor = OHDescriptor(
           serverEndpoint: '127.0.0.1:$nodePort',
           handleId: bobOH.ohId,
           authPublicKey: bobOH.keypair.publicKeyBytes.toList(),
         );
-        final channelWithOH = sharedChannel.copyWith(
-          peerOhDescriptor: bobDescriptor,
-        );
-        final qrPayload = channelWithOH.toJson();
+        final qrPayload = sharedChannel.toJson();
 
-        // 3. Alice scans QR
-        final aliceChannel = Channel.fromJson(qrPayload);
-        expect(aliceChannel.peerOhDescriptor, isNotNull);
+        // 3. Alice scans QR (async in v4)
+        final aliceChannel = await Channel.fromJson(qrPayload);
+        expect(aliceChannel.id, sharedChannel.id);
 
-        // 4. Alice registers keys
+        // 4. Alice registers keys. Bob's OH is discovered out of band
+        //    (rendezvous DHT) — here passed directly.
         alice.addChannelKeys(
           aliceChannel.id,
           aliceChannel.encryptionKey,
-          peerOhId: aliceChannel.peerOhDescriptor!.handleId,
+          channelSecret: aliceChannel.channelSecret,
+          peerOhId: bobDescriptor.handleId,
+          peerOhEndpoint: bobDescriptor.serverEndpoint,
           isChannelCreator: false,
         );
 
