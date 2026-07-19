@@ -275,7 +275,7 @@ void main() {
         await client.restoreOutboundHandle(oldOh);
 
         final replacements = <OHRegistration>[];
-        final sub = client.ohRegistrationUpdates.listen(replacements.add);
+        final sub = client.ohRegistrationUpdates.listen(replacements.addAll);
         addTearDown(sub.cancel);
 
         // Three provably one-sided failures (the scripted node is verified
@@ -340,8 +340,12 @@ void main() {
         );
         expect(message.isOhUpdate, isTrue);
         expect(message.content, isEmpty);
-        final descriptor = OHDescriptor.fromJson(
-          utf8.decode(message.ohUpdate!),
+        // T42: the announce is a JSON ARRAY of descriptors (the full own set).
+        final descriptorList =
+            jsonDecode(utf8.decode(message.ohUpdate!)) as List;
+        expect(descriptorList, hasLength(1));
+        final descriptor = OHDescriptor.fromJsonMap(
+          descriptorList.single as Map<String, dynamic>,
         );
         expect(descriptor.serverEndpoint, equals(liveEndpoint));
         expect(_sameBytes(descriptor.handleId, replacement.ohId), isTrue);
@@ -379,7 +383,7 @@ void main() {
       await client.restoreOutboundHandle(oldOh);
 
       final replacements = <OHRegistration>[];
-      final sub = client.ohRegistrationUpdates.listen(replacements.add);
+      final sub = client.ohRegistrationUpdates.listen(replacements.addAll);
       addTearDown(sub.cancel);
 
       for (var i = 0; i < 5; i++) {
@@ -405,11 +409,14 @@ void main() {
 
       final newPeerOhId = List<int>.generate(20, (i) => 200 - i);
       final newPeerKey = List<int>.generate(32, (i) => 50 + i);
-      final descriptorJson = OHDescriptor(
-        serverEndpoint: 'newhost:7',
-        handleId: newPeerOhId,
-        authPublicKey: newPeerKey,
-      ).toJson();
+      // T42: oh_update payload is a JSON ARRAY of descriptors.
+      final descriptorJson = jsonEncode([
+        OHDescriptor(
+          serverEndpoint: 'newhost:7',
+          handleId: newPeerOhId,
+          authPublicKey: newPeerKey,
+        ).toJsonMap(),
+      ]);
 
       // The partner (channel creator) announces their new mailbox twice with
       // the same message id (the announce is re-sent on purpose).
@@ -524,8 +531,14 @@ void main() {
         reason: 'the duplicate copy must be ignored',
       );
       expect(updates.single.channelId, equals('chan'));
-      expect(updates.single.descriptor.serverEndpoint, equals('newhost:7'));
-      expect(_sameBytes(updates.single.descriptor.handleId, newPeerOhId), true);
+      expect(
+        updates.single.descriptors.single.serverEndpoint,
+        equals('newhost:7'),
+      );
+      expect(
+        _sameBytes(updates.single.descriptors.single.handleId, newPeerOhId),
+        true,
+      );
 
       // A follow-up send deposits into the NEW peer mailbox.
       await client.sendMessage('chan', 'hello after failover');

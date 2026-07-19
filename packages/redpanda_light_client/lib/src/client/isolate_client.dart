@@ -90,7 +90,7 @@ class RedPandaIsolateClient implements RedPandaClient {
   final _ohFetchStatusController = StreamController<OhFetchStatus>.broadcast();
 
   final _ohRegistrationController =
-      StreamController<OHRegistration>.broadcast();
+      StreamController<List<OHRegistration>>.broadcast();
 
   final _peerOhUpdateController = StreamController<PeerOhUpdate>.broadcast();
 
@@ -442,39 +442,51 @@ class RedPandaIsolateClient implements RedPandaClient {
         ),
       );
     } else if (event is EventOhRegistrationUpdate) {
-      // T21 failover: the worker replaced a channel's own OH. Replace the
-      // replay entry too — a respawned worker must restore the NEW handle,
-      // not the dead one.
+      // T21 failover / T42 multi-OH: the worker changed a channel's own-OH
+      // SET. Rebuild the replay entries for that channel from exactly this set
+      // — a respawned worker must restore the current handles, not dead ones.
       final channelId = event.channelId;
       if (channelId != null) {
         _ohReplay.removeWhere((_, cmd) => cmd.channelId == channelId);
       }
-      _ohReplay[HEX.encode(event.ohId)] = CmdRestoreOutboundHandle(
-        ohId: event.ohId,
-        privateKeyBytes: event.keypairPrivateBytes,
-        expiresAtMs: event.expiresAtMs,
-        channelId: event.channelId,
-        serverEndpoint: event.serverEndpoint,
-        lastCursor: event.lastCursor,
-      );
+      for (final h in event.handles) {
+        _ohReplay[HEX.encode(h.ohId)] = CmdRestoreOutboundHandle(
+          ohId: h.ohId,
+          privateKeyBytes: h.keypairPrivateBytes,
+          expiresAtMs: h.expiresAtMs,
+          channelId: channelId,
+          serverEndpoint: h.serverEndpoint,
+          lastCursor: h.lastCursor,
+        );
+      }
       unawaited(_emitOhRegistration(event));
     } else if (event is EventPeerOhUpdate) {
-      // T21: the partner moved their mailbox — keep the replay cache in sync
-      // so a respawned worker sends to the new mailbox.
-      _patchChannelReplay(
-        event.channelId,
-        peerOhId: event.ohId,
-        peerOhEndpoint: event.serverEndpoint,
-        patchPeerOh: true,
-      );
+      // T42: the partner announced a new mailbox set — keep the replay cache's
+      // primary in sync so a respawned worker sends to the current mailbox,
+      // and forward the full set for persistence.
+      final primary = event.descriptors.isNotEmpty
+          ? event.descriptors.first
+          : null;
+      if (primary != null) {
+        _patchChannelReplay(
+          event.channelId,
+          peerOhId: primary.ohId,
+          peerOhEndpoint: primary.endpoint,
+          peerOhSet: event.descriptors,
+          patchPeerOh: true,
+        );
+      }
       _peerOhUpdateController.add(
         PeerOhUpdate(
           channelId: event.channelId,
-          descriptor: OHDescriptor(
-            serverEndpoint: event.serverEndpoint,
-            handleId: event.ohId,
-            authPublicKey: event.authPublicKey,
-          ),
+          descriptors: [
+            for (final d in event.descriptors)
+              OHDescriptor(
+                serverEndpoint: d.endpoint,
+                handleId: d.ohId,
+                authPublicKey: d.authPublicKey,
+              ),
+          ],
         ),
       );
     } else if (event is EventRatchetStateUpdate) {
@@ -544,6 +556,7 @@ class RedPandaIsolateClient implements RedPandaClient {
     bool patchGarlic = false,
     List<int>? peerOhId,
     String? peerOhEndpoint,
+    List<OhDescriptorData>? peerOhSet,
     bool patchPeerOh = false,
   }) {
     final old = _channelReplay[channelId];
@@ -553,6 +566,7 @@ class RedPandaIsolateClient implements RedPandaClient {
       old.encryptionKey,
       peerOhId: patchPeerOh ? peerOhId : old.peerOhId,
       peerOhEndpoint: patchPeerOh ? peerOhEndpoint : old.peerOhEndpoint,
+      peerOhSet: patchPeerOh ? peerOhSet : old.peerOhSet,
       isChannelCreator: old.isChannelCreator,
       ratchetState: ratchetState ?? old.ratchetState,
       // A garlic update is an authoritative snapshot: pendingRgbHex may
@@ -562,26 +576,31 @@ class RedPandaIsolateClient implements RedPandaClient {
     );
   }
 
-  /// Rebuilds the [OHRegistration] carried by a failover event (async — the
-  /// keypair reconstruction is async) and forwards it to the app layer.
+  /// Rebuilds the own-OH SET carried by an update event (async — the keypair
+  /// reconstruction is async) and forwards it to the app layer (T42).
   Future<void> _emitOhRegistration(EventOhRegistrationUpdate event) async {
     try {
-      final registration = OHRegistration(
-        ohId: event.ohId,
-        keypair: await OHKeypair.fromPrivateKeyBytes(
-          Uint8List.fromList(event.keypairPrivateBytes),
-        ),
-        expiresAtMs: event.expiresAtMs,
-        channelId: event.channelId,
-        serverEndpoint: event.serverEndpoint,
-        lastCursor: event.lastCursor,
-      );
+      final set = <OHRegistration>[];
+      for (final h in event.handles) {
+        set.add(
+          OHRegistration(
+            ohId: h.ohId,
+            keypair: await OHKeypair.fromPrivateKeyBytes(
+              Uint8List.fromList(h.keypairPrivateBytes),
+            ),
+            expiresAtMs: h.expiresAtMs,
+            channelId: event.channelId,
+            serverEndpoint: h.serverEndpoint,
+            lastCursor: h.lastCursor,
+          ),
+        );
+      }
       if (!_ohRegistrationController.isClosed) {
-        _ohRegistrationController.add(registration);
+        _ohRegistrationController.add(set);
       }
     } catch (e) {
       RpLog.info(
-        'RedPandaIsolateClient: failed to rebuild failover registration: $e',
+        'RedPandaIsolateClient: failed to rebuild own-OH set update: $e',
       );
     }
   }
@@ -749,11 +768,16 @@ class RedPandaIsolateClient implements RedPandaClient {
   Stream<OhFetchStatus> get ohFetchStatus => _ohFetchStatusController.stream;
 
   @override
-  Stream<OHRegistration> get ohRegistrationUpdates =>
+  Stream<List<OHRegistration>> get ohRegistrationUpdates =>
       _ohRegistrationController.stream;
 
   @override
   Stream<PeerOhUpdate> get peerOhUpdates => _peerOhUpdateController.stream;
+
+  @override
+  Future<void> ensureOhRedundancy(String channelId) async {
+    _send(CmdEnsureOhRedundancy(channelId));
+  }
 
   /// Register channel encryption keys in the isolate client.
   @override
@@ -762,6 +786,7 @@ class RedPandaIsolateClient implements RedPandaClient {
     List<int> encryptionKey, {
     List<int>? peerOhId,
     String? peerOhEndpoint,
+    List<OHDescriptor>? peerOhSet,
     required bool isChannelCreator,
     String? ratchetState,
     Map<String, int>? sessionTags,
@@ -772,6 +797,15 @@ class RedPandaIsolateClient implements RedPandaClient {
       encryptionKey,
       peerOhId: peerOhId,
       peerOhEndpoint: peerOhEndpoint,
+      peerOhSet: peerOhSet
+          ?.map(
+            (d) => OhDescriptorData(
+              endpoint: d.serverEndpoint,
+              ohId: d.handleId,
+              authPublicKey: d.authPublicKey,
+            ),
+          )
+          .toList(),
       isChannelCreator: isChannelCreator,
       ratchetState: ratchetState,
       sessionTags: sessionTags,
@@ -1035,16 +1069,23 @@ void _runWorker(SendPort mainSendPort) {
         );
       });
 
-      // Forward failover registrations + peer mailbox moves (T21)
-      client!.ohRegistrationUpdates.listen((registration) {
+      // Forward own-OH set changes (T21 failover / T42 top-up) + peer mailbox
+      // set announcements (T42) to the main isolate.
+      client!.ohRegistrationUpdates.listen((set) {
         mainSendPort.send(
           EventOhRegistrationUpdate(
-            ohId: registration.ohId,
-            keypairPrivateBytes: registration.keypair.privateKeyBytes.toList(),
-            expiresAtMs: registration.expiresAtMs,
-            channelId: registration.channelId,
-            serverEndpoint: registration.serverEndpoint,
-            lastCursor: registration.lastCursor,
+            channelId: set.isNotEmpty ? set.first.channelId : null,
+            handles: [
+              for (final registration in set)
+                OwnOhData(
+                  ohId: registration.ohId,
+                  keypairPrivateBytes: registration.keypair.privateKeyBytes
+                      .toList(),
+                  expiresAtMs: registration.expiresAtMs,
+                  serverEndpoint: registration.serverEndpoint,
+                  lastCursor: registration.lastCursor,
+                ),
+            ],
           ),
         );
       });
@@ -1052,9 +1093,14 @@ void _runWorker(SendPort mainSendPort) {
         mainSendPort.send(
           EventPeerOhUpdate(
             channelId: update.channelId,
-            serverEndpoint: update.descriptor.serverEndpoint,
-            ohId: update.descriptor.handleId,
-            authPublicKey: update.descriptor.authPublicKey,
+            descriptors: [
+              for (final d in update.descriptors)
+                OhDescriptorData(
+                  endpoint: d.serverEndpoint,
+                  ohId: d.handleId,
+                  authPublicKey: d.authPublicKey,
+                ),
+            ],
           ),
         );
       });
@@ -1199,10 +1245,25 @@ void _runWorker(SendPort mainSendPort) {
           message.encryptionKey,
           peerOhId: message.peerOhId,
           peerOhEndpoint: message.peerOhEndpoint,
+          peerOhSet: message.peerOhSet
+              ?.map(
+                (d) => OHDescriptor(
+                  serverEndpoint: d.endpoint,
+                  handleId: d.ohId,
+                  authPublicKey: d.authPublicKey,
+                ),
+              )
+              .toList(),
           isChannelCreator: message.isChannelCreator,
           ratchetState: message.ratchetState,
           sessionTags: message.sessionTags,
           pendingRgbHex: message.pendingRgbHex,
+        );
+      } else if (message is CmdEnsureOhRedundancy) {
+        unawaited(
+          client!.ensureOhRedundancy(message.channelId).catchError((Object e) {
+            RpLog.info('RedPandaIsolateClient: ensureOhRedundancy failed: $e');
+          }),
         );
       } else if (message is CmdRestoreNodeScores) {
         client!.restoreNodeScores(message.scores);

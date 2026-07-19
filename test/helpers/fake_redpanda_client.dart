@@ -86,6 +86,7 @@ class FakeRedPandaClient implements RedPandaClient {
     List<int> encryptionKey, {
     List<int>? peerOhId,
     String? peerOhEndpoint,
+    List<OHDescriptor>? peerOhSet,
     required bool isChannelCreator,
     String? ratchetState,
     Map<String, int>? sessionTags,
@@ -137,11 +138,15 @@ class FakeRedPandaClient implements RedPandaClient {
   @override
   Stream<OhFetchStatus> get ohFetchStatus => fetchStatusController.stream;
 
-  final ohRegistrationController = StreamController<OHRegistration>.broadcast();
+  final ohRegistrationController =
+      StreamController<List<OHRegistration>>.broadcast();
 
   @override
-  Stream<OHRegistration> get ohRegistrationUpdates =>
+  Stream<List<OHRegistration>> get ohRegistrationUpdates =>
       ohRegistrationController.stream;
+
+  @override
+  Future<void> ensureOhRedundancy(String channelId) async {}
 
   final peerOhUpdateController = StreamController<PeerOhUpdate>.broadcast();
 

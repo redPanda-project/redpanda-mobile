@@ -150,7 +150,7 @@ void main() async {
         // ── Node A dies. ─────────────────────────────────────────────────
         final replacements = <OHRegistration>[];
         final replacementSub = bob.ohRegistrationUpdates.listen(
-          replacements.add,
+          replacements.addAll,
         );
         addTearDown(replacementSub.cancel);
         final peerOhMoves = <PeerOhUpdate>[];
@@ -192,7 +192,10 @@ void main() async {
           await Future.delayed(const Duration(milliseconds: 500));
         }
         expect(peerOhMoves.first.channelId, channel.id);
-        expect(peerOhMoves.first.descriptor.serverEndpoint, nodeB);
+        expect(
+          peerOhMoves.first.descriptors.any((d) => d.serverEndpoint == nodeB),
+          isTrue,
+        );
 
         // Alice's next send reaches Bob via his NEW mailbox on node B.
         const after = 'after failover';

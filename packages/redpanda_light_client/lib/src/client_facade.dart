@@ -3,6 +3,7 @@ import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
 import 'package:redpanda_light_client/src/domain/channel_doctor_report.dart';
 import 'package:redpanda_light_client/src/domain/group_state.dart';
+import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
 import 'package:redpanda_light_client/src/domain/oh_fetch_status.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/loopback_result.dart';
@@ -106,17 +107,25 @@ abstract class RedPandaClient {
   /// per-channel health ("mailbox last checked …"); nothing is persisted.
   Stream<OhFetchStatus> get ohFetchStatus;
 
-  /// Replacement OH registrations created by the client itself (T21 OH
-  /// failover: the old host node was unreachable for several fetch cycles
-  /// while other nodes were fine). The app layer must REPLACE the channel's
-  /// persisted own-OH row with this registration — the old mailbox is dead.
-  Stream<OHRegistration> get ohRegistrationUpdates;
+  /// The channel's current own-OH SET whenever it changes (T21 failover /
+  /// T42 multi-OH top-up). The list holds every own mailbox for one channel
+  /// (all entries share the channelId); the app layer must REPLACE all of the
+  /// channel's persisted own-OH rows with exactly this set — dead mailboxes
+  /// dropped, new ones added.
+  Stream<List<OHRegistration>> get ohRegistrationUpdates;
 
-  /// Authenticated in-band announcements that the channel partner moved
-  /// their mailbox (T21 `oh_update`). The client already routes new sends to
-  /// the new mailbox; the app layer must persist the descriptor so the
-  /// switch survives an app restart.
+  /// Authenticated in-band announcements of the channel partner's full
+  /// current mailbox SET (`oh_update`, T42 multi-OH). The client already
+  /// deposits new sends into every mailbox in the set; the app layer must
+  /// persist the whole set so the fan-out survives an app restart.
   Stream<PeerOhUpdate> get peerOhUpdates;
+
+  /// Ensures this channel has the target redundancy of own mailboxes (T42:
+  /// k=2 on disjoint Full Nodes). Registers additional OHs when fewer than the
+  /// target exist and a disjoint node is reachable, publishes the enlarged set
+  /// via [ohRegistrationUpdates] and announces it to the partner in-band.
+  /// A graceful no-op when only one node is reachable. Never throws.
+  Future<void> ensureOhRedundancy(String channelId);
 
   /// Registers channel encryption keys so [sendMessage] can encrypt outgoing
   /// messages for [channelId]. Optionally associates a peer OH ID for routing.
@@ -143,6 +152,7 @@ abstract class RedPandaClient {
     List<int> encryptionKey, {
     List<int>? peerOhId,
     String? peerOhEndpoint,
+    List<OHDescriptor>? peerOhSet,
     required bool isChannelCreator,
     String? ratchetState,
     Map<String, int>? sessionTags,

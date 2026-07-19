@@ -68,6 +68,37 @@ class CmdRegisterOutboundHandle extends IsolateCommand {
   CmdRegisterOutboundHandle(this.requestId, {this.channelId});
 }
 
+/// Isolate-sendable form of an [OHDescriptor] (T42 multi-OH): plain
+/// primitives that cross the isolate boundary unchanged.
+class OhDescriptorData {
+  final String endpoint;
+  final List<int> ohId;
+  final List<int> authPublicKey;
+  const OhDescriptorData({
+    required this.endpoint,
+    required this.ohId,
+    required this.authPublicKey,
+  });
+}
+
+/// Isolate-sendable form of one own [OHRegistration] (T42 multi-OH). The
+/// keypair travels as its private key bytes (in-process isolate message,
+/// never leaves the device).
+class OwnOhData {
+  final List<int> ohId;
+  final List<int> keypairPrivateBytes;
+  final int expiresAtMs;
+  final String? serverEndpoint;
+  final int lastCursor;
+  const OwnOhData({
+    required this.ohId,
+    required this.keypairPrivateBytes,
+    required this.expiresAtMs,
+    this.serverEndpoint,
+    this.lastCursor = 0,
+  });
+}
+
 class CmdAddChannelKeys extends IsolateCommand {
   final String channelId;
   final List<int> encryptionKey;
@@ -76,6 +107,10 @@ class CmdAddChannelKeys extends IsolateCommand {
   /// MS04: host:port of the node hosting the peer's OH; kept out of the
   /// garlic hop path.
   final String? peerOhEndpoint;
+
+  /// T42: the full persisted peer OH set to restore (multi-OH). Applied only
+  /// when no richer set is live yet.
+  final List<OhDescriptorData>? peerOhSet;
 
   /// MS03b: true only on the device that generated the channel; decides the
   /// channel ratchet role.
@@ -97,11 +132,19 @@ class CmdAddChannelKeys extends IsolateCommand {
     this.encryptionKey, {
     this.peerOhId,
     this.peerOhEndpoint,
+    this.peerOhSet,
     required this.isChannelCreator,
     this.ratchetState,
     this.sessionTags,
     this.pendingRgbHex,
   });
+}
+
+/// Tops a channel up to the target OH redundancy (T42, k=2). Fire-and-forget:
+/// the resulting set is published via [EventOhRegistrationUpdate].
+class CmdEnsureOhRedundancy extends IsolateCommand {
+  final String channelId;
+  CmdEnsureOhRedundancy(this.channelId);
 }
 
 /// Re-activates a persisted OH registration inside the isolate so it gets
@@ -428,40 +471,23 @@ class EventOhFetchStatus extends IsolateEvent {
   });
 }
 
-/// Replacement OH registration created by the worker itself (T21 OH
-/// failover). The keypair travels as its private key bytes (in-process
-/// isolate message, never leaves the device); the main isolate rebuilds the
-/// [OHRegistration] and replaces the channel's persisted own-OH row.
+/// The channel's current own-OH SET after a change (T21 failover / T42
+/// multi-OH top-up), forwarded from the worker so the main isolate can sync
+/// the persisted rows to exactly this set. Keypairs travel as private key
+/// bytes (in-process isolate message, never leaves the device).
 class EventOhRegistrationUpdate extends IsolateEvent {
-  final List<int> ohId;
-  final List<int> keypairPrivateBytes;
-  final int expiresAtMs;
   final String? channelId;
-  final String? serverEndpoint;
-  final int lastCursor;
-  EventOhRegistrationUpdate({
-    required this.ohId,
-    required this.keypairPrivateBytes,
-    required this.expiresAtMs,
-    this.channelId,
-    this.serverEndpoint,
-    this.lastCursor = 0,
-  });
+  final List<OwnOhData> handles;
+  EventOhRegistrationUpdate({required this.channelId, required this.handles});
 }
 
-/// Authenticated in-band peer mailbox move (T21 `oh_update`) forwarded from
-/// the isolate so the main isolate can persist the new peer OH descriptor.
+/// Authenticated in-band peer mailbox-set announcement (`oh_update`, T42
+/// multi-OH) forwarded from the isolate so the main isolate can persist the
+/// partner's full current OH set.
 class EventPeerOhUpdate extends IsolateEvent {
   final String channelId;
-  final String serverEndpoint;
-  final List<int> ohId;
-  final List<int> authPublicKey;
-  EventPeerOhUpdate({
-    required this.channelId,
-    required this.serverEndpoint,
-    required this.ohId,
-    required this.authPublicKey,
-  });
+  final List<OhDescriptorData> descriptors;
+  EventPeerOhUpdate({required this.channelId, required this.descriptors});
 }
 
 /// OH state change (cursor advanced, renewal, mailbox overflow) forwarded
