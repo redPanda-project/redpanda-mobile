@@ -2578,7 +2578,9 @@ class RedPandaLightClient implements RedPandaClient {
       activePeer.consecutiveFetchTimeouts++;
       if (activePeer.consecutiveFetchTimeouts >=
           forceReconnectFetchTimeoutThreshold) {
-        await _forceReconnect(activePeer);
+        // Fire and forget: the caller already waited a full
+        // fetchResponseTimeout — the redial must not extend that further.
+        unawaited(_forceReconnect(activePeer));
       }
       return [];
     }
