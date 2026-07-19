@@ -29,14 +29,14 @@ import 'test_helpers.dart';
 /// message travels the reverse path toward Bob's mailbox in turn — the full
 /// two-way conversation of the acceptance criteria.
 ///
-/// Topology as in the MS04 E2E: entry node on 59558 (the JAR's built-in
-/// local seed — relays only find an entry on this port) + three local
-/// relays; the shared entry port is why both suites take the topology lock.
+/// Topology as in the MS04 E2E (T30): suite-private ports — an isolated
+/// entry node + three relays explicitly seeded with the entry address. No
+/// shared ports between suites, hence no topology lock.
 void main() async {
   final jarAvailable = await RedPandaNodeLauncher.isJarAvailable();
 
-  const entryPort = 59558;
-  const relayPorts = [50574, 50575, 50576];
+  const entryPort = 50580;
+  const relayPorts = [50581, 50582, 50583];
   const entryAddress = '127.0.0.1:$entryPort';
   final relayAddresses = relayPorts.map((p) => '127.0.0.1:$p').toSet();
 
@@ -44,12 +44,16 @@ void main() async {
     final launchers = <RedPandaNodeLauncher>[];
     late RedPandaLightClient alice;
     late RedPandaLightClient bob;
-    ServerSocket? topologyLock;
-
     setUp(() async {
-      topologyLock = await acquireTopologyLock();
+      // Entry node first, isolated (T29 'none'); the relays are seeded
+      // explicitly with the entry address (T30) — no dependency on the
+      // JAR's built-in 127.0.0.1:59558 seed, so a foreign node on that
+      // port can no longer contaminate the topology.
       for (final port in [entryPort, ...relayPorts]) {
-        final launcher = RedPandaNodeLauncher(port: port);
+        final launcher = RedPandaNodeLauncher(
+          port: port,
+          seeds: [if (port != entryPort) entryAddress],
+        );
         launchers.add(launcher);
         await launcher.start();
       }
@@ -91,8 +95,6 @@ void main() async {
         await launcher.stop();
       }
       launchers.clear();
-      await topologyLock?.close();
-      topologyLock = null;
     });
 
     /// Polls until [client] knows all three relays incl. their X25519 keys.

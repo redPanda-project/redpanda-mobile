@@ -1,44 +1,13 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 
-/// Serializes the multi-node topology suites (MS04, MS05): both launch
-/// their entry node on 59558, the JAR's built-in local seed port — relays
-/// only ever find an entry there — so only one topology may be up at a
-/// time. The mutex is a bound loopback port: it works across the test
-/// isolates `flutter test` runs concurrently (unlike fcntl file locks,
-/// which don't exclude within one process) and releases itself if a suite
-/// crashes.
-///
-/// Acquire before launching nodes, release via [ServerSocket.close] after
-/// stopping them. Waiting counts against the suite's `e2e` tag timeout.
-///
-/// Bounded by [timeout] (default 5 min): a leaked lock — e.g. a crashed
-/// suite whose process still holds the port — must fail this suite loudly
-/// instead of blocking the whole run until the CI job timeout. With
-/// `--concurrency=1` (the CI default for e2e) the lock is essentially
-/// uncontended and returns on the first try.
-Future<ServerSocket> acquireTopologyLock({
-  Duration timeout = const Duration(minutes: 5),
-}) async {
-  final deadline = DateTime.now().add(timeout);
-  while (true) {
-    try {
-      return await ServerSocket.bind(InternetAddress.loopbackIPv4, 59557);
-    } on SocketException {
-      if (DateTime.now().isAfter(deadline)) {
-        throw StateError(
-          'acquireTopologyLock: port 59557 still held after '
-          '${timeout.inSeconds}s — a previous topology suite likely leaked '
-          'its lock (crashed teardown?).',
-        );
-      }
-      await Future.delayed(const Duration(seconds: 2));
-    }
-  }
-}
+// The topology lock (bound loopback port 59557) is gone (T30): every
+// multi-node suite now uses suite-private ports and seeds its relays
+// explicitly, so no two suites contend for a port anymore. Serialization
+// against RESOURCE pressure (4 JVM nodes per suite) still comes from
+// `--concurrency=1`, the CI default for the e2e tag.
 
 /// Polls until [client.isEncryptionActive] is true or timeout (40s).
 /// Returns true if encryption became active, false on timeout.
