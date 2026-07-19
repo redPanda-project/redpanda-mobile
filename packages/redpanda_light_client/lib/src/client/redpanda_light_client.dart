@@ -6,7 +6,7 @@ import 'dart:typed_data';
 
 import 'package:fixnum/fixnum.dart' as fixnum;
 
-import 'dart:convert' show utf8;
+import 'dart:convert' show jsonDecode, jsonEncode, utf8;
 
 import 'package:redpanda_light_client/src/client_facade.dart';
 import 'package:redpanda_light_client/src/crypto/channel_message.dart';
@@ -758,7 +758,7 @@ class RedPandaLightClient implements RedPandaClient {
       StreamController<OhMailboxUpdate>.broadcast();
   final _ohFetchStatusController = StreamController<OhFetchStatus>.broadcast();
   final _ohRegistrationController =
-      StreamController<OHRegistration>.broadcast();
+      StreamController<List<OHRegistration>>.broadcast();
   final _peerOhUpdateController = StreamController<PeerOhUpdate>.broadcast();
 
   // --- OH failover state (T21) ---
@@ -1045,11 +1045,94 @@ class RedPandaLightClient implements RedPandaClient {
   /// Channel encryption keys indexed by channel ID.
   /// Populated externally or via addChannelKeys().
   final Map<String, List<int>> _channelEncryptionKeys = {};
+
+  /// The PRIMARY peer OH id per channel (== [_channelPeerOhSet].first). Kept
+  /// as a plain map so the single-target senders (garlic, RGB reply,
+  /// direct-deposit fallback, ack routing) stay unchanged — they always aim
+  /// at the primary. The multi-deposit fan-out (T42) uses the full set below.
   final Map<String, List<int>> _channelPeerOhIds = {};
 
-  /// host:port of the node hosting the peer's OH (from the OHDescriptor),
-  /// excluded from garlic hop candidates (MS04: no hop == destination node).
+  /// host:port of the node hosting the peer's PRIMARY OH (from the
+  /// OHDescriptor), excluded from garlic hop candidates (MS04: no hop ==
+  /// destination node).
   final Map<String, String> _channelPeerOhEndpoints = {};
+
+  /// T42: the FULL set of the partner's known OH mailboxes per channel.
+  /// A send deposits into EVERY entry in parallel (the receiver deduplicates
+  /// by message_id), so one dead OH-host node no longer stalls delivery — the
+  /// copy on the surviving node arrives without waiting for a failover. The
+  /// set is seeded from the QR/primary OH and grown/replaced by the in-band
+  /// `oh_update` announce (a JSON array of descriptors, T42). The first entry
+  /// mirrors [_channelPeerOhIds]/[_channelPeerOhEndpoints].
+  final Map<String, List<_PeerOh>> _channelPeerOhSet = {};
+
+  /// Sets the primary peer OH (id + endpoint) for [channelId] and seeds the
+  /// peer OH set with it when no richer set is known yet — a set already
+  /// grown via `oh_update` (or restored) is always at least as complete, so
+  /// it is never clobbered by a re-registration (chat-screen re-open).
+  void _seedPrimaryPeerOh(String channelId, List<int> ohId, String? endpoint) {
+    _channelPeerOhIds[channelId] = ohId;
+    if (endpoint != null) {
+      _channelPeerOhEndpoints[channelId] = endpoint;
+    }
+    final existing = _channelPeerOhSet[channelId];
+    if (existing == null || existing.isEmpty) {
+      _channelPeerOhSet[channelId] = [_PeerOh(ohId: ohId, endpoint: endpoint)];
+    }
+  }
+
+  /// Replaces the peer OH set for [channelId] with [descriptors] (deduplicated
+  /// by OH id, order preserved) and re-points the primary at the first entry.
+  /// Returns true when the set actually changed.
+  bool _replacePeerOhSet(String channelId, List<OHDescriptor> descriptors) {
+    final deduped = <_PeerOh>[];
+    for (final d in descriptors) {
+      if (d.handleId.length != GarlicHop.nodeIdLength) continue;
+      if (deduped.any((e) => _sameOhId(e.ohId, d.handleId))) continue;
+      deduped.add(_PeerOh(ohId: d.handleId, endpoint: d.serverEndpoint));
+    }
+    if (deduped.isEmpty) return false;
+    final previous = _channelPeerOhSet[channelId];
+    if (previous != null &&
+        previous.length == deduped.length &&
+        List.generate(
+          previous.length,
+          (i) =>
+              _sameOhId(previous[i].ohId, deduped[i].ohId) &&
+              previous[i].endpoint == deduped[i].endpoint,
+        ).every((x) => x)) {
+      return false; // identical — a duplicate announce
+    }
+    _channelPeerOhSet[channelId] = deduped;
+    _channelPeerOhIds[channelId] = deduped.first.ohId;
+    final primaryEndpoint = deduped.first.endpoint;
+    if (primaryEndpoint != null) {
+      _channelPeerOhEndpoints[channelId] = primaryEndpoint;
+    }
+    return true;
+  }
+
+  /// The distinct own OH descriptors of [channelId] (T42) — the payload of an
+  /// `oh_update` announce. Only OHs with a known host endpoint are included:
+  /// a descriptor without an endpoint carries no place for the partner to
+  /// deposit to.
+  List<OHDescriptor> _ownDescriptorsFor(String channelId) {
+    final out = <OHDescriptor>[];
+    for (final oh in _registeredOHs) {
+      if (oh.channelId != channelId) continue;
+      final endpoint = oh.serverEndpoint;
+      if (endpoint == null) continue;
+      if (out.any((d) => _sameOhId(d.handleId, oh.ohId))) continue;
+      out.add(
+        OHDescriptor(
+          serverEndpoint: endpoint,
+          handleId: oh.ohId,
+          authPublicKey: oh.keypair.publicKeyBytes,
+        ),
+      );
+    }
+    return out;
+  }
 
   /// Channel ratchet sessions (MS03b), keyed by channel id. Stored as
   /// futures because session initialization is async while [addChannelKeys]
@@ -1070,17 +1153,23 @@ class RedPandaLightClient implements RedPandaClient {
     List<int> encryptionKey, {
     List<int>? peerOhId,
     String? peerOhEndpoint,
+    List<OHDescriptor>? peerOhSet,
     required bool isChannelCreator,
     String? ratchetState,
     Map<String, int>? sessionTags,
     String? pendingRgbHex,
   }) {
     _channelEncryptionKeys[channelId] = encryptionKey;
-    if (peerOhId != null) {
-      _channelPeerOhIds[channelId] = peerOhId;
+    // T42: restore the full persisted peer OH set first (multi-OH), then seed
+    // the primary. Both are applied only when nothing richer is live yet —
+    // an `oh_update` learned this session always wins.
+    if (peerOhSet != null && peerOhSet.isNotEmpty) {
+      if (_channelPeerOhSet[channelId] == null) {
+        _replacePeerOhSet(channelId, peerOhSet);
+      }
     }
-    if (peerOhEndpoint != null) {
-      _channelPeerOhEndpoints[channelId] = peerOhEndpoint;
+    if (peerOhId != null) {
+      _seedPrimaryPeerOh(channelId, peerOhId, peerOhEndpoint);
     }
     _restoreGarlicSession(channelId, sessionTags, pendingRgbHex);
     // A live session is always at least as advanced as any persisted state,
@@ -1195,7 +1284,7 @@ class RedPandaLightClient implements RedPandaClient {
   Stream<OhFetchStatus> get ohFetchStatus => _ohFetchStatusController.stream;
 
   @override
-  Stream<OHRegistration> get ohRegistrationUpdates =>
+  Stream<List<OHRegistration>> get ohRegistrationUpdates =>
       _ohRegistrationController.stream;
 
   @override
@@ -1354,6 +1443,22 @@ class RedPandaLightClient implements RedPandaClient {
           'bytes exceeds the tagged reply budget, using the forward path',
         );
       }
+    }
+
+    // T42 multi-OH: when the partner has announced MORE than one mailbox,
+    // deposit into ALL of them in parallel and succeed on the first confirmed
+    // deposit. A single dead OH-host node then no longer stalls delivery — the
+    // copy on a surviving node arrives without waiting for a failover cycle.
+    // These deposits are DIRECT (no garlic): the redundancy set is used
+    // precisely when a host may be dead, and a garlic one-shot over a
+    // possibly-dead hop can silently drop the message (T41). The single-OH
+    // case below keeps the garlic privacy path unchanged.
+    final peerOhSet = _channelPeerOhSet[channelId];
+    if (peerOhSet != null && peerOhSet.length > 1) {
+      lastSendViaRgb = false;
+      lastSendHopCount = 0;
+      await _depositToAllPeerOhs(activePeer, peerOhSet, payload, channelId);
+      return messageIdHex;
     }
 
     // MS04: route via a multi-hop garlic path when relay hops are available.
@@ -1549,59 +1654,26 @@ class RedPandaLightClient implements RedPandaClient {
     final stages = <DoctorStage>[];
     final sw = Stopwatch()..start();
 
-    // Stage 1: Host node reachable (TCP + handshake). The channel's host node
-    // is the Full Node hosting our own mailbox (OHRegistration.serverEndpoint).
-    final ownOh = _registeredOHs
+    // Stage 1+2 PER own OH mailbox (T42 multi-OH): a "Host node reachable"
+    // and an "Own mailbox announced" traffic light for EACH own mailbox, so a
+    // dead host on one mailbox shows red while the redundant mailbox stays
+    // green. A " N/M" suffix disambiguates when more than one mailbox exists;
+    // with a single mailbox the names are unchanged.
+    final ownOhs = _registeredOHs
         .where((oh) => oh.channelId == channelId)
-        .firstOrNull;
-    final hostEndpoint = ownOh?.serverEndpoint;
+        .toList(growable: false);
     final verifiedCount = _peers.values
         .where((p) => p.isHandshakeVerified)
         .length;
-    if (hostEndpoint != null) {
-      final hostPeer = _peers[hostEndpoint];
-      if (hostPeer != null && hostPeer.isHandshakeVerified) {
-        stages.add(
-          _stage(
-            'Host node reachable',
-            DoctorStatus.ok,
-            sw,
-            'Connected to $hostEndpoint (handshake verified).',
-          ),
-        );
-      } else if (hostPeer != null && !hostPeer.isDisconnected) {
-        stages.add(
-          _stage(
-            'Host node reachable',
-            DoctorStatus.warn,
-            sw,
-            'Connecting to host node $hostEndpoint…',
-          ),
-        );
-      } else {
-        stages.add(
-          _stage(
-            'Host node reachable',
-            DoctorStatus.fail,
-            sw,
-            'Host node $hostEndpoint is not connected.',
-          ),
-        );
-      }
-    } else {
-      // The specific host node is unknown: either no own mailbox exists yet,
-      // or the registration carries no host endpoint (e.g. one restored
-      // without a serverEndpoint). Fall back to general connectivity.
-      final reason = ownOh == null
-          ? 'No own mailbox yet, so no dedicated host node.'
-          : 'Own mailbox has no recorded host node.';
+    if (ownOhs.isEmpty) {
       stages.add(
         verifiedCount > 0
             ? _stage(
                 'Host node reachable',
                 DoctorStatus.warn,
                 sw,
-                '$reason Connected to $verifiedCount node(s).',
+                'No own mailbox yet, so no dedicated host node. '
+                    'Connected to $verifiedCount node(s).',
               )
             : _stage(
                 'Host node reachable',
@@ -1610,13 +1682,9 @@ class RedPandaLightClient implements RedPandaClient {
                 'Not connected to any node.',
               ),
       );
-    }
-
-    // Stage 2: Own OH announced / renewed.
-    sw
-      ..reset()
-      ..start();
-    if (ownOh == null) {
+      sw
+        ..reset()
+        ..start();
       stages.add(
         _stage(
           'Own mailbox announced',
@@ -1626,65 +1694,140 @@ class RedPandaLightClient implements RedPandaClient {
         ),
       );
     } else {
-      final remaining = Duration(
-        milliseconds: ownOh.expiresAtMs - DateTime.now().millisecondsSinceEpoch,
-      );
-      if (remaining.isNegative || remaining == Duration.zero) {
-        stages.add(
-          _stage(
-            'Own mailbox announced',
-            DoctorStatus.fail,
-            sw,
-            'Registration expired ${_fmtDuration(-remaining)} ago.',
-          ),
+      for (var i = 0; i < ownOhs.length; i++) {
+        final ownOh = ownOhs[i];
+        final suffix = ownOhs.length > 1 ? ' ${i + 1}/${ownOhs.length}' : '';
+        final endpoint = ownOh.serverEndpoint;
+
+        // Host-reachable stage.
+        sw
+          ..reset()
+          ..start();
+        if (endpoint != null) {
+          final hostPeer = _peers[endpoint];
+          if (hostPeer != null && hostPeer.isHandshakeVerified) {
+            stages.add(
+              _stage(
+                'Host node reachable$suffix',
+                DoctorStatus.ok,
+                sw,
+                'Connected to $endpoint (handshake verified).',
+              ),
+            );
+          } else if (hostPeer != null && !hostPeer.isDisconnected) {
+            stages.add(
+              _stage(
+                'Host node reachable$suffix',
+                DoctorStatus.warn,
+                sw,
+                'Connecting to host node $endpoint…',
+              ),
+            );
+          } else {
+            stages.add(
+              _stage(
+                'Host node reachable$suffix',
+                DoctorStatus.fail,
+                sw,
+                'Host node $endpoint is not connected.',
+              ),
+            );
+          }
+        } else {
+          stages.add(
+            verifiedCount > 0
+                ? _stage(
+                    'Host node reachable$suffix',
+                    DoctorStatus.warn,
+                    sw,
+                    'Own mailbox has no recorded host node. '
+                        'Connected to $verifiedCount node(s).',
+                  )
+                : _stage(
+                    'Host node reachable$suffix',
+                    DoctorStatus.fail,
+                    sw,
+                    'Not connected to any node.',
+                  ),
+          );
+        }
+
+        // Announce/validity stage.
+        sw
+          ..reset()
+          ..start();
+        final remaining = Duration(
+          milliseconds:
+              ownOh.expiresAtMs - DateTime.now().millisecondsSinceEpoch,
         );
-      } else if (remaining <= renewalThreshold) {
-        stages.add(
-          _stage(
-            'Own mailbox announced',
-            DoctorStatus.warn,
-            sw,
-            'Registration renews soon (valid for '
-                '${_fmtDuration(remaining)}).',
-          ),
-        );
-      } else {
-        stages.add(
-          _stage(
-            'Own mailbox announced',
-            DoctorStatus.ok,
-            sw,
-            'Announced on ${ownOh.serverEndpoint ?? 'a node'}, valid for '
-                '${_fmtDuration(remaining)}.',
-          ),
-        );
+        if (remaining.isNegative || remaining == Duration.zero) {
+          stages.add(
+            _stage(
+              'Own mailbox announced$suffix',
+              DoctorStatus.fail,
+              sw,
+              'Registration expired ${_fmtDuration(-remaining)} ago.',
+            ),
+          );
+        } else if (remaining <= renewalThreshold) {
+          stages.add(
+            _stage(
+              'Own mailbox announced$suffix',
+              DoctorStatus.warn,
+              sw,
+              'Registration renews soon (valid for '
+                  '${_fmtDuration(remaining)}).',
+            ),
+          );
+        } else {
+          stages.add(
+            _stage(
+              'Own mailbox announced$suffix',
+              DoctorStatus.ok,
+              sw,
+              'Announced on ${endpoint ?? 'a node'}, valid for '
+                  '${_fmtDuration(remaining)}.',
+            ),
+          );
+        }
       }
     }
 
-    // Stage 3: Peer OH known (required for sending).
+    // Stage 3: peer OH mailboxes known (required for sending). Reports how
+    // many of the partner's mailboxes we can deposit into (T42 fan-out).
     sw
       ..reset()
       ..start();
-    final peerOhId = _channelPeerOhIds[channelId];
-    final peerEndpoint = _channelPeerOhEndpoints[channelId];
-    stages.add(
-      (peerOhId != null && peerOhId.isNotEmpty)
-          ? _stage(
-              'Peer mailbox known',
-              DoctorStatus.ok,
-              sw,
-              peerEndpoint != null
-                  ? 'Peer mailbox on $peerEndpoint.'
-                  : 'Peer mailbox id known.',
-            )
-          : _stage(
-              'Peer mailbox known',
-              DoctorStatus.warn,
-              sw,
-              'Peer mailbox unknown — scan the peer\'s QR code to enable '
-                  'sending. Receiving still works.',
-            ),
-    );
+    final peerSet = _channelPeerOhSet[channelId] ?? const <_PeerOh>[];
+    if (peerSet.isEmpty) {
+      stages.add(
+        _stage(
+          'Peer mailbox known',
+          DoctorStatus.warn,
+          sw,
+          'Peer mailbox unknown — scan the peer\'s QR code to enable '
+              'sending. Receiving still works.',
+        ),
+      );
+    } else {
+      final endpoints = peerSet
+          .map((p) => p.endpoint)
+          .whereType<String>()
+          .toList(growable: false);
+      stages.add(
+        _stage(
+          'Peer mailbox known',
+          DoctorStatus.ok,
+          sw,
+          peerSet.length == 1
+              ? (endpoints.isNotEmpty
+                    ? 'Peer mailbox on ${endpoints.first}.'
+                    : 'Peer mailbox id known.')
+              : '${peerSet.length} peer mailboxes known'
+                    '${endpoints.isNotEmpty ? ' (${endpoints.join(', ')})' : ''}.',
+        ),
+      );
+    }
 
     // Stage 4: Last successful fetch age.
     sw
@@ -1801,6 +1944,88 @@ class RedPandaLightClient implements RedPandaClient {
     if (response.status != Status.OK) {
       throw DepositException(response.status.name);
     }
+  }
+
+  /// Deposits [payload] into mailbox [ohId] via [activePeer] and returns true
+  /// ONLY on a confirmed FlaschenpostPutResponse OK. Unlike [_depositDirect],
+  /// a timeout returns false instead of being assumed accepted (T39: an
+  /// unanswered deposit is NOT a delivery — for a multi-deposit only a real
+  /// confirmation may count as success). A non-OK status throws.
+  Future<bool> _depositConfirmed(
+    ActivePeer activePeer,
+    List<int> ohId,
+    Uint8List payload,
+  ) async {
+    final flaschenpost = FlaschenpostPut()
+      ..content = payload
+      ..ohId = ohId
+      ..wantResponse = true;
+    final completer = _putResponses.register();
+    activePeer.sendCommand(
+      141,
+      Uint8List.fromList(flaschenpost.writeToBuffer()),
+    );
+    final List<int> responseBytes;
+    try {
+      responseBytes = await completer.future.timeout(depositResponseTimeout);
+    } on TimeoutException {
+      _putResponses.abandon(completer);
+      return false;
+    }
+    final response = FlaschenpostPutResponse.fromBuffer(responseBytes);
+    if (response.status != Status.OK) {
+      throw DepositException(response.status.name);
+    }
+    return true;
+  }
+
+  /// T42 multi-deposit: fans [payload] out to EVERY peer OH in [targets] in
+  /// parallel and completes as soon as the FIRST deposit is confirmed OK.
+  /// Throws [DepositException] when every deposit failed or timed out — no
+  /// confirmation means the message stays pending and is retried (T39), never
+  /// silently marked delivered. The receiver deduplicates the copies by
+  /// message_id.
+  Future<void> _depositToAllPeerOhs(
+    ActivePeer activePeer,
+    List<_PeerOh> targets,
+    Uint8List payload,
+    String channelId,
+  ) async {
+    final firstOk = Completer<void>();
+    var remaining = 0;
+    for (final target in targets) {
+      if (target.ohId.length != GarlicHop.nodeIdLength) continue;
+      remaining++;
+      unawaited(() async {
+        var ok = false;
+        try {
+          ok = await _depositConfirmed(activePeer, target.ohId, payload);
+        } catch (e) {
+          RpLog.info(
+            'RedPandaLightClient: multi-deposit for channel $channelId to one '
+            'peer OH rejected: $e',
+          );
+        } finally {
+          remaining--;
+          if (ok && !firstOk.isCompleted) {
+            firstOk.complete();
+          } else if (remaining == 0 && !firstOk.isCompleted) {
+            firstOk.completeError(
+              DepositException(
+                'all ${targets.length} peer OH deposits failed for channel '
+                '$channelId',
+              ),
+            );
+          }
+        }
+      }());
+    }
+    if (remaining == 0) {
+      throw DepositException(
+        'no valid peer OH to deposit to for channel $channelId',
+      );
+    }
+    await firstOk.future;
   }
 
   /// Builds a fresh Reverse Garlic Block for [channelId] (MS05) and registers
@@ -2290,25 +2515,129 @@ class RedPandaLightClient implements RedPandaClient {
         'RedPandaLightClient: OH failover for channel $channelId — mailbox '
         'moved from ${oldOh.serverEndpoint} to ${replacement.serverEndpoint}',
       );
-      if (!_ohRegistrationController.isClosed) {
-        _ohRegistrationController.add(replacement);
-      }
+      _emitOwnOhSet(channelId);
 
-      final random = Random.secure();
-      final descriptor = OHDescriptor(
-        serverEndpoint: replacement.serverEndpoint!,
-        handleId: replacement.ohId,
-        authPublicKey: replacement.keypair.publicKeyBytes,
-      );
-      _pendingOhUpdates[channelId] = _PendingOhUpdate(
-        messageId: Uint8List.fromList(
-          List<int>.generate(16, (_) => random.nextInt(256)),
-        ),
-        descriptorJson: descriptor.toJson(),
-      );
+      // T42: announce the FULL current own-OH set (JSON array), not just the
+      // replacement — the partner replaces its whole deposit fan-out set.
+      _queueOwnOhAnnounce(channelId);
       await _sendPendingOhUpdate(channelId);
     } finally {
       _failoversInProgress.remove(channelId);
+    }
+  }
+
+  /// Emits the current own-OH set of [channelId] (T42) so the app layer syncs
+  /// its persisted rows to exactly this set — additions (redundancy top-up)
+  /// and failover replacements both flow through here, replacing the old
+  /// per-channel handle rows.
+  void _emitOwnOhSet(String channelId) {
+    if (_ohRegistrationController.isClosed) return;
+    final set = _registeredOHs
+        .where((oh) => oh.channelId == channelId)
+        .toList(growable: false);
+    _ohRegistrationController.add(set);
+  }
+
+  /// Queues an `oh_update` announce of the current own-OH descriptor array
+  /// for [channelId] (T42). A pending announce for the channel is replaced
+  /// (the newest set supersedes it).
+  void _queueOwnOhAnnounce(String channelId) {
+    final descriptors = _ownDescriptorsFor(channelId);
+    if (descriptors.isEmpty) return;
+    final random = Random.secure();
+    _pendingOhUpdates[channelId] = _PendingOhUpdate(
+      messageId: Uint8List.fromList(
+        List<int>.generate(16, (_) => random.nextInt(256)),
+      ),
+      descriptorsJson: jsonEncode(
+        descriptors.map((d) => d.toJsonMap()).toList(),
+      ),
+    );
+  }
+
+  /// Redundancy fixed at k=2 own mailboxes on disjoint nodes (T42). Not a
+  /// configuration knob — hard-coded per the plan.
+  static const int ohRedundancy = 2;
+
+  @override
+  Future<void> ensureOhRedundancy(String channelId) async {
+    // Only 1:1 channels with a live ratchet get a multi-OH announce path;
+    // group mailboxes (MS08) are out of scope for T42.
+    if (_groups.containsKey(channelId)) return;
+    if (_ratchetSessions[channelId] == null) return;
+
+    var own = _registeredOHs.where((oh) => oh.channelId == channelId).toList();
+    // Disjointness is by NODE IDENTITY, not just address (T42): the same Full
+    // Node can appear under more than one address during a flaky reconnect,
+    // and must never be mistaken for a second, redundant node — otherwise the
+    // top-up spuriously registers a second mailbox on the SAME node (observed
+    // in the single-node emulator gate). Endpoints AND node ids already
+    // hosting one of our OHs are excluded.
+    final usedEndpoints = <String>{
+      for (final oh in own)
+        if (oh.serverEndpoint != null) oh.serverEndpoint!,
+    };
+    final usedNodeIds = <String>{
+      for (final oh in own)
+        if (oh.serverEndpoint != null &&
+            _peers[oh.serverEndpoint]?.discoveredNodeId != null)
+          _peers[oh.serverEndpoint]!.discoveredNodeId!,
+    };
+    // Without a known node id for at least one existing OH host we cannot
+    // prove a candidate is a DIFFERENT node — defer to a later cycle (node ids
+    // are learned right after the handshake, so the next chat-open retries).
+    if (own.isNotEmpty && usedNodeIds.isEmpty) return;
+
+    var changed = false;
+    while (own.length < ohRedundancy) {
+      // A disjoint node must be verified, on a new address AND expose a new,
+      // KNOWN node id. When none exists (e.g. the single-node gate) redundancy
+      // gracefully degrades to the single reachable mailbox.
+      final hasDisjoint = _peers.values.any(
+        (p) =>
+            p.isHandshakeVerified &&
+            !usedEndpoints.contains(p.address) &&
+            p.discoveredNodeId != null &&
+            !usedNodeIds.contains(p.discoveredNodeId),
+      );
+      if (!hasDisjoint) break;
+      final OHRegistration extra;
+      try {
+        extra = await registerOutboundHandle(
+          channelId: channelId,
+          excludeEndpoints: usedEndpoints,
+        );
+      } on RateLimitException {
+        break; // retried on a later cycle
+      }
+      final endpoint = extra.serverEndpoint;
+      final nodeId = endpoint == null
+          ? null
+          : _peers[endpoint]?.discoveredNodeId;
+      if (endpoint == null ||
+          usedEndpoints.contains(endpoint) ||
+          nodeId == null ||
+          usedNodeIds.contains(nodeId)) {
+        // Never reached a genuinely fresh node — roll back and stop.
+        _registeredOHs.remove(extra);
+        break;
+      }
+      usedEndpoints.add(endpoint);
+      usedNodeIds.add(nodeId);
+      own = _registeredOHs.where((oh) => oh.channelId == channelId).toList();
+      changed = true;
+    }
+    if (!changed) return;
+    _emitOwnOhSet(channelId);
+    // Announce the enlarged set to the partner so their deposits fan out.
+    _queueOwnOhAnnounce(channelId);
+    try {
+      await _sendPendingOhUpdate(channelId);
+    } catch (e) {
+      RpLog.info(
+        'RedPandaLightClient: initial oh_update announce for channel '
+        '$channelId failed (will retry on the poll loop): $e',
+      );
     }
   }
 
@@ -2326,10 +2655,8 @@ class RedPandaLightClient implements RedPandaClient {
     final pending = _pendingOhUpdates[channelId];
     if (pending == null) return;
     final sessionFuture = _ratchetSessions[channelId];
-    final peerOhId = _channelPeerOhIds[channelId];
-    if (sessionFuture == null ||
-        peerOhId == null ||
-        peerOhId.length != GarlicHop.nodeIdLength) {
+    final targets = _channelPeerOhSet[channelId];
+    if (sessionFuture == null || targets == null || targets.isEmpty) {
       // No path to announce over — checked before the failover started, so
       // this only happens after a disconnect/reset; drop the stale entry.
       _pendingOhUpdates.remove(channelId);
@@ -2344,21 +2671,30 @@ class RedPandaLightClient implements RedPandaClient {
       messageId: pending.messageId,
       timestampMs: DateTime.now().millisecondsSinceEpoch,
       content: '',
-      ohUpdate: Uint8List.fromList(utf8.encode(pending.descriptorJson)),
+      ohUpdate: Uint8List.fromList(utf8.encode(pending.descriptorsJson)),
     );
     final session = await sessionFuture;
     final payload = await session.encrypt(message, channelId);
     _emitRatchetState(channelId, session);
 
-    try {
-      await _depositDirect(activePeer, peerOhId, payload);
-    } catch (e) {
-      RpLog.info(
-        'RedPandaLightClient: oh_update announce for channel $channelId '
-        'failed: $e',
-      );
-      return; // budget unchanged — retry on the next poll cycle
+    // T42: deposit the announce into EVERY known peer OH (always direct — a
+    // garlic one-shot over a possibly-dead hop would silently lose the one
+    // message the channel's healing depends on, see T41). One confirmed
+    // deposit is enough; the same message id lets the partner deduplicate.
+    var delivered = false;
+    for (final target in targets) {
+      if (target.ohId.length != GarlicHop.nodeIdLength) continue;
+      try {
+        await _depositDirect(activePeer, target.ohId, payload);
+        delivered = true;
+      } catch (e) {
+        RpLog.info(
+          'RedPandaLightClient: oh_update announce for channel $channelId '
+          'to one peer OH failed: $e',
+        );
+      }
     }
+    if (!delivered) return; // budget unchanged — retry on the next poll cycle
     pending.remainingSends--;
     if (pending.remainingSends <= 0) {
       _pendingOhUpdates.remove(channelId);
@@ -2370,9 +2706,18 @@ class RedPandaLightClient implements RedPandaClient {
   /// only the partner holds the message keys. Duplicates (the announce is
   /// sent multiple times) are ignored.
   void _handlePeerOhUpdate(String channelId, Uint8List ohUpdateBytes) {
-    final OHDescriptor descriptor;
+    // T42: the payload is a JSON ARRAY of OHDescriptor maps (breaking change,
+    // no pre-T42 compatibility) — the partner's full current mailbox set.
+    final List<OHDescriptor> descriptors;
     try {
-      descriptor = OHDescriptor.fromJson(utf8.decode(ohUpdateBytes));
+      final decoded = jsonDecode(utf8.decode(ohUpdateBytes));
+      if (decoded is! List) {
+        throw const FormatException('oh_update payload is not a JSON array');
+      }
+      descriptors = [
+        for (final entry in decoded)
+          OHDescriptor.fromJsonMap(entry as Map<String, dynamic>),
+      ];
     } catch (e) {
       RpLog.info(
         'RedPandaLightClient: dropping unreadable oh_update for channel '
@@ -2380,21 +2725,16 @@ class RedPandaLightClient implements RedPandaClient {
       );
       return;
     }
-    final currentId = _channelPeerOhIds[channelId];
-    if (currentId != null &&
-        _sameOhId(currentId, descriptor.handleId) &&
-        _channelPeerOhEndpoints[channelId] == descriptor.serverEndpoint) {
-      return; // duplicate announce
-    }
-    _channelPeerOhIds[channelId] = List<int>.from(descriptor.handleId);
-    _channelPeerOhEndpoints[channelId] = descriptor.serverEndpoint;
+    if (descriptors.isEmpty) return;
+    final changed = _replacePeerOhSet(channelId, descriptors);
+    if (!changed) return; // duplicate announce
     RpLog.info(
-      'RedPandaLightClient: channel $channelId peer mailbox moved to '
-      '${descriptor.serverEndpoint} (in-band oh_update)',
+      'RedPandaLightClient: channel $channelId peer mailbox set updated to '
+      '${descriptors.length} OH(s) (in-band oh_update)',
     );
     if (!_peerOhUpdateController.isClosed) {
       _peerOhUpdateController.add(
-        PeerOhUpdate(channelId: channelId, descriptor: descriptor),
+        PeerOhUpdate(channelId: channelId, descriptors: descriptors),
       );
     }
   }
@@ -4128,18 +4468,31 @@ class _GroupState {
   });
 }
 
-/// A queued in-band announcement of a new own mailbox (T21 failover). The
-/// message id stays stable across the re-sends so the partner deduplicates.
+/// A single peer OH mailbox in the deposit fan-out set (T42): the id a
+/// FlaschenpostPut is addressed to, plus the host endpoint (used for garlic
+/// hop exclusion and status display). The auth public key is not needed to
+/// deposit, so it is intentionally not carried here.
+class _PeerOh {
+  final List<int> ohId;
+  final String? endpoint;
+  const _PeerOh({required this.ohId, this.endpoint});
+}
+
+/// A queued in-band announcement of the sender's own mailbox set (T21
+/// failover / T42 multi-OH). [descriptorsJson] is a JSON ARRAY of OHDescriptor
+/// maps (T42, breaking — the pre-T42 single-object form is no longer sent).
+/// The message id stays stable across the re-sends so the partner
+/// deduplicates.
 class _PendingOhUpdate {
   final Uint8List messageId;
-  final String descriptorJson;
+  final String descriptorsJson;
 
   /// How many successful sends are left before the announce is considered
   /// delivered (best effort — a single garlic one-shot can die on a dead
   /// relay hop, see T41).
   int remainingSends = 3;
 
-  _PendingOhUpdate({required this.messageId, required this.descriptorJson});
+  _PendingOhUpdate({required this.messageId, required this.descriptorsJson});
 }
 
 /// FIFO matcher for response commands that can have several requests in

@@ -285,11 +285,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           channel.uuid,
           encKey,
           peerOhId: peerOhId,
+          peerOhEndpoint: channel.peerOhEndpoint,
+          // T42: restore the full peer OH set so sends fan out to every
+          // known mailbox.
+          peerOhSet: MessageSyncService.decodePeerOhSet(channel.peerOhSet),
           // The creator is the device holding the channel auth private key;
           // a device that joined via QR code holds only the public key.
           isChannelCreator: channel.authPrivateKey != null,
           ratchetState: channel.ratchetState,
         );
+        // T42: keep k=2 own mailboxes on disjoint nodes for this channel and
+        // announce the set to the partner. No-op when only one node is
+        // reachable; fire-and-forget.
+        unawaited(client.ensureOhRedundancy(channel.uuid));
       }
     });
 

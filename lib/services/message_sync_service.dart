@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:drift/drift.dart' show InsertMode, Value;
 import 'package:flutter/foundation.dart';
@@ -33,7 +34,7 @@ class MessageSyncService {
   StreamSubscription<ChannelAckUpdate>? _channelAckSub;
   StreamSubscription<List<NodeScore>>? _nodeScoreSub;
   StreamSubscription<GroupStateUpdate>? _groupStateSub;
-  StreamSubscription<OHRegistration>? _ohRegistrationSub;
+  StreamSubscription<List<OHRegistration>>? _ohRegistrationSub;
   StreamSubscription<PeerOhUpdate>? _peerOhSub;
 
   /// Serializes ratchet-state DB writes so they are applied in emission
@@ -125,10 +126,10 @@ class MessageSyncService {
           );
     });
     _ohRegistrationSub ??= _client.ohRegistrationUpdates.listen(
-      (registration) => unawaited(
-        handleOhRegistrationUpdate(registration).catchError(
+      (set) => unawaited(
+        handleOhRegistrationUpdate(set).catchError(
           (Object e) => debugPrint(
-            'MessageSyncService: failed to persist failover handle: $e',
+            'MessageSyncService: failed to persist own-OH set: $e',
           ),
         ),
       ),
@@ -208,26 +209,52 @@ class MessageSyncService {
     }
   }
 
-  /// Replaces the channel's persisted own-OH row after an automatic OH
-  /// failover (T21) so the new mailbox survives an app restart. The old row
-  /// is deleted — its mailbox lives on the dead node.
-  Future<void> handleOhRegistrationUpdate(OHRegistration registration) async {
-    if (registration.serverEndpoint == null) return;
-    await _outboundHandles.replaceForChannel(registration);
+  /// Syncs the channel's persisted own-OH rows to the current set (T42
+  /// multi-OH) so the redundancy top-up and failover replacements survive an
+  /// app restart. Dead mailboxes are dropped, new ones added.
+  Future<void> handleOhRegistrationUpdate(List<OHRegistration> set) async {
+    if (set.isEmpty) return;
+    final channelId = set.first.channelId;
+    if (channelId == null) return;
+    await _outboundHandles.replaceAllForChannel(channelId, set);
   }
 
-  /// Persists the partner's new mailbox descriptor announced in-band via
-  /// `oh_update` (T21) so sends keep reaching the partner after a restart.
+  /// Persists the partner's full mailbox set announced in-band via `oh_update`
+  /// (T42 multi-OH) so the deposit fan-out keeps reaching every mailbox after
+  /// a restart. The primary (first) also feeds the single-target columns.
   Future<void> handlePeerOhUpdate(PeerOhUpdate update) async {
+    if (update.descriptors.isEmpty) return;
+    final primary = update.descriptors.first;
+    final setJson = jsonEncode(
+      update.descriptors.map((d) => d.toJsonMap()).toList(),
+    );
     await (_db.update(
       _db.channels,
     )..where((c) => c.uuid.equals(update.channelId))).write(
       ChannelsCompanion(
-        peerOhEndpoint: Value(update.descriptor.serverEndpoint),
-        peerOhId: Value(HEX.encode(update.descriptor.handleId)),
-        peerOhPublicKey: Value(HEX.encode(update.descriptor.authPublicKey)),
+        peerOhEndpoint: Value(primary.serverEndpoint),
+        peerOhId: Value(HEX.encode(primary.handleId)),
+        peerOhPublicKey: Value(HEX.encode(primary.authPublicKey)),
+        peerOhSet: Value(setJson),
       ),
     );
+  }
+
+  /// Decodes the persisted peer OH set JSON (T42) into descriptors, or null
+  /// when absent/malformed (the client then falls back to the primary OH).
+  static List<OHDescriptor>? decodePeerOhSet(String? json) {
+    if (json == null || json.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(json);
+      if (decoded is! List) return null;
+      final out = [
+        for (final entry in decoded)
+          OHDescriptor.fromJsonMap(entry as Map<String, dynamic>),
+      ];
+      return out.isEmpty ? null : out;
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Persists advanced ratchet state (MS03b) so the channel ratchet
@@ -420,6 +447,10 @@ class MessageSyncService {
         peerOhId: channel.peerOhId != null
             ? HEX.decode(channel.peerOhId!)
             : null,
+        peerOhEndpoint: channel.peerOhEndpoint,
+        // T42: restore the full persisted peer OH set so the deposit fan-out
+        // survives a restart (the partner only re-announces on change).
+        peerOhSet: decodePeerOhSet(channel.peerOhSet),
         // The creator is the device holding the channel auth private key;
         // a device that joined via QR code holds only the public key.
         isChannelCreator: channel.authPrivateKey != null,

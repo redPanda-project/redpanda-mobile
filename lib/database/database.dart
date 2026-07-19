@@ -24,10 +24,17 @@ class Channels extends Table {
   TextColumn get authPrivateKey => text().nullable()(); // HEX encoded
   TextColumn get authPublicKey => text()(); // HEX encoded, 32 bytes
 
-  // OH Descriptor of the peer (for sending messages to them)
+  // OH Descriptor of the peer's PRIMARY mailbox (for sending messages to
+  // them). Mirrors the first entry of peerOhSet below.
   TextColumn get peerOhEndpoint => text().nullable()();
   TextColumn get peerOhId => text().nullable()(); // HEX encoded
   TextColumn get peerOhPublicKey => text().nullable()(); // HEX encoded
+
+  // T42 multi-OH: the partner's FULL known mailbox set as a JSON array of
+  // OHDescriptor maps ({ep,id,pk}). A send deposits into every entry; the
+  // receiver deduplicates by message id. Grown/replaced by the in-band
+  // `oh_update` announce. Null until the first announce arrives.
+  TextColumn get peerOhSet => text().nullable()();
 
   // Metadata
   DateTimeColumn get lastSeen => dateTime().nullable()(); // Last message time?
@@ -256,7 +263,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 15;
+  int get schemaVersion => 16;
 
   @override
   MigrationStrategy get migration {
@@ -392,6 +399,12 @@ class AppDatabase extends _$AppDatabase {
           // recreated above with the current schema.
           if (from >= 9) {
             await m.addColumn(outboundHandles, outboundHandles.failedOverAt);
+          }
+        }
+        if (from < 16 && to >= 16) {
+          // T42 multi-OH: full peer mailbox set (JSON array). Non-destructive.
+          if (from >= 2) {
+            await m.addColumn(channels, channels.peerOhSet);
           }
         }
       },

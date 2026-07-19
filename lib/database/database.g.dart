@@ -406,6 +406,17 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _peerOhSetMeta = const VerificationMeta(
+    'peerOhSet',
+  );
+  @override
+  late final GeneratedColumn<String> peerOhSet = GeneratedColumn<String>(
+    'peer_oh_set',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _lastSeenMeta = const VerificationMeta(
     'lastSeen',
   );
@@ -449,6 +460,7 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
     peerOhEndpoint,
     peerOhId,
     peerOhPublicKey,
+    peerOhSet,
     lastSeen,
     ratchetState,
     pendingRgb,
@@ -536,6 +548,12 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
         ),
       );
     }
+    if (data.containsKey('peer_oh_set')) {
+      context.handle(
+        _peerOhSetMeta,
+        peerOhSet.isAcceptableOrUnknown(data['peer_oh_set']!, _peerOhSetMeta),
+      );
+    }
     if (data.containsKey('last_seen')) {
       context.handle(
         _lastSeenMeta,
@@ -598,6 +616,10 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
         DriftSqlType.string,
         data['${effectivePrefix}peer_oh_public_key'],
       ),
+      peerOhSet: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}peer_oh_set'],
+      ),
       lastSeen: attachedDatabase.typeMapping.read(
         DriftSqlType.dateTime,
         data['${effectivePrefix}last_seen'],
@@ -628,6 +650,7 @@ class Channel extends DataClass implements Insertable<Channel> {
   final String? peerOhEndpoint;
   final String? peerOhId;
   final String? peerOhPublicKey;
+  final String? peerOhSet;
   final DateTime? lastSeen;
   final String? ratchetState;
   final String? pendingRgb;
@@ -640,6 +663,7 @@ class Channel extends DataClass implements Insertable<Channel> {
     this.peerOhEndpoint,
     this.peerOhId,
     this.peerOhPublicKey,
+    this.peerOhSet,
     this.lastSeen,
     this.ratchetState,
     this.pendingRgb,
@@ -662,6 +686,9 @@ class Channel extends DataClass implements Insertable<Channel> {
     }
     if (!nullToAbsent || peerOhPublicKey != null) {
       map['peer_oh_public_key'] = Variable<String>(peerOhPublicKey);
+    }
+    if (!nullToAbsent || peerOhSet != null) {
+      map['peer_oh_set'] = Variable<String>(peerOhSet);
     }
     if (!nullToAbsent || lastSeen != null) {
       map['last_seen'] = Variable<DateTime>(lastSeen);
@@ -693,6 +720,9 @@ class Channel extends DataClass implements Insertable<Channel> {
       peerOhPublicKey: peerOhPublicKey == null && nullToAbsent
           ? const Value.absent()
           : Value(peerOhPublicKey),
+      peerOhSet: peerOhSet == null && nullToAbsent
+          ? const Value.absent()
+          : Value(peerOhSet),
       lastSeen: lastSeen == null && nullToAbsent
           ? const Value.absent()
           : Value(lastSeen),
@@ -719,6 +749,7 @@ class Channel extends DataClass implements Insertable<Channel> {
       peerOhEndpoint: serializer.fromJson<String?>(json['peerOhEndpoint']),
       peerOhId: serializer.fromJson<String?>(json['peerOhId']),
       peerOhPublicKey: serializer.fromJson<String?>(json['peerOhPublicKey']),
+      peerOhSet: serializer.fromJson<String?>(json['peerOhSet']),
       lastSeen: serializer.fromJson<DateTime?>(json['lastSeen']),
       ratchetState: serializer.fromJson<String?>(json['ratchetState']),
       pendingRgb: serializer.fromJson<String?>(json['pendingRgb']),
@@ -736,6 +767,7 @@ class Channel extends DataClass implements Insertable<Channel> {
       'peerOhEndpoint': serializer.toJson<String?>(peerOhEndpoint),
       'peerOhId': serializer.toJson<String?>(peerOhId),
       'peerOhPublicKey': serializer.toJson<String?>(peerOhPublicKey),
+      'peerOhSet': serializer.toJson<String?>(peerOhSet),
       'lastSeen': serializer.toJson<DateTime?>(lastSeen),
       'ratchetState': serializer.toJson<String?>(ratchetState),
       'pendingRgb': serializer.toJson<String?>(pendingRgb),
@@ -751,6 +783,7 @@ class Channel extends DataClass implements Insertable<Channel> {
     Value<String?> peerOhEndpoint = const Value.absent(),
     Value<String?> peerOhId = const Value.absent(),
     Value<String?> peerOhPublicKey = const Value.absent(),
+    Value<String?> peerOhSet = const Value.absent(),
     Value<DateTime?> lastSeen = const Value.absent(),
     Value<String?> ratchetState = const Value.absent(),
     Value<String?> pendingRgb = const Value.absent(),
@@ -769,6 +802,7 @@ class Channel extends DataClass implements Insertable<Channel> {
     peerOhPublicKey: peerOhPublicKey.present
         ? peerOhPublicKey.value
         : this.peerOhPublicKey,
+    peerOhSet: peerOhSet.present ? peerOhSet.value : this.peerOhSet,
     lastSeen: lastSeen.present ? lastSeen.value : this.lastSeen,
     ratchetState: ratchetState.present ? ratchetState.value : this.ratchetState,
     pendingRgb: pendingRgb.present ? pendingRgb.value : this.pendingRgb,
@@ -793,6 +827,7 @@ class Channel extends DataClass implements Insertable<Channel> {
       peerOhPublicKey: data.peerOhPublicKey.present
           ? data.peerOhPublicKey.value
           : this.peerOhPublicKey,
+      peerOhSet: data.peerOhSet.present ? data.peerOhSet.value : this.peerOhSet,
       lastSeen: data.lastSeen.present ? data.lastSeen.value : this.lastSeen,
       ratchetState: data.ratchetState.present
           ? data.ratchetState.value
@@ -814,6 +849,7 @@ class Channel extends DataClass implements Insertable<Channel> {
           ..write('peerOhEndpoint: $peerOhEndpoint, ')
           ..write('peerOhId: $peerOhId, ')
           ..write('peerOhPublicKey: $peerOhPublicKey, ')
+          ..write('peerOhSet: $peerOhSet, ')
           ..write('lastSeen: $lastSeen, ')
           ..write('ratchetState: $ratchetState, ')
           ..write('pendingRgb: $pendingRgb')
@@ -831,6 +867,7 @@ class Channel extends DataClass implements Insertable<Channel> {
     peerOhEndpoint,
     peerOhId,
     peerOhPublicKey,
+    peerOhSet,
     lastSeen,
     ratchetState,
     pendingRgb,
@@ -847,6 +884,7 @@ class Channel extends DataClass implements Insertable<Channel> {
           other.peerOhEndpoint == this.peerOhEndpoint &&
           other.peerOhId == this.peerOhId &&
           other.peerOhPublicKey == this.peerOhPublicKey &&
+          other.peerOhSet == this.peerOhSet &&
           other.lastSeen == this.lastSeen &&
           other.ratchetState == this.ratchetState &&
           other.pendingRgb == this.pendingRgb);
@@ -861,6 +899,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
   final Value<String?> peerOhEndpoint;
   final Value<String?> peerOhId;
   final Value<String?> peerOhPublicKey;
+  final Value<String?> peerOhSet;
   final Value<DateTime?> lastSeen;
   final Value<String?> ratchetState;
   final Value<String?> pendingRgb;
@@ -874,6 +913,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     this.peerOhEndpoint = const Value.absent(),
     this.peerOhId = const Value.absent(),
     this.peerOhPublicKey = const Value.absent(),
+    this.peerOhSet = const Value.absent(),
     this.lastSeen = const Value.absent(),
     this.ratchetState = const Value.absent(),
     this.pendingRgb = const Value.absent(),
@@ -888,6 +928,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     this.peerOhEndpoint = const Value.absent(),
     this.peerOhId = const Value.absent(),
     this.peerOhPublicKey = const Value.absent(),
+    this.peerOhSet = const Value.absent(),
     this.lastSeen = const Value.absent(),
     this.ratchetState = const Value.absent(),
     this.pendingRgb = const Value.absent(),
@@ -905,6 +946,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     Expression<String>? peerOhEndpoint,
     Expression<String>? peerOhId,
     Expression<String>? peerOhPublicKey,
+    Expression<String>? peerOhSet,
     Expression<DateTime>? lastSeen,
     Expression<String>? ratchetState,
     Expression<String>? pendingRgb,
@@ -919,6 +961,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
       if (peerOhEndpoint != null) 'peer_oh_endpoint': peerOhEndpoint,
       if (peerOhId != null) 'peer_oh_id': peerOhId,
       if (peerOhPublicKey != null) 'peer_oh_public_key': peerOhPublicKey,
+      if (peerOhSet != null) 'peer_oh_set': peerOhSet,
       if (lastSeen != null) 'last_seen': lastSeen,
       if (ratchetState != null) 'ratchet_state': ratchetState,
       if (pendingRgb != null) 'pending_rgb': pendingRgb,
@@ -935,6 +978,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     Value<String?>? peerOhEndpoint,
     Value<String?>? peerOhId,
     Value<String?>? peerOhPublicKey,
+    Value<String?>? peerOhSet,
     Value<DateTime?>? lastSeen,
     Value<String?>? ratchetState,
     Value<String?>? pendingRgb,
@@ -949,6 +993,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
       peerOhEndpoint: peerOhEndpoint ?? this.peerOhEndpoint,
       peerOhId: peerOhId ?? this.peerOhId,
       peerOhPublicKey: peerOhPublicKey ?? this.peerOhPublicKey,
+      peerOhSet: peerOhSet ?? this.peerOhSet,
       lastSeen: lastSeen ?? this.lastSeen,
       ratchetState: ratchetState ?? this.ratchetState,
       pendingRgb: pendingRgb ?? this.pendingRgb,
@@ -983,6 +1028,9 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     if (peerOhPublicKey.present) {
       map['peer_oh_public_key'] = Variable<String>(peerOhPublicKey.value);
     }
+    if (peerOhSet.present) {
+      map['peer_oh_set'] = Variable<String>(peerOhSet.value);
+    }
     if (lastSeen.present) {
       map['last_seen'] = Variable<DateTime>(lastSeen.value);
     }
@@ -1009,6 +1057,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
           ..write('peerOhEndpoint: $peerOhEndpoint, ')
           ..write('peerOhId: $peerOhId, ')
           ..write('peerOhPublicKey: $peerOhPublicKey, ')
+          ..write('peerOhSet: $peerOhSet, ')
           ..write('lastSeen: $lastSeen, ')
           ..write('ratchetState: $ratchetState, ')
           ..write('pendingRgb: $pendingRgb, ')
@@ -5746,6 +5795,7 @@ typedef $$ChannelsTableCreateCompanionBuilder =
       Value<String?> peerOhEndpoint,
       Value<String?> peerOhId,
       Value<String?> peerOhPublicKey,
+      Value<String?> peerOhSet,
       Value<DateTime?> lastSeen,
       Value<String?> ratchetState,
       Value<String?> pendingRgb,
@@ -5761,6 +5811,7 @@ typedef $$ChannelsTableUpdateCompanionBuilder =
       Value<String?> peerOhEndpoint,
       Value<String?> peerOhId,
       Value<String?> peerOhPublicKey,
+      Value<String?> peerOhSet,
       Value<DateTime?> lastSeen,
       Value<String?> ratchetState,
       Value<String?> pendingRgb,
@@ -5857,6 +5908,11 @@ class $$ChannelsTableFilterComposer
 
   ColumnFilters<String> get peerOhPublicKey => $composableBuilder(
     column: $table.peerOhPublicKey,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get peerOhSet => $composableBuilder(
+    column: $table.peerOhSet,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -5975,6 +6031,11 @@ class $$ChannelsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get peerOhSet => $composableBuilder(
+    column: $table.peerOhSet,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<DateTime> get lastSeen => $composableBuilder(
     column: $table.lastSeen,
     builder: (column) => ColumnOrderings(column),
@@ -6033,6 +6094,9 @@ class $$ChannelsTableAnnotationComposer
     column: $table.peerOhPublicKey,
     builder: (column) => column,
   );
+
+  GeneratedColumn<String> get peerOhSet =>
+      $composableBuilder(column: $table.peerOhSet, builder: (column) => column);
 
   GeneratedColumn<DateTime> get lastSeen =>
       $composableBuilder(column: $table.lastSeen, builder: (column) => column);
@@ -6134,6 +6198,7 @@ class $$ChannelsTableTableManager
                 Value<String?> peerOhEndpoint = const Value.absent(),
                 Value<String?> peerOhId = const Value.absent(),
                 Value<String?> peerOhPublicKey = const Value.absent(),
+                Value<String?> peerOhSet = const Value.absent(),
                 Value<DateTime?> lastSeen = const Value.absent(),
                 Value<String?> ratchetState = const Value.absent(),
                 Value<String?> pendingRgb = const Value.absent(),
@@ -6147,6 +6212,7 @@ class $$ChannelsTableTableManager
                 peerOhEndpoint: peerOhEndpoint,
                 peerOhId: peerOhId,
                 peerOhPublicKey: peerOhPublicKey,
+                peerOhSet: peerOhSet,
                 lastSeen: lastSeen,
                 ratchetState: ratchetState,
                 pendingRgb: pendingRgb,
@@ -6162,6 +6228,7 @@ class $$ChannelsTableTableManager
                 Value<String?> peerOhEndpoint = const Value.absent(),
                 Value<String?> peerOhId = const Value.absent(),
                 Value<String?> peerOhPublicKey = const Value.absent(),
+                Value<String?> peerOhSet = const Value.absent(),
                 Value<DateTime?> lastSeen = const Value.absent(),
                 Value<String?> ratchetState = const Value.absent(),
                 Value<String?> pendingRgb = const Value.absent(),
@@ -6175,6 +6242,7 @@ class $$ChannelsTableTableManager
                 peerOhEndpoint: peerOhEndpoint,
                 peerOhId: peerOhId,
                 peerOhPublicKey: peerOhPublicKey,
+                peerOhSet: peerOhSet,
                 lastSeen: lastSeen,
                 ratchetState: ratchetState,
                 pendingRgb: pendingRgb,

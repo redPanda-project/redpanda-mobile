@@ -9,6 +9,7 @@ import 'package:redpanda_light_client/src/domain/loopback_result.dart';
 import 'package:redpanda_light_client/src/domain/oh_fetch_status.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
+import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
 import 'package:redpanda_light_client/src/domain/peer_oh_update.dart';
 import 'package:redpanda_light_client/src/domain/routing_ack.dart';
 import 'package:redpanda_light_client/src/garlic/node_scorer.dart';
@@ -144,10 +145,16 @@ class MockRedPandaClient implements RedPandaClient {
   void onResume() {}
 
   @override
-  Stream<OHRegistration> get ohRegistrationUpdates => const Stream.empty();
+  Stream<List<OHRegistration>> get ohRegistrationUpdates =>
+      const Stream.empty();
 
   @override
   Stream<PeerOhUpdate> get peerOhUpdates => const Stream.empty();
+
+  @override
+  Future<void> ensureOhRedundancy(String channelId) async {
+    // Mock: no-op
+  }
 
   @override
   void addChannelKeys(
@@ -155,6 +162,7 @@ class MockRedPandaClient implements RedPandaClient {
     List<int> encryptionKey, {
     List<int>? peerOhId,
     String? peerOhEndpoint,
+    List<OHDescriptor>? peerOhSet,
     required bool isChannelCreator,
     String? ratchetState,
     Map<String, int>? sessionTags,
