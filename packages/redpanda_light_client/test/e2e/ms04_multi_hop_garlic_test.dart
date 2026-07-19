@@ -23,13 +23,14 @@ import 'test_helpers.dart';
 /// into Bob's OH mailbox (MS02b fallback forwarding, since the OH lives on
 /// Alice's/Bob's entry node). Bob fetches and decrypts the message.
 ///
-/// Topology: the entry node listens on 59558 — the local address baked into
-/// the JAR's known-nodes list — so the three relays connect to it at boot and
-/// inter-connect through the periodic peer list exchange.
+/// Topology (T30): suite-private ports — the isolated entry node plus three
+/// relays that are explicitly seeded with the entry address, so they connect
+/// to it at boot and inter-connect through the periodic peer list exchange.
+/// No suite shares ports anymore, so there is no topology lock.
 void main() async {
   final jarAvailable = await RedPandaNodeLauncher.isJarAvailable();
 
-  const entryPort = 59558;
+  const entryPort = 50570;
   const relayPorts = [50571, 50572, 50573];
   const entryAddress = '127.0.0.1:$entryPort';
   final relayAddresses = relayPorts.map((p) => '127.0.0.1:$p').toSet();
@@ -38,13 +39,16 @@ void main() async {
     final launchers = <RedPandaNodeLauncher>[];
     late RedPandaLightClient alice;
     late RedPandaLightClient bob;
-    ServerSocket? topologyLock;
-
     setUp(() async {
-      topologyLock = await acquireTopologyLock();
-      // Entry node first (the relays dial 127.0.0.1:59558 at boot).
+      // Entry node first, isolated (T29 'none'); the relays are seeded
+      // explicitly with the entry address (T30) — no dependency on the
+      // JAR's built-in 127.0.0.1:59558 seed, so a foreign node on that
+      // port can no longer contaminate the topology.
       for (final port in [entryPort, ...relayPorts]) {
-        final launcher = RedPandaNodeLauncher(port: port);
+        final launcher = RedPandaNodeLauncher(
+          port: port,
+          seeds: [if (port != entryPort) entryAddress],
+        );
         launchers.add(launcher);
         await launcher.start();
       }
@@ -86,8 +90,6 @@ void main() async {
         await launcher.stop();
       }
       launchers.clear();
-      await topologyLock?.close();
-      topologyLock = null;
     });
 
     /// Polls until Alice knows all three relays incl. their X25519 keys

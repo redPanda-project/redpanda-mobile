@@ -33,26 +33,30 @@ import 'test_helpers.dart';
 /// logic and covered by the app unit tests — this suite wires the members
 /// directly at the LC API, which is exactly what the handshake produces.
 ///
-/// Same topology as the MS04–MS06 E2E: entry node on 59558 (the JAR's
-/// built-in local seed) + three local relays; the shared entry port is why
-/// all garlic suites take the topology lock.
+/// Same topology as the MS04–MS06 E2E (T30): suite-private ports — an
+/// isolated entry node + three relays explicitly seeded with the entry
+/// address. No shared ports between suites, hence no topology lock.
 void main() async {
   final jarAvailable = await RedPandaNodeLauncher.isJarAvailable();
 
-  const entryPort = 59558;
-  const relayPorts = [50584, 50585, 50586];
+  const entryPort = 50600;
+  const relayPorts = [50601, 50602, 50603];
   const entryAddress = '127.0.0.1:$entryPort';
   final relayAddresses = relayPorts.map((p) => '127.0.0.1:$p').toSet();
 
   group('E2E MS08: group chat across 4 real nodes', () {
     final launchers = <RedPandaNodeLauncher>[];
     final clients = <RedPandaLightClient>[];
-    ServerSocket? topologyLock;
-
     setUp(() async {
-      topologyLock = await acquireTopologyLock();
+      // Entry node first, isolated (T29 'none'); the relays are seeded
+      // explicitly with the entry address (T30) — no dependency on the
+      // JAR's built-in 127.0.0.1:59558 seed, so a foreign node on that
+      // port can no longer contaminate the topology.
       for (final port in [entryPort, ...relayPorts]) {
-        final launcher = RedPandaNodeLauncher(port: port);
+        final launcher = RedPandaNodeLauncher(
+          port: port,
+          seeds: [if (port != entryPort) entryAddress],
+        );
         launchers.add(launcher);
         await launcher.start();
       }
@@ -68,8 +72,6 @@ void main() async {
         await launcher.stop();
       }
       launchers.clear();
-      await topologyLock?.close();
-      topologyLock = null;
     });
 
     Future<RedPandaLightClient> newClient() async {

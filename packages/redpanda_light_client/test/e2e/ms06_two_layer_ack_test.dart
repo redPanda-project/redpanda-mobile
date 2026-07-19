@@ -28,14 +28,14 @@ import 'test_helpers.dart';
 /// having received and decrypted the message, auto-sends a Channel-ACK back
 /// over Alice's RGB, which flips her message to delivered.
 ///
-/// Same topology as the MS04/MS05 E2E: entry node on 59558 (the JAR's
-/// built-in local seed) + three local relays; the shared entry port is why
-/// all garlic suites take the topology lock.
+/// Same topology as the MS04/MS05 E2E (T30): suite-private ports — an
+/// isolated entry node + three relays explicitly seeded with the entry
+/// address. No shared ports between suites, hence no topology lock.
 void main() async {
   final jarAvailable = await RedPandaNodeLauncher.isJarAvailable();
 
-  const entryPort = 59558;
-  const relayPorts = [50574, 50575, 50576];
+  const entryPort = 50590;
+  const relayPorts = [50591, 50592, 50593];
   const entryAddress = '127.0.0.1:$entryPort';
   final relayAddresses = relayPorts.map((p) => '127.0.0.1:$p').toSet();
 
@@ -43,12 +43,16 @@ void main() async {
     final launchers = <RedPandaNodeLauncher>[];
     late RedPandaLightClient alice;
     late RedPandaLightClient bob;
-    ServerSocket? topologyLock;
-
     setUp(() async {
-      topologyLock = await acquireTopologyLock();
+      // Entry node first, isolated (T29 'none'); the relays are seeded
+      // explicitly with the entry address (T30) — no dependency on the
+      // JAR's built-in 127.0.0.1:59558 seed, so a foreign node on that
+      // port can no longer contaminate the topology.
       for (final port in [entryPort, ...relayPorts]) {
-        final launcher = RedPandaNodeLauncher(port: port);
+        final launcher = RedPandaNodeLauncher(
+          port: port,
+          seeds: [if (port != entryPort) entryAddress],
+        );
         launchers.add(launcher);
         await launcher.start();
       }
@@ -87,8 +91,6 @@ void main() async {
         await launcher.stop();
       }
       launchers.clear();
-      await topologyLock?.close();
-      topologyLock = null;
     });
 
     Future<void> waitForRelayCandidates(

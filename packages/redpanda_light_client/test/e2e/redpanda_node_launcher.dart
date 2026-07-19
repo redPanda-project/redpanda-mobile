@@ -51,12 +51,14 @@ class RedPandaNodeLauncher {
     // If redPandaj doesn't support CLI port override, we might need to write a properties file.
 
     // Based on ConnectionHandler.java, the app reads System.getenv("PORT").
-    // A non-empty seeds list isolates the node from the public testnet:
-    // Settings reads REDPANDA_KNOWN_NODES (comma-separated) and only falls
-    // back to the built-in defaults when the list is empty/invalid.
+    // REDPANDA_KNOWN_NODES is ALWAYS set (T30): without it the jar falls
+    // back to its built-in defaults — which include 127.0.0.1:59558 — and a
+    // long-running foreign node on this host contaminates deterministic
+    // tests. Explicit seeds when given, otherwise "none" (T29,
+    // redpandaj#262): start with no bootstrap peers at all.
     final env = {
       'PORT': port.toString(),
-      if (seeds.isNotEmpty) 'REDPANDA_KNOWN_NODES': seeds.join(','),
+      'REDPANDA_KNOWN_NODES': seeds.isNotEmpty ? seeds.join(',') : 'none',
     };
 
     final args = [
