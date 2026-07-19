@@ -216,15 +216,15 @@ log "building test apk (target=integration_test/emu_duo_e2e_test.dart, seeds=$SE
 if [[ "$START_NODE" == 1 ]]; then
   NODE_DIR="$(mktemp -d /tmp/rp-emu-node.XXXXXX)"
   log "starting local backend node on port $NODE_PORT (workdir $NODE_DIR)"
-  # The blackhole seed (discard port, nothing listens) isolates the node:
-  # the jar's default known-nodes list would connect it to other local or
-  # testnet nodes, whose gossiped peer addresses (e.g. 127.0.0.1:59558) are
-  # wrong or unreachable from inside an emulator and send garlic routes /
-  # deposits into the void. An EMPTY list does not work -- Settings falls
-  # back to the defaults when the parsed list is empty.
+  # REDPANDA_KNOWN_NODES=none (T29) starts the node without any bootstrap
+  # peers: the jar's default known-nodes list would connect it to other
+  # local or testnet nodes, whose gossiped peer addresses (e.g.
+  # 127.0.0.1:59558) are wrong or unreachable from inside an emulator and
+  # send garlic routes / deposits into the void. (Before T29 this needed a
+  # blackhole seed 127.0.0.1:9 -- an EMPTY list falls back to the defaults.)
   # -Xmx512m: cap the node heap -- the host has ~7.5 GiB and an uncapped JVM
   # next to two emulators swap-thrashes the whole run (findings of runs 6/7).
-  (cd "$NODE_DIR" && PORT="$NODE_PORT" REDPANDA_KNOWN_NODES="127.0.0.1:9" \
+  (cd "$NODE_DIR" && PORT="$NODE_PORT" REDPANDA_KNOWN_NODES="none" \
     exec java -Xmx512m -jar "$JAR") >"$ART/node.log" 2>&1 &
   NODE_PID=$!
   wait_port "$NODE_PORT" "backend node" 60
