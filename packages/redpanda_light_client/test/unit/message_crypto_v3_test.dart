@@ -95,9 +95,10 @@ void main() {
     test('skips unknown fields (forward compatibility)', () {
       final msg = sampleMessage();
       final encoded = msg.encode();
-      // Append an unknown field #9, varint wire type: tag (9<<3|0)=0x48, val 7
-      // (fields 5 and 6 are now reply_path / ack_message_id).
-      final withUnknown = Uint8List.fromList([...encoded, 0x48, 0x07]);
+      // Append an unknown field #10, varint wire type: tag (10<<3|0)=0x50,
+      // val 7 (fields 5–9 are now reply_path / ack_message_id /
+      // group_handshake / group_control / oh_update).
+      final withUnknown = Uint8List.fromList([...encoded, 0x50, 0x07]);
       final decoded = ChannelMessage.decode(withUnknown);
       expect(decoded.content, equals(msg.content));
       expect(decoded.messageId, equals(msg.messageId));

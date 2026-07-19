@@ -75,6 +75,35 @@ class OutboundHandleRepository {
         );
   }
 
+  /// Replaces the channel's persisted own-OH row after an automatic OH
+  /// failover (T21): the old mailbox is dead, only the replacement matters.
+  /// The row is stamped with [OutboundHandles.failedOverAt] so the channel
+  /// status page can surface the move.
+  Future<void> replaceForChannel(OHRegistration registration) async {
+    final channelId = registration.channelId;
+    await _db.transaction(() async {
+      if (channelId != null) {
+        await (_db.delete(
+          _db.outboundHandles,
+        )..where((t) => t.channelId.equals(channelId))).go();
+      }
+      await _db
+          .into(_db.outboundHandles)
+          .insert(
+            db.OutboundHandlesCompanion.insert(
+              ohId: HEX.encode(registration.ohId),
+              keypairBytes: registration.keypair.privateKeyBytes,
+              serverEndpoint: registration.serverEndpoint!,
+              expiresAt: DateTime.fromMillisecondsSinceEpoch(
+                registration.expiresAtMs,
+              ),
+              channelId: drift.Value(channelId),
+              failedOverAt: drift.Value(DateTime.now()),
+            ),
+          );
+    });
+  }
+
   /// Returns our own OH descriptor for [channelId], registering a new OH via
   /// [client] if no valid one is persisted yet.
   ///

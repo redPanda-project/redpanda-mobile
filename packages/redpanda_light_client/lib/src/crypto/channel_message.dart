@@ -14,6 +14,7 @@ import 'dart:typed_data';
 ///   bytes  ack_message_id  = 6;  // MS06: Channel-ACK for this message id (optional)
 ///   bytes  group_handshake = 7;  // MS08: serialized GroupHandshake (1:1 only, optional)
 ///   bytes  group_control   = 8;  // MS08: serialized GroupControl (groups only, optional)
+///   bytes  oh_update       = 9;  // T21: UTF-8 OHDescriptor JSON (OH failover, optional)
 /// }
 /// ```
 ///
@@ -73,6 +74,12 @@ class ChannelMessage {
   /// Null/empty for regular messages.
   final Uint8List? groupControl;
 
+  /// T21: UTF-8 encoded OHDescriptor JSON announcing the sender's NEW own
+  /// mailbox after an OH failover. Null/empty for regular messages. The
+  /// authenticity check is the ratchet decryption itself — only the channel
+  /// partner holds the message keys.
+  final Uint8List? ohUpdate;
+
   const ChannelMessage({
     required this.messageId,
     required this.timestampMs,
@@ -81,6 +88,7 @@ class ChannelMessage {
     this.ackMessageId,
     this.groupHandshake,
     this.groupControl,
+    this.ohUpdate,
   });
 
   /// True when this message is a Channel-ACK (MS06).
@@ -92,6 +100,9 @@ class ChannelMessage {
 
   /// True when this message carries a group control action (MS08).
   bool get isGroupControl => groupControl != null && groupControl!.isNotEmpty;
+
+  /// True when this message announces a new peer mailbox (T21 failover).
+  bool get isOhUpdate => ohUpdate != null && ohUpdate!.isNotEmpty;
 
   /// Encodes this message to its proto3-compatible binary representation.
   Uint8List encode() {
@@ -150,6 +161,14 @@ class ChannelMessage {
       out.add(controlBytes);
     }
 
+    // field 9: oh_update (length-delimited, T21)
+    final ohUpdateBytes = ohUpdate;
+    if (ohUpdateBytes != null && ohUpdateBytes.isNotEmpty) {
+      out.addByte(0x4A); // (9 << 3) | 2
+      _writeVarint(out, ohUpdateBytes.length);
+      out.add(ohUpdateBytes);
+    }
+
     return out.toBytes();
   }
 
@@ -168,6 +187,7 @@ class ChannelMessage {
     Uint8List? ackMessageId;
     Uint8List? groupHandshake;
     Uint8List? groupControl;
+    Uint8List? ohUpdate;
 
     int readVarint() {
       var result = 0;
@@ -279,6 +299,19 @@ class ChannelMessage {
           );
           offset += controlLen;
           break;
+        case 9: // oh_update (T21)
+          if (wireType != 2) {
+            throw const FormatException('ChannelMessage: bad wire type for #9');
+          }
+          final ohUpdateLen = readVarint();
+          if (offset + ohUpdateLen > data.length) {
+            throw const FormatException('ChannelMessage: truncated oh_update');
+          }
+          ohUpdate = Uint8List.fromList(
+            data.sublist(offset, offset + ohUpdateLen),
+          );
+          offset += ohUpdateLen;
+          break;
         default:
           // Unknown field — skip according to wire type.
           _skipField(
@@ -300,6 +333,7 @@ class ChannelMessage {
       ackMessageId: ackMessageId,
       groupHandshake: groupHandshake,
       groupControl: groupControl,
+      ohUpdate: ohUpdate,
     );
   }
 

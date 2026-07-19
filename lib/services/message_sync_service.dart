@@ -33,6 +33,8 @@ class MessageSyncService {
   StreamSubscription<ChannelAckUpdate>? _channelAckSub;
   StreamSubscription<List<NodeScore>>? _nodeScoreSub;
   StreamSubscription<GroupStateUpdate>? _groupStateSub;
+  StreamSubscription<OHRegistration>? _ohRegistrationSub;
+  StreamSubscription<PeerOhUpdate>? _peerOhSub;
 
   /// Serializes ratchet-state DB writes so they are applied in emission
   /// order — a slow earlier write must not overwrite a newer state.
@@ -122,6 +124,23 @@ class MessageSyncService {
             ),
           );
     });
+    _ohRegistrationSub ??= _client.ohRegistrationUpdates.listen(
+      (registration) => unawaited(
+        handleOhRegistrationUpdate(registration).catchError(
+          (Object e) => debugPrint(
+            'MessageSyncService: failed to persist failover handle: $e',
+          ),
+        ),
+      ),
+    );
+    _peerOhSub ??= _client.peerOhUpdates.listen(
+      (update) => unawaited(
+        handlePeerOhUpdate(update).catchError(
+          (Object e) =>
+              debugPrint('MessageSyncService: failed to persist peer OH: $e'),
+        ),
+      ),
+    );
     _groupStateSub ??= _client.groupStateUpdates.listen((update) {
       _groupStatePersistPending = _groupStatePersistPending
           .then((_) => _groups.applyStateUpdate(update))
@@ -142,6 +161,8 @@ class MessageSyncService {
     await _channelAckSub?.cancel();
     await _nodeScoreSub?.cancel();
     await _groupStateSub?.cancel();
+    await _ohRegistrationSub?.cancel();
+    await _peerOhSub?.cancel();
     _messageSub = null;
     _updateSub = null;
     _ratchetSub = null;
@@ -150,6 +171,8 @@ class MessageSyncService {
     _channelAckSub = null;
     _nodeScoreSub = null;
     _groupStateSub = null;
+    _ohRegistrationSub = null;
+    _peerOhSub = null;
   }
 
   /// Persists a fetched message unless it was already stored (dedup via
@@ -183,6 +206,28 @@ class MessageSyncService {
     if (update.mailboxOverflow && !_overflowController.isClosed) {
       _overflowController.add(update);
     }
+  }
+
+  /// Replaces the channel's persisted own-OH row after an automatic OH
+  /// failover (T21) so the new mailbox survives an app restart. The old row
+  /// is deleted — its mailbox lives on the dead node.
+  Future<void> handleOhRegistrationUpdate(OHRegistration registration) async {
+    if (registration.serverEndpoint == null) return;
+    await _outboundHandles.replaceForChannel(registration);
+  }
+
+  /// Persists the partner's new mailbox descriptor announced in-band via
+  /// `oh_update` (T21) so sends keep reaching the partner after a restart.
+  Future<void> handlePeerOhUpdate(PeerOhUpdate update) async {
+    await (_db.update(
+      _db.channels,
+    )..where((c) => c.uuid.equals(update.channelId))).write(
+      ChannelsCompanion(
+        peerOhEndpoint: Value(update.descriptor.serverEndpoint),
+        peerOhId: Value(HEX.encode(update.descriptor.handleId)),
+        peerOhPublicKey: Value(HEX.encode(update.descriptor.authPublicKey)),
+      ),
+    );
   }
 
   /// Persists advanced ratchet state (MS03b) so the channel ratchet

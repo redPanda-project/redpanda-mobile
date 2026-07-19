@@ -9,6 +9,7 @@ import 'package:redpanda_light_client/src/domain/loopback_result.dart';
 import 'package:redpanda_light_client/src/domain/oh_fetch_status.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
+import 'package:redpanda_light_client/src/domain/peer_oh_update.dart';
 import 'package:redpanda_light_client/src/domain/routing_ack.dart';
 import 'package:redpanda_light_client/src/garlic/node_scorer.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
@@ -141,6 +142,12 @@ class MockRedPandaClient implements RedPandaClient {
 
   @override
   void onResume() {}
+
+  @override
+  Stream<OHRegistration> get ohRegistrationUpdates => const Stream.empty();
+
+  @override
+  Stream<PeerOhUpdate> get peerOhUpdates => const Stream.empty();
 
   @override
   void addChannelKeys(
