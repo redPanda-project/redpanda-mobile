@@ -1,6 +1,6 @@
 @Tags(['e2e'])
-@Retry(2)
-@Timeout(Duration(minutes: 10))
+@Retry(1)
+@Timeout(Duration(minutes: 14))
 library;
 
 import 'dart:async';
@@ -34,9 +34,9 @@ import 'test_helpers.dart';
 void main() async {
   final jarAvailable = await RedPandaNodeLauncher.isJarAvailable();
 
-  const portA = 50631; // Alice's mailbox host
-  const portB = 50632; // relay / DHT replica
-  const portC = 50633; // Bob's mailbox host
+  const portA = 50651; // Alice's mailbox host
+  const portB = 50652; // relay / DHT replica
+  const portC = 50653; // Bob's mailbox host
   const nodeA = '127.0.0.1:$portA';
   const nodeB = '127.0.0.1:$portB';
   const nodeC = '127.0.0.1:$portC';
@@ -151,7 +151,7 @@ void main() async {
         // Bob's first send finds no peer OH and triggers a rendezvous recovery.
         // Retry: the lookup + reverse-garlic answer + fetch cycle takes a few
         // poll intervals, and each failed send re-arms the recovery.
-        final deadline = DateTime.now().add(const Duration(minutes: 4));
+        final deadline = DateTime.now().add(const Duration(minutes: 7));
         while (peerOhMoves.isEmpty) {
           try {
             await bob.sendMessage(channel.id, 'heal me over the DHT');

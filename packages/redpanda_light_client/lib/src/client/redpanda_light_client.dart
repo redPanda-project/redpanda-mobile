@@ -2627,6 +2627,9 @@ class RedPandaLightClient implements RedPandaClient {
     final descriptors = _ownDescriptorsFor(channelId);
     if (descriptors.isEmpty) return;
     if (!_rendezvous.setOwnOhs(channelId, descriptors)) return;
+    // Force a republish of the changed set (drop any prior publish stamp so
+    // the poll-cycle retry also kicks in should this attempt find no hops).
+    _lastRendezvousPublish.remove(channelId);
     await _publishRendezvous(channelId);
   }
 
@@ -2655,6 +2658,10 @@ class RedPandaLightClient implements RedPandaClient {
         kademliaStore: store,
       );
       submitVia.sendCommand(142, packet);
+      // Mark as published only on an actual send with hops — otherwise the
+      // poll cycle keeps retrying until garlic hops become available (the
+      // publish-on-registration can race ahead of hop discovery).
+      _lastRendezvousPublish[channelId] = DateTime.now();
       RpLog.debug(
         'RedPandaLightClient: published rendezvous record for $channelId over '
         '${hops.length} hops',
@@ -4525,14 +4532,24 @@ class RedPandaLightClient implements RedPandaClient {
       _recordLookupTags.remove(tagHex);
       return true;
     });
-    const interval = Duration(hours: 20);
     for (final channelId in _rendezvous.channels.toList()) {
       final last = _lastRendezvousPublish[channelId];
-      if (last != null && now.difference(last) < interval) continue;
-      _lastRendezvousPublish[channelId] = now;
+      // Never-published channels (hops not yet ready at registration) retry
+      // every call; published ones refresh at [_rendezvousRepublishInterval].
+      // record_store is a cheap, best-effort single packet with no ack, so a
+      // dropped store (e.g. a transient "no route" before the graph settles)
+      // is only recovered by republishing — the interval is short enough to
+      // heal such losses well within the 48 h record TTL.
+      if (last != null && now.difference(last) < _rendezvousRepublishInterval) {
+        continue;
+      }
+      // _publishRendezvous stamps _lastRendezvousPublish only on a real send.
       unawaited(_publishRendezvous(channelId));
     }
   }
+
+  /// How often an unchanged rendezvous record is refreshed into the DHT.
+  static const Duration _rendezvousRepublishInterval = Duration(minutes: 3);
 
   final Map<String, DateTime> _lastRendezvousPublish = {};
 
@@ -4607,6 +4624,9 @@ class RedPandaLightClient implements RedPandaClient {
           _emitFetchStatus(oh, false, 'error: $e');
         }
       }
+      // T44: (re)publish rendezvous records that are due or that never got a
+      // publish through (e.g. no garlic hops were known at registration time).
+      _republishDueRendezvousRecords();
       // T21: re-send pending failover announcements until their send
       // budget is used up.
       for (final channelId in List.of(_pendingOhUpdates.keys)) {
