@@ -15,8 +15,10 @@ import 'package:redpanda_light_client/src/models/node_id.dart';
 ///
 /// Same plaintext ScriptedSocket harness as the T38/T21 suites.
 class ScriptedSocket implements Socket {
+  final _done = Completer<void>();
+
   @override
-  Future<void> get done => Completer<void>().future;
+  Future<void> get done => _done.future;
 
   final _incoming = StreamController<Uint8List>();
   final List<int> _outBuffer = [];
@@ -105,11 +107,13 @@ class ScriptedSocket implements Socket {
   @override
   void destroy() {
     _incoming.close();
+    if (!_done.isCompleted) _done.complete();
   }
 
   @override
   Future<void> close() async {
     _incoming.close();
+    if (!_done.isCompleted) _done.complete();
   }
 
   @override
