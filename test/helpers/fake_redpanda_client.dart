@@ -171,6 +171,8 @@ class FakeRedPandaClient implements RedPandaClient {
     await routingAckController.close();
     await channelAckController.close();
     await nodeScoreController.close();
+    await ohRegistrationController.close();
+    await peerOhUpdateController.close();
   }
 
   @override
