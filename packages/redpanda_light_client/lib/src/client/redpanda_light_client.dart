@@ -109,6 +109,18 @@ class RedPandaLightClient implements RedPandaClient {
   /// before falling back to fire-and-forget semantics. Overridable for tests.
   final Duration depositResponseTimeout;
 
+  /// How long fetchMessages waits for the fetch response (command 153).
+  /// Overridable for tests.
+  final Duration fetchResponseTimeout;
+
+  /// After this many consecutive fetch timeouts on the SAME connection the
+  /// connection is torn down and redialed immediately (T33): fetches that
+  /// time out repeatedly while the socket looks connected are the signature
+  /// of a half-open TCP connection (seen after emulator kill/restart —
+  /// the node never sees the requests), and every further request into the
+  /// dead socket costs a full timeout instead of a reconnect.
+  static const int forceReconnectFetchTimeoutThreshold = 2;
+
   /// Number of garlic relay hops sendMessage aims for (MS04).
   static const int defaultHopCount = 3;
 
@@ -180,6 +192,7 @@ class RedPandaLightClient implements RedPandaClient {
     // Injectable repository for testing? For now we create it.
     PeerRepository? peerRepository,
     this.depositResponseTimeout = const Duration(seconds: 10),
+    this.fetchResponseTimeout = const Duration(seconds: 10),
     // Extra predicate for garlic hop candidates (tests pin local nodes).
     bool Function(PeerStats peer)? hopCandidateFilter,
   }) : _socketFactory =
@@ -632,6 +645,28 @@ class RedPandaLightClient implements RedPandaClient {
     if (seconds > 30) seconds = 30;
 
     _nextRetryTime[address] = DateTime.now().add(Duration(seconds: seconds));
+  }
+
+  /// Tears down a suspected half-open connection and redials immediately
+  /// (T33). Without this, every fetch into the dead socket costs a full
+  /// [fetchResponseTimeout] and reconnect only happens once the OS notices
+  /// the peer is gone — after an emulator kill/restart that took ~3 timeout
+  /// cycles (~33 s) and pushed the S3 catch-up over its 60 s budget.
+  Future<void> _forceReconnect(ActivePeer peer) async {
+    RpLog.info(
+      'RedPandaLightClient: ${peer.consecutiveFetchTimeouts} consecutive '
+      'fetch timeouts on ${peer.address} — dropping suspected half-open '
+      'connection and redialing',
+    );
+    // Intentional: the node is not proven bad, the CONNECTION is — do not
+    // score a failure against the address.
+    _intentionalDisconnects.add(peer.address);
+    await peer.disconnect();
+    // The disconnect callback applies the regular retry backoff; clear it so
+    // the redial happens on this connection check, not seconds later.
+    _nextRetryTime.remove(peer.address);
+    _retryCounts.remove(peer.address);
+    await _runConnectionCheck();
   }
 
   Future<Set<String>> _resolveConnectedIps() async {
@@ -2529,9 +2564,8 @@ class RedPandaLightClient implements RedPandaClient {
     // Await the response
     final List<int> responseBytes;
     try {
-      responseBytes = await completer.future.timeout(
-        const Duration(seconds: 10),
-      );
+      responseBytes = await completer.future.timeout(fetchResponseTimeout);
+      activePeer.consecutiveFetchTimeouts = 0;
     } on TimeoutException {
       _pendingResponses.remove(153);
       RpLog.info(
@@ -2540,6 +2574,11 @@ class RedPandaLightClient implements RedPandaClient {
       _emitFetchStatus(oh, false, 'timeout');
       if (oh.serverEndpoint != null) {
         _noteHostUnreachable(oh);
+      }
+      activePeer.consecutiveFetchTimeouts++;
+      if (activePeer.consecutiveFetchTimeouts >=
+          forceReconnectFetchTimeoutThreshold) {
+        await _forceReconnect(activePeer);
       }
       return [];
     }

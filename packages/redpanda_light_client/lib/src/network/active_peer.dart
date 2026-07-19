@@ -72,6 +72,12 @@ class ActivePeer {
   /// KademliaId (hex) of this peer, set once its public key was received.
   String? discoveredNodeId;
 
+  /// Consecutive fetch timeouts on THIS connection (T33), maintained by the
+  /// client: incremented per fetch timeout, reset on any fetch response. A
+  /// fresh connection starts at 0 by construction — the counter must never
+  /// survive a reconnect.
+  int consecutiveFetchTimeouts = 0;
+
   /// Callback for OH response commands (151, 153, 157, 158) and the
   /// Connection-Notify inbound commands (160 SubscribeRes, 161 Notify).
   void Function(int command, List<int> payload)? onCommandResponse;
