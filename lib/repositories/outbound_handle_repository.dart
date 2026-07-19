@@ -16,11 +16,15 @@ class OutboundHandleRepository {
   OutboundHandleRepository(this._db);
 
   /// The newest still-valid own OH for [channelId] (T42: a channel can hold
-  /// more than one own mailbox now, so this returns the freshest instead of
-  /// asserting a single row).
+  /// more than one own mailbox now, so this returns the freshest non-expired
+  /// row instead of asserting a single row).
   Future<db.OutboundHandle?> getByChannelId(String channelId) {
     return (_db.select(_db.outboundHandles)
-          ..where((t) => t.channelId.equals(channelId))
+          ..where(
+            (t) =>
+                t.channelId.equals(channelId) &
+                t.expiresAt.isBiggerThanValue(DateTime.now()),
+          )
           ..orderBy([(t) => drift.OrderingTerm.desc(t.expiresAt)])
           ..limit(1))
         .getSingleOrNull();
@@ -89,25 +93,34 @@ class OutboundHandleRepository {
 
   /// Syncs the channel's persisted own-OH rows to exactly [registrations]
   /// (T42 multi-OH): dead mailboxes after a failover are dropped, redundancy
-  /// top-ups are added. Rows are stamped with [OutboundHandles.failedOverAt]
-  /// so the channel status page can surface the move; a row that already
-  /// existed keeps its original marker/cursor is re-derived from the
-  /// registration (the worker carries the live cursor).
+  /// top-ups are added. A row that already existed (same OH id) keeps its
+  /// original [OutboundHandles.failedOverAt] marker; brand-new rows are NOT
+  /// stamped as failed-over — a redundancy top-up or the very first mailbox is
+  /// a normal registration, not a failover, so the channel status page must
+  /// not mislabel it.
   Future<void> replaceAllForChannel(
     String channelId,
     List<OHRegistration> registrations,
   ) async {
     await _db.transaction(() async {
+      final existing = await (_db.select(
+        _db.outboundHandles,
+      )..where((t) => t.channelId.equals(channelId))).get();
+      final failedOverByOhId = {
+        for (final row in existing)
+          if (row.failedOverAt != null) row.ohId: row.failedOverAt!,
+      };
       await (_db.delete(
         _db.outboundHandles,
       )..where((t) => t.channelId.equals(channelId))).go();
       for (final registration in registrations) {
         if (registration.serverEndpoint == null) continue;
+        final ohIdHex = HEX.encode(registration.ohId);
         await _db
             .into(_db.outboundHandles)
             .insert(
               db.OutboundHandlesCompanion.insert(
-                ohId: HEX.encode(registration.ohId),
+                ohId: ohIdHex,
                 keypairBytes: registration.keypair.privateKeyBytes,
                 serverEndpoint: registration.serverEndpoint!,
                 expiresAt: DateTime.fromMillisecondsSinceEpoch(
@@ -115,7 +128,7 @@ class OutboundHandleRepository {
                 ),
                 channelId: drift.Value(channelId),
                 lastCursor: drift.Value(registration.lastCursor),
-                failedOverAt: drift.Value(DateTime.now()),
+                failedOverAt: drift.Value(failedOverByOhId[ohIdHex]),
               ),
             );
       }
