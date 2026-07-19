@@ -137,6 +137,12 @@ class MockRedPandaClient implements RedPandaClient {
   Stream<OhFetchStatus> get ohFetchStatus => const Stream.empty();
 
   @override
+  void onPause() {}
+
+  @override
+  void onResume() {}
+
+  @override
   void addChannelKeys(
     String channelId,
     List<int> encryptionKey, {

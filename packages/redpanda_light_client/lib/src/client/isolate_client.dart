@@ -841,11 +841,13 @@ class RedPandaIsolateClient implements RedPandaClient {
       _groupHandshakeController.stream;
 
   // Lifecycle hooks proxied
+  @override
   void onPause() {
     _lifecyclePaused = true;
     _send(CmdLifecyclePause());
   }
 
+  @override
   void onResume() {
     _lifecyclePaused = false;
     _send(CmdLifecycleResume());

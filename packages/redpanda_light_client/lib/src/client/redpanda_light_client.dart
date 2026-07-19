@@ -204,6 +204,7 @@ class RedPandaLightClient implements RedPandaClient {
   }
 
   /// Called when app goes to background
+  @override
   void onPause() {
     // _isBackgrounded = true;
     _peerRepository.save();
@@ -216,6 +217,7 @@ class RedPandaLightClient implements RedPandaClient {
   }
 
   /// Called when app resumes
+  @override
   void onResume() {
     // _isBackgrounded = false;
     _isBadInternetDetected = false; // transform optimism
@@ -225,6 +227,14 @@ class RedPandaLightClient implements RedPandaClient {
       (_) => _runConnectionCheck(),
     );
     _runConnectionCheck(); // Immediate
+    // T26 (iOS foreground-only reception): catch up NOW instead of on the
+    // next poll tick — a resume is chat activity (fast cadence for the
+    // activity window) and the first mailbox fetch is pulled forward, so
+    // messages that arrived while suspended show up within seconds.
+    if (_pollingEnabled) {
+      _notePollActivity();
+      _schedulePoll(const Duration(seconds: 1));
+    }
   }
 
   @override

@@ -126,15 +126,16 @@ class _MyAppState extends ConsumerState<MyApp> {
   late final AppLifecycleListener _lifecycleListener;
 
   void _onStateChanged(AppLifecycleState state) {
-    // Only works if client is actually RedPandaLightClient
+    // T26: onPause/onResume are part of the RedPandaClient facade — the old
+    // `is RedPandaLightClient` type check never matched the production
+    // isolate client, so lifecycle signals silently never reached the
+    // network worker (iOS resume waited for the next poll tick).
     final client = ref.read(redPandaClientProvider);
-    if (client is RedPandaLightClient) {
-      if (state == AppLifecycleState.paused ||
-          state == AppLifecycleState.detached) {
-        client.onPause();
-      } else if (state == AppLifecycleState.resumed) {
-        client.onResume();
-      }
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      client.onPause();
+    } else if (state == AppLifecycleState.resumed) {
+      client.onResume();
     }
   }
 
