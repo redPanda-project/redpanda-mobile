@@ -178,6 +178,20 @@ class FakeRedPandaClient implements RedPandaClient {
   @override
   Future<void> addPeer(String address) async {}
 
+  /// Lifecycle signal counters (T26).
+  int pauseCount = 0;
+  int resumeCount = 0;
+
+  @override
+  void onPause() {
+    pauseCount++;
+  }
+
+  @override
+  void onResume() {
+    resumeCount++;
+  }
+
   /// When set, [registerOutboundHandle] returns a registration built by
   /// this factory (MS08 group tests); otherwise it throws.
   Future<OHRegistration> Function(String? channelId)? ohRegistrationFactory;

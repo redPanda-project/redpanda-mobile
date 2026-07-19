@@ -138,6 +138,12 @@ class MockRedPandaClient implements RedPandaClient {
   Stream<OhFetchStatus> get ohFetchStatus => const Stream.empty();
 
   @override
+  void onPause() {}
+
+  @override
+  void onResume() {}
+
+  @override
   Stream<OHRegistration> get ohRegistrationUpdates => const Stream.empty();
 
   @override

@@ -27,6 +27,18 @@ abstract class RedPandaClient {
   /// Disconnects from the network.
   Future<void> disconnect();
 
+  /// App went to background: persist peer state and slow the connection
+  /// maintenance down. Part of the facade (T26) so the app's lifecycle
+  /// listener reaches the production isolate client too — a type check on
+  /// the concrete class silently dropped these signals before.
+  void onPause();
+
+  /// App returned to foreground: resume fast connection maintenance AND
+  /// catch up immediately (T26, iOS foreground-only reception) — an instant
+  /// reconnect check plus an immediate mailbox poll instead of waiting for
+  /// the next 5–30 s tick. Target: messages visible ≤10 s after opening.
+  void onResume();
+
   /// Sends a message to a channel identified by [channelId].
   /// The content is encrypted with the channel's encryption key.
   ///
