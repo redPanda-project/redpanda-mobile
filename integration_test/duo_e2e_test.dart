@@ -6,8 +6,10 @@
 //     build/linux/x64/debug/bundle/redpanda
 //
 // The processes coordinate through the rendezvous directory:
-//   alice_qr.json    Alice's channel QR JSON (incl. her OH descriptor)
-//   bob_qr.json      Bob's QR JSON from the chat share dialog (incl. his OH)
+//   alice_qr.json    Alice's QR v4 JSON (channel secret only, no OH)
+//   alice_oh.json    Alice's OH descriptor, exchanged out of band (stands in
+//                    for the rendezvous DHT that carries it in production)
+//   bob_qr.json / bob_oh.json   the same for Bob
 //   alice_result.json / bob_result.json   final verdict per role
 //
 // Everything runs through the real UI except the QR *scan* itself (desktop

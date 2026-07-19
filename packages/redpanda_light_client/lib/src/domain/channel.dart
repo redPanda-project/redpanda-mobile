@@ -119,22 +119,42 @@ class Channel extends Equatable {
   /// "QR v3 is invalid without replacement"): the peers must re-pair with a
   /// fresh v4 code from an updated app.
   static Future<Channel> fromJson(String jsonStr) async {
-    final Map<String, dynamic> map = jsonDecode(jsonStr);
-    final version = map['v'] as int?;
+    final dynamic decoded;
+    try {
+      decoded = jsonDecode(jsonStr);
+    } on FormatException {
+      rethrow;
+    }
+    if (decoded is! Map<String, dynamic>) {
+      throw const FormatException('channel code is not a JSON object');
+    }
+    final version = decoded['v'];
     if (version != qrVersion) {
       throw FormatException(
         'Unsupported channel version: $version (this app requires v$qrVersion '
         'codes; re-pair with a fresh QR code from an updated app)',
       );
     }
-    final channelSecret = HEX.decode(map['sk'] as String);
+    final sk = decoded['sk'];
+    final label = decoded['l'];
+    if (sk is! String || label is! String) {
+      throw const FormatException('channel code is missing "sk"/"l" strings');
+    }
+    final List<int> channelSecret;
+    try {
+      channelSecret = HEX.decode(sk);
+    } on FormatException {
+      rethrow;
+    } catch (_) {
+      throw const FormatException('channel_sk is not valid hex');
+    }
     if (channelSecret.length != 32) {
       throw FormatException(
         'Invalid channel_sk length: expected 32 bytes, '
         'got ${channelSecret.length}',
       );
     }
-    return fromSecret(map['l'] as String, channelSecret, isCreator: false);
+    return fromSecret(label, channelSecret, isCreator: false);
   }
 
   /// The channel identity public key (`channel_pk`).

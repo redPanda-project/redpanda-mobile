@@ -1,3 +1,4 @@
+import 'package:crypto/crypto.dart';
 import 'package:hex/hex.dart';
 import 'package:redpanda_light_client/src/crypto/channel_rendezvous.dart';
 import 'package:test/test.dart';
@@ -61,12 +62,33 @@ void main() {
 
     test('channel id is SHA256(channel_pk)', () async {
       final channel = await Channel.generate('Id');
-      // Recomputed from the public key alone.
-      final expected = HEX.encode(
-        (await Channel.fromJson(channel.toJson())).authPublicKey,
+      final expectedId = HEX.encode(
+        sha256.convert(channel.channelPublicKey).bytes,
       );
-      expect(channel.authPublicKey, HEX.decode(expected));
+      expect(channel.id, expectedId);
+      // The joiner derives the identical id from the QR alone.
+      final joiner = await Channel.fromJson(channel.toJson());
+      expect(joiner.id, expectedId);
     });
+
+    test(
+      'malformed QR payloads throw FormatException, not TypeError',
+      () async {
+        for (final bad in <String>[
+          'not json',
+          '[]',
+          '{"v":4}', // missing sk/l
+          '{"v":4,"l":"x","sk":123}', // sk not a string
+          '{"v":4,"l":"x","sk":"zz"}', // sk not hex
+        ]) {
+          await expectLater(
+            Channel.fromJson(bad),
+            throwsA(isA<FormatException>()),
+            reason: 'payload: $bad',
+          );
+        }
+      },
+    );
 
     test('creator and joiner get distinct, opposite participant ids', () async {
       final creator = await Channel.generate('P');

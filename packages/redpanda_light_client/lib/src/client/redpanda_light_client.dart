@@ -1186,6 +1186,14 @@ class RedPandaLightClient implements RedPandaClient {
         isCreator: isChannelCreator,
         ownName: ownDisplayName ?? '',
       );
+    } else if (channelSecret != null) {
+      // A non-null but wrong-length secret silently disables rendezvous for
+      // this channel — surface it so a wiring bug (e.g. mis-sized bytes) is
+      // visible instead of a channel that quietly can't heal over the DHT.
+      RpLog.info(
+        'RedPandaLightClient: ignoring channelSecret for $channelId — '
+        'expected 32 bytes, got ${channelSecret.length}; rendezvous disabled',
+      );
     }
     // T42: restore the full persisted peer OH set first (multi-OH), then seed
     // the primary. Both are applied only when nothing richer is live yet —
@@ -4520,10 +4528,11 @@ class RedPandaLightClient implements RedPandaClient {
     });
   }
 
-  /// T44: republishes each channel's rendezvous record at most once per
-  /// ~24 h (records rotate under the UTC-day key and expire after 48 h). A
-  /// change-driven publish (`_publishRendezvousIfChanged`) refreshes the
-  /// timestamp too, so this only covers idle channels.
+  /// T44: republishes each channel's rendezvous record every
+  /// [_rendezvousRepublishInterval] (records rotate under the UTC-day key and
+  /// expire after 48 h; the short interval also heals a dropped best-effort
+  /// store). A change-driven publish (`_publishRendezvousIfChanged`) refreshes
+  /// the timestamp too, so this covers idle channels and never-published ones.
   void _republishDueRendezvousRecords() {
     final now = DateTime.now();
     // Evict record-lookup ack tags whose answer never arrived (a lost packet).

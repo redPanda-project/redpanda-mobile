@@ -28,10 +28,14 @@ void main() {
 
   test('setOwnOhs reports changes (publish trigger)', () {
     final m = creator();
-    expect(m.setOwnOhs(chan, [_oh('1.1.1.1:59558')]), isTrue);
-    // Same set again → no change.
-    final same = m.channelSecretOf(chan);
-    expect(same, isNotNull);
+    final oh = _oh('1.1.1.1:59558');
+    expect(m.setOwnOhs(chan, [oh]), isTrue);
+    // The identical set again is not a change (no spurious republish).
+    expect(m.setOwnOhs(chan, [oh]), isFalse);
+    // A different set is a change again.
+    expect(m.setOwnOhs(chan, [oh, _oh('2.2.2.2:59558')]), isTrue);
+    // Unknown channel never reports a change.
+    expect(m.setOwnOhs('other', [oh]), isFalse);
   });
 
   test(
