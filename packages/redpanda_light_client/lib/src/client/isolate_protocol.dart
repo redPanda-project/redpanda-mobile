@@ -428,6 +428,42 @@ class EventOhFetchStatus extends IsolateEvent {
   });
 }
 
+/// Replacement OH registration created by the worker itself (T21 OH
+/// failover). The keypair travels as its private key bytes (in-process
+/// isolate message, never leaves the device); the main isolate rebuilds the
+/// [OHRegistration] and replaces the channel's persisted own-OH row.
+class EventOhRegistrationUpdate extends IsolateEvent {
+  final List<int> ohId;
+  final List<int> keypairPrivateBytes;
+  final int expiresAtMs;
+  final String? channelId;
+  final String? serverEndpoint;
+  final int lastCursor;
+  EventOhRegistrationUpdate({
+    required this.ohId,
+    required this.keypairPrivateBytes,
+    required this.expiresAtMs,
+    this.channelId,
+    this.serverEndpoint,
+    this.lastCursor = 0,
+  });
+}
+
+/// Authenticated in-band peer mailbox move (T21 `oh_update`) forwarded from
+/// the isolate so the main isolate can persist the new peer OH descriptor.
+class EventPeerOhUpdate extends IsolateEvent {
+  final String channelId;
+  final String serverEndpoint;
+  final List<int> ohId;
+  final List<int> authPublicKey;
+  EventPeerOhUpdate({
+    required this.channelId,
+    required this.serverEndpoint,
+    required this.ohId,
+    required this.authPublicKey,
+  });
+}
+
 /// OH state change (cursor advanced, renewal, mailbox overflow) forwarded
 /// from the isolate so the main isolate can persist cursor/expiry.
 class EventOhMailboxUpdate extends IsolateEvent {

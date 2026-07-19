@@ -7,6 +7,7 @@ import 'package:redpanda_light_client/src/domain/oh_fetch_status.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/loopback_result.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
+import 'package:redpanda_light_client/src/domain/peer_oh_update.dart';
 import 'package:redpanda_light_client/src/domain/routing_ack.dart';
 import 'package:redpanda_light_client/src/garlic/node_scorer.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
@@ -92,6 +93,18 @@ abstract class RedPandaClient {
   /// empty polls). Purely informational — the app layer uses it to display
   /// per-channel health ("mailbox last checked …"); nothing is persisted.
   Stream<OhFetchStatus> get ohFetchStatus;
+
+  /// Replacement OH registrations created by the client itself (T21 OH
+  /// failover: the old host node was unreachable for several fetch cycles
+  /// while other nodes were fine). The app layer must REPLACE the channel's
+  /// persisted own-OH row with this registration — the old mailbox is dead.
+  Stream<OHRegistration> get ohRegistrationUpdates;
+
+  /// Authenticated in-band announcements that the channel partner moved
+  /// their mailbox (T21 `oh_update`). The client already routes new sends to
+  /// the new mailbox; the app layer must persist the descriptor so the
+  /// switch survives an app restart.
+  Stream<PeerOhUpdate> get peerOhUpdates;
 
   /// Registers channel encryption keys so [sendMessage] can encrypt outgoing
   /// messages for [channelId]. Optionally associates a peer OH ID for routing.

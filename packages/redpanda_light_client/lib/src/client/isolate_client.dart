@@ -18,7 +18,9 @@ import 'package:redpanda_light_client/src/domain/group_state.dart';
 import 'package:redpanda_light_client/src/domain/loopback_result.dart';
 import 'package:redpanda_light_client/src/domain/oh_fetch_status.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
+import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
+import 'package:redpanda_light_client/src/domain/peer_oh_update.dart';
 import 'package:redpanda_light_client/src/domain/routing_ack.dart';
 import 'package:redpanda_light_client/src/domain/send_exceptions.dart';
 import 'package:redpanda_light_client/src/garlic/node_scorer.dart';
@@ -86,6 +88,11 @@ class RedPandaIsolateClient implements RedPandaClient {
       StreamController<OhMailboxUpdate>.broadcast();
 
   final _ohFetchStatusController = StreamController<OhFetchStatus>.broadcast();
+
+  final _ohRegistrationController =
+      StreamController<OHRegistration>.broadcast();
+
+  final _peerOhUpdateController = StreamController<PeerOhUpdate>.broadcast();
 
   final _ratchetStateController =
       StreamController<RatchetStateUpdate>.broadcast();
@@ -434,6 +441,42 @@ class RedPandaIsolateClient implements RedPandaClient {
           mailboxOverflow: event.mailboxOverflow,
         ),
       );
+    } else if (event is EventOhRegistrationUpdate) {
+      // T21 failover: the worker replaced a channel's own OH. Replace the
+      // replay entry too — a respawned worker must restore the NEW handle,
+      // not the dead one.
+      final channelId = event.channelId;
+      if (channelId != null) {
+        _ohReplay.removeWhere((_, cmd) => cmd.channelId == channelId);
+      }
+      _ohReplay[HEX.encode(event.ohId)] = CmdRestoreOutboundHandle(
+        ohId: event.ohId,
+        privateKeyBytes: event.keypairPrivateBytes,
+        expiresAtMs: event.expiresAtMs,
+        channelId: event.channelId,
+        serverEndpoint: event.serverEndpoint,
+        lastCursor: event.lastCursor,
+      );
+      unawaited(_emitOhRegistration(event));
+    } else if (event is EventPeerOhUpdate) {
+      // T21: the partner moved their mailbox — keep the replay cache in sync
+      // so a respawned worker sends to the new mailbox.
+      _patchChannelReplay(
+        event.channelId,
+        peerOhId: event.ohId,
+        peerOhEndpoint: event.serverEndpoint,
+        patchPeerOh: true,
+      );
+      _peerOhUpdateController.add(
+        PeerOhUpdate(
+          channelId: event.channelId,
+          descriptor: OHDescriptor(
+            serverEndpoint: event.serverEndpoint,
+            handleId: event.ohId,
+            authPublicKey: event.authPublicKey,
+          ),
+        ),
+      );
     } else if (event is EventRatchetStateUpdate) {
       _patchChannelReplay(event.channelId, ratchetState: event.stateJson);
       _ratchetStateController.add(
@@ -490,22 +533,26 @@ class RedPandaIsolateClient implements RedPandaClient {
   }
 
   /// Updates the cached [CmdAddChannelKeys] for [channelId] with newer
-  /// ratchet or garlic state, so a worker respawn never replays stale
-  /// crypto state (which would break the ratchet chain).
+  /// ratchet, garlic or peer-OH state, so a worker respawn never replays
+  /// stale state (which would break the ratchet chain or resurrect a dead
+  /// peer mailbox).
   void _patchChannelReplay(
     String channelId, {
     String? ratchetState,
     Map<String, int>? sessionTags,
     String? pendingRgbHex,
     bool patchGarlic = false,
+    List<int>? peerOhId,
+    String? peerOhEndpoint,
+    bool patchPeerOh = false,
   }) {
     final old = _channelReplay[channelId];
     if (old == null) return;
     _channelReplay[channelId] = CmdAddChannelKeys(
       old.channelId,
       old.encryptionKey,
-      peerOhId: old.peerOhId,
-      peerOhEndpoint: old.peerOhEndpoint,
+      peerOhId: patchPeerOh ? peerOhId : old.peerOhId,
+      peerOhEndpoint: patchPeerOh ? peerOhEndpoint : old.peerOhEndpoint,
       isChannelCreator: old.isChannelCreator,
       ratchetState: ratchetState ?? old.ratchetState,
       // A garlic update is an authoritative snapshot: pendingRgbHex may
@@ -513,6 +560,30 @@ class RedPandaIsolateClient implements RedPandaClient {
       sessionTags: patchGarlic ? sessionTags : old.sessionTags,
       pendingRgbHex: patchGarlic ? pendingRgbHex : old.pendingRgbHex,
     );
+  }
+
+  /// Rebuilds the [OHRegistration] carried by a failover event (async — the
+  /// keypair reconstruction is async) and forwards it to the app layer.
+  Future<void> _emitOhRegistration(EventOhRegistrationUpdate event) async {
+    try {
+      final registration = OHRegistration(
+        ohId: event.ohId,
+        keypair: await OHKeypair.fromPrivateKeyBytes(
+          Uint8List.fromList(event.keypairPrivateBytes),
+        ),
+        expiresAtMs: event.expiresAtMs,
+        channelId: event.channelId,
+        serverEndpoint: event.serverEndpoint,
+        lastCursor: event.lastCursor,
+      );
+      if (!_ohRegistrationController.isClosed) {
+        _ohRegistrationController.add(registration);
+      }
+    } catch (e) {
+      RpLog.info(
+        'RedPandaIsolateClient: failed to rebuild failover registration: $e',
+      );
+    }
   }
 
   void _send(IsolateCommand cmd) {
@@ -676,6 +747,13 @@ class RedPandaIsolateClient implements RedPandaClient {
 
   @override
   Stream<OhFetchStatus> get ohFetchStatus => _ohFetchStatusController.stream;
+
+  @override
+  Stream<OHRegistration> get ohRegistrationUpdates =>
+      _ohRegistrationController.stream;
+
+  @override
+  Stream<PeerOhUpdate> get peerOhUpdates => _peerOhUpdateController.stream;
 
   /// Register channel encryption keys in the isolate client.
   @override
@@ -951,6 +1029,30 @@ void _runWorker(SendPort mainSendPort) {
             lastCursor: update.lastCursor,
             expiresAtMs: update.expiresAtMs,
             mailboxOverflow: update.mailboxOverflow,
+          ),
+        );
+      });
+
+      // Forward failover registrations + peer mailbox moves (T21)
+      client!.ohRegistrationUpdates.listen((registration) {
+        mainSendPort.send(
+          EventOhRegistrationUpdate(
+            ohId: registration.ohId,
+            keypairPrivateBytes: registration.keypair.privateKeyBytes.toList(),
+            expiresAtMs: registration.expiresAtMs,
+            channelId: registration.channelId,
+            serverEndpoint: registration.serverEndpoint,
+            lastCursor: registration.lastCursor,
+          ),
+        );
+      });
+      client!.peerOhUpdates.listen((update) {
+        mainSendPort.send(
+          EventPeerOhUpdate(
+            channelId: update.channelId,
+            serverEndpoint: update.descriptor.serverEndpoint,
+            ohId: update.descriptor.handleId,
+            authPublicKey: update.descriptor.authPublicKey,
           ),
         );
       });

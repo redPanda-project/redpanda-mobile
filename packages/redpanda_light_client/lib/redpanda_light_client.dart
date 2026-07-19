@@ -33,6 +33,7 @@ export 'src/domain/oh_descriptor.dart';
 export 'src/domain/oh_registration.dart';
 export 'src/domain/oh_fetch_status.dart';
 export 'src/domain/oh_mailbox_update.dart';
+export 'src/domain/peer_oh_update.dart';
 export 'src/domain/decrypted_message.dart';
 export 'src/domain/reverse_garlic_block.dart';
 export 'src/domain/routing_ack.dart';
