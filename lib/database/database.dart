@@ -226,6 +226,11 @@ class OutboundHandles extends Table {
   // Highest acknowledged mailbox sequence id; fetches resume from here
   // after an app restart so old messages are not fetched again.
   IntColumn get lastCursor => integer().withDefault(const Constant(0))();
+
+  // T21: set when this handle was created by an automatic OH failover
+  // (the previous host node was unreachable). Surfaced on the channel
+  // status page.
+  DateTimeColumn get failedOverAt => dateTime().nullable()();
 }
 
 @DriftDatabase(
@@ -251,7 +256,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 14;
+  int get schemaVersion => 15;
 
   @override
   MigrationStrategy get migration {
@@ -380,6 +385,13 @@ class AppDatabase extends _$AppDatabase {
           await m.createTable(messageReceipts);
           if (from >= 9) {
             await m.addColumn(messages, messages.senderMemberId);
+          }
+        }
+        if (from < 15 && to >= 15) {
+          // T21: OH failover marker — non-destructive. DBs below v9 were
+          // recreated above with the current schema.
+          if (from >= 9) {
+            await m.addColumn(outboundHandles, outboundHandles.failedOverAt);
           }
         }
       },

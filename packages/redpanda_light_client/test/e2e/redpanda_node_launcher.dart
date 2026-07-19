@@ -50,8 +50,14 @@ class RedPandaNodeLauncher {
     // Let's assume for this first pass we rely on default or mechanism we can inject.
     // If redPandaj doesn't support CLI port override, we might need to write a properties file.
 
-    // Based on ConnectionHandler.java, the app reads System.getenv("PORT")
-    final env = {'PORT': port.toString()};
+    // Based on ConnectionHandler.java, the app reads System.getenv("PORT").
+    // A non-empty seeds list isolates the node from the public testnet:
+    // Settings reads REDPANDA_KNOWN_NODES (comma-separated) and only falls
+    // back to the built-in defaults when the list is empty/invalid.
+    final env = {
+      'PORT': port.toString(),
+      if (seeds.isNotEmpty) 'REDPANDA_KNOWN_NODES': seeds.join(','),
+    };
 
     final args = [
       '-jar',

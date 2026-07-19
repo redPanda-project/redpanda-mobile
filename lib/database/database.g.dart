@@ -2260,6 +2260,17 @@ class $OutboundHandlesTable extends OutboundHandles
     requiredDuringInsert: false,
     defaultValue: const Constant(0),
   );
+  static const VerificationMeta _failedOverAtMeta = const VerificationMeta(
+    'failedOverAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> failedOverAt = GeneratedColumn<DateTime>(
+    'failed_over_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -2269,6 +2280,7 @@ class $OutboundHandlesTable extends OutboundHandles
     expiresAt,
     channelId,
     lastCursor,
+    failedOverAt,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -2335,6 +2347,15 @@ class $OutboundHandlesTable extends OutboundHandles
         lastCursor.isAcceptableOrUnknown(data['last_cursor']!, _lastCursorMeta),
       );
     }
+    if (data.containsKey('failed_over_at')) {
+      context.handle(
+        _failedOverAtMeta,
+        failedOverAt.isAcceptableOrUnknown(
+          data['failed_over_at']!,
+          _failedOverAtMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -2372,6 +2393,10 @@ class $OutboundHandlesTable extends OutboundHandles
         DriftSqlType.int,
         data['${effectivePrefix}last_cursor'],
       )!,
+      failedOverAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}failed_over_at'],
+      ),
     );
   }
 
@@ -2389,6 +2414,7 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
   final DateTime expiresAt;
   final String? channelId;
   final int lastCursor;
+  final DateTime? failedOverAt;
   const OutboundHandle({
     required this.id,
     required this.ohId,
@@ -2397,6 +2423,7 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
     required this.expiresAt,
     this.channelId,
     required this.lastCursor,
+    this.failedOverAt,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -2410,6 +2437,9 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
       map['channel_id'] = Variable<String>(channelId);
     }
     map['last_cursor'] = Variable<int>(lastCursor);
+    if (!nullToAbsent || failedOverAt != null) {
+      map['failed_over_at'] = Variable<DateTime>(failedOverAt);
+    }
     return map;
   }
 
@@ -2424,6 +2454,9 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
           ? const Value.absent()
           : Value(channelId),
       lastCursor: Value(lastCursor),
+      failedOverAt: failedOverAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(failedOverAt),
     );
   }
 
@@ -2440,6 +2473,7 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
       expiresAt: serializer.fromJson<DateTime>(json['expiresAt']),
       channelId: serializer.fromJson<String?>(json['channelId']),
       lastCursor: serializer.fromJson<int>(json['lastCursor']),
+      failedOverAt: serializer.fromJson<DateTime?>(json['failedOverAt']),
     );
   }
   @override
@@ -2453,6 +2487,7 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
       'expiresAt': serializer.toJson<DateTime>(expiresAt),
       'channelId': serializer.toJson<String?>(channelId),
       'lastCursor': serializer.toJson<int>(lastCursor),
+      'failedOverAt': serializer.toJson<DateTime?>(failedOverAt),
     };
   }
 
@@ -2464,6 +2499,7 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
     DateTime? expiresAt,
     Value<String?> channelId = const Value.absent(),
     int? lastCursor,
+    Value<DateTime?> failedOverAt = const Value.absent(),
   }) => OutboundHandle(
     id: id ?? this.id,
     ohId: ohId ?? this.ohId,
@@ -2472,6 +2508,7 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
     expiresAt: expiresAt ?? this.expiresAt,
     channelId: channelId.present ? channelId.value : this.channelId,
     lastCursor: lastCursor ?? this.lastCursor,
+    failedOverAt: failedOverAt.present ? failedOverAt.value : this.failedOverAt,
   );
   OutboundHandle copyWithCompanion(OutboundHandlesCompanion data) {
     return OutboundHandle(
@@ -2488,6 +2525,9 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
       lastCursor: data.lastCursor.present
           ? data.lastCursor.value
           : this.lastCursor,
+      failedOverAt: data.failedOverAt.present
+          ? data.failedOverAt.value
+          : this.failedOverAt,
     );
   }
 
@@ -2500,7 +2540,8 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
           ..write('serverEndpoint: $serverEndpoint, ')
           ..write('expiresAt: $expiresAt, ')
           ..write('channelId: $channelId, ')
-          ..write('lastCursor: $lastCursor')
+          ..write('lastCursor: $lastCursor, ')
+          ..write('failedOverAt: $failedOverAt')
           ..write(')'))
         .toString();
   }
@@ -2514,6 +2555,7 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
     expiresAt,
     channelId,
     lastCursor,
+    failedOverAt,
   );
   @override
   bool operator ==(Object other) =>
@@ -2525,7 +2567,8 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
           other.serverEndpoint == this.serverEndpoint &&
           other.expiresAt == this.expiresAt &&
           other.channelId == this.channelId &&
-          other.lastCursor == this.lastCursor);
+          other.lastCursor == this.lastCursor &&
+          other.failedOverAt == this.failedOverAt);
 }
 
 class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
@@ -2536,6 +2579,7 @@ class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
   final Value<DateTime> expiresAt;
   final Value<String?> channelId;
   final Value<int> lastCursor;
+  final Value<DateTime?> failedOverAt;
   const OutboundHandlesCompanion({
     this.id = const Value.absent(),
     this.ohId = const Value.absent(),
@@ -2544,6 +2588,7 @@ class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
     this.expiresAt = const Value.absent(),
     this.channelId = const Value.absent(),
     this.lastCursor = const Value.absent(),
+    this.failedOverAt = const Value.absent(),
   });
   OutboundHandlesCompanion.insert({
     this.id = const Value.absent(),
@@ -2553,6 +2598,7 @@ class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
     required DateTime expiresAt,
     this.channelId = const Value.absent(),
     this.lastCursor = const Value.absent(),
+    this.failedOverAt = const Value.absent(),
   }) : ohId = Value(ohId),
        keypairBytes = Value(keypairBytes),
        serverEndpoint = Value(serverEndpoint),
@@ -2565,6 +2611,7 @@ class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
     Expression<DateTime>? expiresAt,
     Expression<String>? channelId,
     Expression<int>? lastCursor,
+    Expression<DateTime>? failedOverAt,
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
@@ -2574,6 +2621,7 @@ class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
       if (expiresAt != null) 'expires_at': expiresAt,
       if (channelId != null) 'channel_id': channelId,
       if (lastCursor != null) 'last_cursor': lastCursor,
+      if (failedOverAt != null) 'failed_over_at': failedOverAt,
     });
   }
 
@@ -2585,6 +2633,7 @@ class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
     Value<DateTime>? expiresAt,
     Value<String?>? channelId,
     Value<int>? lastCursor,
+    Value<DateTime?>? failedOverAt,
   }) {
     return OutboundHandlesCompanion(
       id: id ?? this.id,
@@ -2594,6 +2643,7 @@ class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
       expiresAt: expiresAt ?? this.expiresAt,
       channelId: channelId ?? this.channelId,
       lastCursor: lastCursor ?? this.lastCursor,
+      failedOverAt: failedOverAt ?? this.failedOverAt,
     );
   }
 
@@ -2621,6 +2671,9 @@ class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
     if (lastCursor.present) {
       map['last_cursor'] = Variable<int>(lastCursor.value);
     }
+    if (failedOverAt.present) {
+      map['failed_over_at'] = Variable<DateTime>(failedOverAt.value);
+    }
     return map;
   }
 
@@ -2633,7 +2686,8 @@ class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
           ..write('serverEndpoint: $serverEndpoint, ')
           ..write('expiresAt: $expiresAt, ')
           ..write('channelId: $channelId, ')
-          ..write('lastCursor: $lastCursor')
+          ..write('lastCursor: $lastCursor, ')
+          ..write('failedOverAt: $failedOverAt')
           ..write(')'))
         .toString();
   }
@@ -6890,6 +6944,7 @@ typedef $$OutboundHandlesTableCreateCompanionBuilder =
       required DateTime expiresAt,
       Value<String?> channelId,
       Value<int> lastCursor,
+      Value<DateTime?> failedOverAt,
     });
 typedef $$OutboundHandlesTableUpdateCompanionBuilder =
     OutboundHandlesCompanion Function({
@@ -6900,6 +6955,7 @@ typedef $$OutboundHandlesTableUpdateCompanionBuilder =
       Value<DateTime> expiresAt,
       Value<String?> channelId,
       Value<int> lastCursor,
+      Value<DateTime?> failedOverAt,
     });
 
 class $$OutboundHandlesTableFilterComposer
@@ -6943,6 +6999,11 @@ class $$OutboundHandlesTableFilterComposer
 
   ColumnFilters<int> get lastCursor => $composableBuilder(
     column: $table.lastCursor,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get failedOverAt => $composableBuilder(
+    column: $table.failedOverAt,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -6990,6 +7051,11 @@ class $$OutboundHandlesTableOrderingComposer
     column: $table.lastCursor,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<DateTime> get failedOverAt => $composableBuilder(
+    column: $table.failedOverAt,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$OutboundHandlesTableAnnotationComposer
@@ -7025,6 +7091,11 @@ class $$OutboundHandlesTableAnnotationComposer
 
   GeneratedColumn<int> get lastCursor => $composableBuilder(
     column: $table.lastCursor,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get failedOverAt => $composableBuilder(
+    column: $table.failedOverAt,
     builder: (column) => column,
   );
 }
@@ -7073,6 +7144,7 @@ class $$OutboundHandlesTableTableManager
                 Value<DateTime> expiresAt = const Value.absent(),
                 Value<String?> channelId = const Value.absent(),
                 Value<int> lastCursor = const Value.absent(),
+                Value<DateTime?> failedOverAt = const Value.absent(),
               }) => OutboundHandlesCompanion(
                 id: id,
                 ohId: ohId,
@@ -7081,6 +7153,7 @@ class $$OutboundHandlesTableTableManager
                 expiresAt: expiresAt,
                 channelId: channelId,
                 lastCursor: lastCursor,
+                failedOverAt: failedOverAt,
               ),
           createCompanionCallback:
               ({
@@ -7091,6 +7164,7 @@ class $$OutboundHandlesTableTableManager
                 required DateTime expiresAt,
                 Value<String?> channelId = const Value.absent(),
                 Value<int> lastCursor = const Value.absent(),
+                Value<DateTime?> failedOverAt = const Value.absent(),
               }) => OutboundHandlesCompanion.insert(
                 id: id,
                 ohId: ohId,
@@ -7099,6 +7173,7 @@ class $$OutboundHandlesTableTableManager
                 expiresAt: expiresAt,
                 channelId: channelId,
                 lastCursor: lastCursor,
+                failedOverAt: failedOverAt,
               ),
           withReferenceMapper: (p0) => p0
               .map((e) => (e.readTable(table), BaseReferences(db, table, e)))

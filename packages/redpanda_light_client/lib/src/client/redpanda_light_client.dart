@@ -25,7 +25,9 @@ import 'package:redpanda_light_client/src/domain/group_state.dart';
 import 'package:redpanda_light_client/src/domain/loopback_result.dart';
 import 'package:redpanda_light_client/src/domain/oh_fetch_status.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
+import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
+import 'package:redpanda_light_client/src/domain/peer_oh_update.dart';
 import 'package:redpanda_light_client/src/domain/reverse_garlic_block.dart';
 import 'package:redpanda_light_client/src/domain/routing_ack.dart';
 import 'package:redpanda_light_client/src/domain/send_exceptions.dart';
@@ -690,9 +692,14 @@ class RedPandaLightClient implements RedPandaClient {
     _ratchetSessions.clear();
     _pendingRgbs.clear();
     _restoredGarlicSessions.clear();
+    _fetchFailureCounts.clear();
+    _failoversInProgress.clear();
+    _pendingOhUpdates.clear();
     await _incomingMessageController.close();
     await _ohMailboxUpdateController.close();
     await _ohFetchStatusController.close();
+    await _ohRegistrationController.close();
+    await _peerOhUpdateController.close();
     await _ratchetStateController.close();
     await _garlicSessionController.close();
     _updateStatus(ConnectionStatus.disconnected);
@@ -705,6 +712,32 @@ class RedPandaLightClient implements RedPandaClient {
   final _ohMailboxUpdateController =
       StreamController<OhMailboxUpdate>.broadcast();
   final _ohFetchStatusController = StreamController<OhFetchStatus>.broadcast();
+  final _ohRegistrationController =
+      StreamController<OHRegistration>.broadcast();
+  final _peerOhUpdateController = StreamController<PeerOhUpdate>.broadcast();
+
+  // --- OH failover state (T21) ---
+
+  /// Consecutive host-unreachable fetch failures per OH (hex id). Counted
+  /// only while an ALTERNATIVE node is connected — total network loss (e.g.
+  /// airplane mode) must never look like a dead host node.
+  final Map<String, int> _fetchFailureCounts = {};
+
+  /// After this many consecutive host-unreachable fetch cycles the channel
+  /// fails over to a reachable node. With the idle cadence (30 s) that is
+  /// ~1.5 min of a provably one-sided outage.
+  static const int failoverFetchFailureThreshold = 3;
+
+  /// Channels with a failover currently running (guards re-entry — the old
+  /// handle keeps failing while the new one registers).
+  final Set<String> _failoversInProgress = {};
+
+  /// Pending in-band `oh_update` announcements per channel: the descriptor
+  /// of the NEW own mailbox still to be told to the partner. Re-sent (same
+  /// message id — the partner deduplicates) on the next poll cycles until
+  /// [_PendingOhUpdate.remainingSends] runs out; a lost announce would leave
+  /// the partner depositing into the dead mailbox forever.
+  final Map<String, _PendingOhUpdate> _pendingOhUpdates = {};
   Timer? _pollingTimer;
   Timer? _renewalTimer;
 
@@ -1115,6 +1148,13 @@ class RedPandaLightClient implements RedPandaClient {
 
   @override
   Stream<OhFetchStatus> get ohFetchStatus => _ohFetchStatusController.stream;
+
+  @override
+  Stream<OHRegistration> get ohRegistrationUpdates =>
+      _ohRegistrationController.stream;
+
+  @override
+  Stream<PeerOhUpdate> get peerOhUpdates => _peerOhUpdateController.stream;
 
   /// Timestamp (ms since epoch) of the last successful mailbox fetch per
   /// channel id. Fed by [_emitFetchStatus]; read by [runChannelDoctor] to
@@ -1929,7 +1969,10 @@ class RedPandaLightClient implements RedPandaClient {
   }
 
   @override
-  Future<OHRegistration> registerOutboundHandle({String? channelId}) async {
+  Future<OHRegistration> registerOutboundHandle({
+    String? channelId,
+    Set<String> excludeEndpoints = const {},
+  }) async {
     final keypair = await OHKeypair.generate();
     final random = Random.secure();
     final ohId = Uint8List.fromList(
@@ -1940,9 +1983,12 @@ class RedPandaLightClient implements RedPandaClient {
     final expiresAt = now.add(const Duration(days: 7));
     final request = await _buildRegisterRequest(ohId, keypair, now, expiresAt);
 
-    // Send to best active peer
+    // Send to best active peer. A failover registration (T21) excludes the
+    // dead host so the replacement mailbox lands on a different node.
     final activePeer = _peers.values
-        .where((p) => p.isHandshakeVerified)
+        .where(
+          (p) => p.isHandshakeVerified && !excludeEndpoints.contains(p.address),
+        )
         .firstOrNull;
 
     var expiresAtMs = expiresAt.millisecondsSinceEpoch;
@@ -2121,6 +2167,193 @@ class RedPandaLightClient implements RedPandaClient {
     }
   }
 
+  /// Counts a host-unreachable fetch failure for [oh] and, at the threshold,
+  /// kicks off the OH failover (T21).
+  ///
+  /// Counted only while an ALTERNATIVE verified node is connected: a dead
+  /// host is only provably dead when the rest of the network is reachable —
+  /// otherwise this is a local outage (airplane mode, no WiFi) and moving
+  /// the mailbox would not help anyone.
+  void _noteHostUnreachable(OHRegistration oh) {
+    final hasAlternative = _peers.values.any(
+      (p) => p.isHandshakeVerified && p.address != oh.serverEndpoint,
+    );
+    if (!hasAlternative) return;
+    final key = _hexEncode(oh.ohId);
+    final count = (_fetchFailureCounts[key] ?? 0) + 1;
+    _fetchFailureCounts[key] = count;
+    if (count < failoverFetchFailureThreshold) return;
+
+    final channelId = oh.channelId;
+    if (channelId == null) return;
+    // Group mailboxes (MS08) have no 1:1 ratchet to announce over — out of
+    // scope for T21.
+    if (_groups.containsKey(channelId)) return;
+    if (_failoversInProgress.contains(channelId)) return;
+    // Without a forward path to the partner the new mailbox could never be
+    // announced — the failover would strand the channel on a handle the
+    // partner does not know.
+    final peerOhId = _channelPeerOhIds[channelId];
+    if (peerOhId == null || peerOhId.length != GarlicHop.nodeIdLength) return;
+    if (_ratchetSessions[channelId] == null) return;
+
+    unawaited(
+      _failoverOwnHandle(oh).catchError((Object e) {
+        RpLog.info(
+          'RedPandaLightClient: OH failover for channel $channelId failed: $e',
+        );
+      }),
+    );
+  }
+
+  /// Moves the channel of [oldOh] to a fresh mailbox on a reachable node
+  /// (T21): registers a NEW handle (new id + keypair) on a node other than
+  /// the dead host, retires the old handle, publishes the replacement via
+  /// [ohRegistrationUpdates] and queues the in-band `oh_update` announce.
+  ///
+  /// Messages already deposited in the dead mailbox are not lost silently:
+  /// the partner's unacknowledged sends re-queue on R-ACK timeout and are
+  /// re-sent — to the new mailbox once the announce arrived.
+  Future<void> _failoverOwnHandle(OHRegistration oldOh) async {
+    final channelId = oldOh.channelId;
+    if (channelId == null) return;
+    if (!_failoversInProgress.add(channelId)) return;
+    try {
+      final OHRegistration replacement;
+      try {
+        replacement = await registerOutboundHandle(
+          channelId: channelId,
+          excludeEndpoints: {?oldOh.serverEndpoint},
+        );
+      } on RateLimitException {
+        RpLog.info(
+          'RedPandaLightClient: OH failover for channel $channelId '
+          'rate-limited — retrying on a later cycle',
+        );
+        return;
+      }
+      if (replacement.serverEndpoint == null) {
+        // Never reached a node — roll back; the failure counter stays at
+        // the threshold, so the next failing fetch retries the failover.
+        _registeredOHs.remove(replacement);
+        return;
+      }
+
+      _registeredOHs.remove(oldOh);
+      _fetchFailureCounts.remove(_hexEncode(oldOh.ohId));
+      RpLog.info(
+        'RedPandaLightClient: OH failover for channel $channelId — mailbox '
+        'moved from ${oldOh.serverEndpoint} to ${replacement.serverEndpoint}',
+      );
+      if (!_ohRegistrationController.isClosed) {
+        _ohRegistrationController.add(replacement);
+      }
+
+      final random = Random.secure();
+      final descriptor = OHDescriptor(
+        serverEndpoint: replacement.serverEndpoint!,
+        handleId: replacement.ohId,
+        authPublicKey: replacement.keypair.publicKeyBytes,
+      );
+      _pendingOhUpdates[channelId] = _PendingOhUpdate(
+        messageId: Uint8List.fromList(
+          List<int>.generate(16, (_) => random.nextInt(256)),
+        ),
+        descriptorJson: descriptor.toJson(),
+      );
+      await _sendPendingOhUpdate(channelId);
+    } finally {
+      _failoversInProgress.remove(channelId);
+    }
+  }
+
+  /// Sends the queued `oh_update` announce for [channelId] to the partner's
+  /// mailbox — ratchet-encrypted like any regular message, but always as a
+  /// DIRECT deposit with a confirmed response, never over garlic hops: right
+  /// after a node death the hop candidates are guaranteed to contain the
+  /// dead node (the scorer only learns via R-ACK timeouts much later), and a
+  /// garlic one-shot dying on a dead hop would silently lose the one message
+  /// the channel's healing depends on (observed live; same class as T41).
+  /// Each attempt re-encrypts with a fresh message key but keeps the SAME
+  /// message id, so the partner applies the first copy and ignores the
+  /// duplicates.
+  Future<void> _sendPendingOhUpdate(String channelId) async {
+    final pending = _pendingOhUpdates[channelId];
+    if (pending == null) return;
+    final sessionFuture = _ratchetSessions[channelId];
+    final peerOhId = _channelPeerOhIds[channelId];
+    if (sessionFuture == null ||
+        peerOhId == null ||
+        peerOhId.length != GarlicHop.nodeIdLength) {
+      // No path to announce over — checked before the failover started, so
+      // this only happens after a disconnect/reset; drop the stale entry.
+      _pendingOhUpdates.remove(channelId);
+      return;
+    }
+    final activePeer = _peers.values
+        .where((p) => p.isHandshakeVerified)
+        .firstOrNull;
+    if (activePeer == null) return; // retry on the next poll cycle
+
+    final message = ChannelMessage(
+      messageId: pending.messageId,
+      timestampMs: DateTime.now().millisecondsSinceEpoch,
+      content: '',
+      ohUpdate: Uint8List.fromList(utf8.encode(pending.descriptorJson)),
+    );
+    final session = await sessionFuture;
+    final payload = await session.encrypt(message, channelId);
+    _emitRatchetState(channelId, session);
+
+    try {
+      await _depositDirect(activePeer, peerOhId, payload);
+    } catch (e) {
+      RpLog.info(
+        'RedPandaLightClient: oh_update announce for channel $channelId '
+        'failed: $e',
+      );
+      return; // budget unchanged — retry on the next poll cycle
+    }
+    pending.remainingSends--;
+    if (pending.remainingSends <= 0) {
+      _pendingOhUpdates.remove(channelId);
+    }
+  }
+
+  /// Applies a fetched in-band `oh_update` (T21): the partner moved their
+  /// mailbox. Authenticity is the ratchet decryption that already happened —
+  /// only the partner holds the message keys. Duplicates (the announce is
+  /// sent multiple times) are ignored.
+  void _handlePeerOhUpdate(String channelId, Uint8List ohUpdateBytes) {
+    final OHDescriptor descriptor;
+    try {
+      descriptor = OHDescriptor.fromJson(utf8.decode(ohUpdateBytes));
+    } catch (e) {
+      RpLog.info(
+        'RedPandaLightClient: dropping unreadable oh_update for channel '
+        '$channelId: $e',
+      );
+      return;
+    }
+    final currentId = _channelPeerOhIds[channelId];
+    if (currentId != null &&
+        _sameOhId(currentId, descriptor.handleId) &&
+        _channelPeerOhEndpoints[channelId] == descriptor.serverEndpoint) {
+      return; // duplicate announce
+    }
+    _channelPeerOhIds[channelId] = List<int>.from(descriptor.handleId);
+    _channelPeerOhEndpoints[channelId] = descriptor.serverEndpoint;
+    RpLog.info(
+      'RedPandaLightClient: channel $channelId peer mailbox moved to '
+      '${descriptor.serverEndpoint} (in-band oh_update)',
+    );
+    if (!_peerOhUpdateController.isClosed) {
+      _peerOhUpdateController.add(
+        PeerOhUpdate(channelId: channelId, descriptor: descriptor),
+      );
+    }
+  }
+
   /// Re-registers [oh] with the same id and keypair to extend its TTL.
   /// On success, updates [OHRegistration.expiresAtMs] and emits an
   /// [OhMailboxUpdate] so the app layer can persist the new expiry.
@@ -2267,6 +2500,9 @@ class RedPandaLightClient implements RedPandaClient {
             ? 'no active peer'
             : 'host node not connected',
       );
+      if (oh.serverEndpoint != null) {
+        _noteHostUnreachable(oh);
+      }
       return [];
     }
 
@@ -2292,6 +2528,9 @@ class RedPandaLightClient implements RedPandaClient {
         'RedPandaLightClient: fetchMessages() timed out waiting for response',
       );
       _emitFetchStatus(oh, false, 'timeout');
+      if (oh.serverEndpoint != null) {
+        _noteHostUnreachable(oh);
+      }
       return [];
     }
 
@@ -2307,6 +2546,8 @@ class RedPandaLightClient implements RedPandaClient {
         'RedPandaLightClient: fetchMessages() non-OK status: ${response.status}',
       );
       _emitFetchStatus(oh, false, 'status ${response.status}');
+      // The host responded — it is alive, whatever it said (T21).
+      _fetchFailureCounts.remove(_hexEncode(oh.ohId));
       if (response.status == Status.NOT_FOUND) {
         unawaited(reregisterLostHandle(oh));
       }
@@ -2316,6 +2557,7 @@ class RedPandaLightClient implements RedPandaClient {
     // The node answered OK — the mailbox was checked, regardless of whether
     // the items can be decrypted below.
     _emitFetchStatus(oh, true);
+    _fetchFailureCounts.remove(_hexEncode(oh.ohId));
 
     if (response.mailboxOverflow) {
       RpLog.debug(
@@ -2434,6 +2676,12 @@ class RedPandaLightClient implements RedPandaClient {
         );
         if (loopback != null || channelMessage.content == _loopbackContent) {
           if (loopback != null && !loopback.isCompleted) loopback.complete();
+          continue;
+        }
+        // T21: an in-band mailbox failover announcement — apply the new
+        // peer OH and swallow the item (never a chat message).
+        if (channelMessage.isOhUpdate) {
+          _handlePeerOhUpdate(oh.channelId!, channelMessage.ohUpdate!);
           continue;
         }
         // MS08: a group handshake rides the 1:1 channel — surface it as an
@@ -3715,6 +3963,17 @@ class RedPandaLightClient implements RedPandaClient {
           _emitFetchStatus(oh, false, 'error: $e');
         }
       }
+      // T21: re-send pending failover announcements until their send
+      // budget is used up.
+      for (final channelId in List.of(_pendingOhUpdates.keys)) {
+        try {
+          await _sendPendingOhUpdate(channelId);
+        } catch (e) {
+          RpLog.info(
+            'RedPandaLightClient: oh_update announce retry failed: $e',
+          );
+        }
+      }
       // MS05: prune session tags whose RGB expired long ago (48h).
       for (final channelId in _sessionTagStore.cleanup()) {
         _emitGarlicSession(channelId);
@@ -3816,6 +4075,20 @@ class _GroupState {
     required this.pendingItems,
     required this.pendingRotations,
   });
+}
+
+/// A queued in-band announcement of a new own mailbox (T21 failover). The
+/// message id stays stable across the re-sends so the partner deduplicates.
+class _PendingOhUpdate {
+  final Uint8List messageId;
+  final String descriptorJson;
+
+  /// How many successful sends are left before the announce is considered
+  /// delivered (best effort — a single garlic one-shot can die on a dead
+  /// relay hop, see T41).
+  int remainingSends = 3;
+
+  _PendingOhUpdate({required this.messageId, required this.descriptorJson});
 }
 
 /// FIFO matcher for response commands that can have several requests in

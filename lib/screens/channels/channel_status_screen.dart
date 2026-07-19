@@ -74,6 +74,16 @@ class ChannelStatusScreen extends ConsumerWidget {
                           '(auto-renewed)',
               ),
             ),
+            if (ownHandle.failedOverAt != null)
+              ListTile(
+                leading: const Icon(Icons.swap_horiz),
+                title: const Text('Mailbox moved (automatic failover)'),
+                subtitle: Text(
+                  'The previous host node was unreachable — a new mailbox '
+                  'was registered ${_relative(ownHandle.failedOverAt!, now)} '
+                  'and announced to your peer.',
+                ),
+              ),
             ListTile(
               leading: const Icon(Icons.refresh),
               title: Text(
