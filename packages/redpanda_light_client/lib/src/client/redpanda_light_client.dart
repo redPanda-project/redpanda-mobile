@@ -1974,8 +1974,10 @@ class RedPandaLightClient implements RedPandaClient {
   /// [excludeNodeIds] (sibling routes) and the submit node; when no relay
   /// candidate is left, falls back to routing through the connected node
   /// itself ([selfHop] true). Returns null only when not even a self-hop can
-  /// be formed. A self-hop route carries no privacy and must not request an
-  /// R-ACK (it has no return relay path).
+  /// be formed. A self-hop route carries no privacy; it can still request an
+  /// R-ACK over a 0-hop return path (the depositing node answers straight into
+  /// our own mailbox), which is what [_depositViaGarlicToAll] relies on for
+  /// delivery feedback in a degenerate net.
   ({List<GarlicHop> hops, bool selfHop})? _garlicRoute(
     ActivePeer submitVia, {
     String? ohEndpoint,
@@ -2953,7 +2955,9 @@ class RedPandaLightClient implements RedPandaClient {
         .where((t) => t.ohId.length == GarlicHop.nodeIdLength)
         .toList(growable: false);
     if (validTargets.isEmpty) {
-      _pendingOhUpdates.remove(channelId);
+      // The peer OH set is (transiently) all-malformed — keep the announce
+      // pending and retry on the next poll cycle rather than dropping it and
+      // permanently suppressing the channel's healing.
       return;
     }
     try {
