@@ -12,6 +12,7 @@ import 'package:redpanda/screens/chat/share_qr_dialog.dart';
 import 'package:redpanda/services/message_sync_service.dart';
 import 'package:redpanda/services/send_retry_queue.dart';
 import 'package:redpanda/shared/providers.dart';
+import 'package:redpanda/shared/widgets/glass_backdrop.dart';
 import 'package:redpanda/shared/widgets/glass_surface.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart'
     show DepositException, GroupSendException, UnknownPeerException;
@@ -473,99 +474,103 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ),
         ],
       ),
-      body: Stack(
-        children: [
-          messagesAsync.when(
-            data: (messages) {
-              if (messages.isEmpty) {
-                return const Center(child: Text("Say hi!"));
-              }
-              return ListView.builder(
-                reverse:
-                    true, // Show newest at bottom (requires list to be reversed order)
-                padding: EdgeInsets.fromLTRB(0, topInset + 76, 0, 88),
-                itemCount: messages.length,
-                itemBuilder: (context, index) {
-                  final msg = messages[index];
-                  // MS08: in groups the sender is a member id, so "mine"
-                  // is decided by the status (incoming rows are always
-                  // `received`); 1:1 keeps the legacy heuristic.
-                  final isMe = group != null
-                      ? msg.status != MessageStatus.received
-                      : msg.conversationId == widget.peerUuid &&
-                            msg.senderId != widget.peerUuid;
+      body: GlassBackdrop(
+        child: Stack(
+          children: [
+            messagesAsync.when(
+              data: (messages) {
+                if (messages.isEmpty) {
+                  return const Center(child: Text("Say hi!"));
+                }
+                return ListView.builder(
+                  reverse:
+                      true, // Show newest at bottom (requires list to be reversed order)
+                  padding: EdgeInsets.fromLTRB(0, topInset + 76, 0, 88),
+                  itemCount: messages.length,
+                  itemBuilder: (context, index) {
+                    final msg = messages[index];
+                    // MS08: in groups the sender is a member id, so "mine"
+                    // is decided by the status (incoming rows are always
+                    // `received`); 1:1 keeps the legacy heuristic.
+                    final isMe = group != null
+                        ? msg.status != MessageStatus.received
+                        : msg.conversationId == widget.peerUuid &&
+                              msg.senderId != widget.peerUuid;
 
-                  final statusIcon = isMe ? _statusIcon(msg.status) : null;
-                  // MS08: authenticated sender name for group messages.
-                  final senderName = !isMe && msg.senderMemberId != null
-                      ? memberNames[msg.senderMemberId] ?? 'Unknown member'
-                      : null;
+                    final statusIcon = isMe ? _statusIcon(msg.status) : null;
+                    // MS08: authenticated sender name for group messages.
+                    final senderName = !isMe && msg.senderMemberId != null
+                        ? memberNames[msg.senderMemberId] ?? 'Unknown member'
+                        : null;
 
-                  return Align(
-                    alignment: isMe
-                        ? Alignment.centerRight
-                        : Alignment.centerLeft,
-                    child: GestureDetector(
-                      onTap: isMe ? () => _showDeliveryDetails(msg) : null,
-                      child: Container(
-                        margin: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 4,
-                        ),
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: isMe
-                              ? Theme.of(context).colorScheme.primaryContainer
-                              : Theme.of(
-                                  context,
-                                ).colorScheme.surfaceContainerHighest,
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (senderName != null)
-                              Text(
-                                senderName,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.bold,
-                                  color: Theme.of(context).colorScheme.primary,
+                    return Align(
+                      alignment: isMe
+                          ? Alignment.centerRight
+                          : Alignment.centerLeft,
+                      child: GestureDetector(
+                        onTap: isMe ? () => _showDeliveryDetails(msg) : null,
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 4,
+                          ),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: isMe
+                                ? Theme.of(context).colorScheme.primaryContainer
+                                : Theme.of(
+                                    context,
+                                  ).colorScheme.surfaceContainerHighest,
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (senderName != null)
+                                Text(
+                                  senderName,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.primary,
+                                  ),
                                 ),
-                              ),
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                Flexible(child: Text(msg.content)),
-                                if (statusIcon != null) ...[
-                                  const SizedBox(width: 6),
-                                  statusIcon,
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  Flexible(child: Text(msg.content)),
+                                  if (statusIcon != null) ...[
+                                    const SizedBox(width: 6),
+                                    statusIcon,
+                                  ],
                                 ],
-                              ],
-                            ),
-                          ],
+                              ),
+                            ],
+                          ),
                         ),
                       ),
-                    ),
-                  );
-                },
-              );
-            },
-            loading: () => const Center(child: CircularProgressIndicator()),
-            error: (e, s) => Center(child: Text("Error: $e")),
-          ),
-          Positioned(
-            left: 12,
-            right: 12,
-            bottom: 0,
-            child: _GlassComposer(
-              controller: _messageController,
-              onSend: _sendMessage,
+                    );
+                  },
+                );
+              },
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (e, s) => Center(child: Text("Error: $e")),
             ),
-          ),
-        ],
+            Positioned(
+              left: 12,
+              right: 12,
+              bottom: 0,
+              child: _GlassComposer(
+                controller: _messageController,
+                onSend: _sendMessage,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
