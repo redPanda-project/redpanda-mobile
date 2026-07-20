@@ -11,7 +11,6 @@ import 'package:redpanda_light_client/src/crypto/ratchet.dart';
 import 'package:redpanda_light_client/src/domain/channel.dart';
 import 'package:redpanda_light_client/src/domain/send_exceptions.dart';
 import 'package:redpanda_light_client/src/garlic/garlic_builder.dart';
-import 'package:redpanda_light_client/src/generated/commands.pb.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
 import 'package:redpanda_light_client/src/peer_repository.dart';
@@ -321,29 +320,32 @@ void main() {
       expect(path, hasLength(2));
     });
 
-    test('without garlic candidates sendMessage falls back to the direct '
-        'MS02b deposit', () async {
+    test('without garlic candidates and no self-hop identity, sendMessage '
+        'never falls back to a direct deposit (T45)', () async {
+      // T45: a deposit is NEVER a direct FlaschenpostPut. With no relay
+      // candidate AND the connected node's identity unknown (the scripted
+      // handshake sends no 64-byte export, so its KademliaId/X25519 key stay
+      // unknown here), no garlic route can be built — the message stays
+      // pending (throws) and nothing goes out as command 141. In the real
+      // single-node case the connected node's identity IS known after the full
+      // handshake, so a self-hop garlic route (command 142) is built instead;
+      // that degenerate path is covered by the single-node emulator gate.
       final (client, socket, _) = await setupClient(hopCount: 0);
       addTearDown(client.disconnect);
 
-      final frames = <(int, Uint8List)>[];
-      socket.onCommandFrame = (cmd, payload) {
-        frames.add((cmd, payload));
-        if (cmd == 141) {
-          final response = FlaschenpostPutResponse()..status = Status.OK;
-          socket.replyCommand(158, response.writeToBuffer());
-        }
-      };
+      final frames = <int>[];
+      socket.onCommandFrame = (cmd, _) => frames.add(cmd);
 
       final channel = await channelWithKeys(client);
-      final messageId = await client.sendMessage(channel.id, 'Direct');
-      expect(messageId, hasLength(32));
-
-      expect(frames.single.$1, 141);
-      expect(client.lastSendHopCount, 0);
-      final put = FlaschenpostPut.fromBuffer(frames.single.$2);
-      expect(put.ohId, equals(ohId));
-      expect(put.wantResponse, isTrue);
+      await expectLater(
+        client.sendMessage(channel.id, 'no direct'),
+        throwsA(isA<DepositException>()),
+      );
+      expect(
+        frames,
+        isEmpty,
+        reason: 'no direct command-141 deposit may ever be sent',
+      );
     });
 
     test('content above the garlic payload budget fails permanently '

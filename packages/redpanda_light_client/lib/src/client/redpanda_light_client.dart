@@ -1480,104 +1480,37 @@ class RedPandaLightClient implements RedPandaClient {
       }
     }
 
-    // T42 multi-OH: when the partner has announced MORE than one mailbox,
-    // deposit into ALL of them in parallel and succeed on the first confirmed
-    // deposit. A single dead OH-host node then no longer stalls delivery — the
-    // copy on a surviving node arrives without waiting for a failover cycle.
-    // These deposits are DIRECT (no garlic): the redundancy set is used
-    // precisely when a host may be dead, and a garlic one-shot over a
-    // possibly-dead hop can silently drop the message (T41). The single-OH
-    // case below keeps the garlic privacy path unchanged.
-    final peerOhSet = _channelPeerOhSet[channelId];
-    if (peerOhSet != null && peerOhSet.length > 1) {
-      lastSendViaRgb = false;
-      lastSendHopCount = 0;
-      await _depositToAllPeerOhs(activePeer, peerOhSet, payload, channelId);
-      return messageIdHex;
-    }
-
-    // MS04: route via a multi-hop garlic path when relay hops are available.
-    final peerOhId = _channelPeerOhIds[channelId];
-    if (peerOhId != null && peerOhId.length == GarlicHop.nodeIdLength) {
-      final hops = _selectGarlicHops(channelId, activePeer);
-      if (hops.isNotEmpty) {
-        await _sendViaGarlic(
-          activePeer,
-          hops,
-          peerOhId,
-          payload,
-          channelId,
-          messageIdHex: messageIdHex,
-        );
-        return messageIdHex;
-      }
-      RpLog.info(
-        'RedPandaLightClient: sendMessage() no eligible garlic hops known, '
-        'falling back to a direct deposit (no relay privacy)',
-      );
-    }
-
-    // A direct deposit needs the partner's OH mailbox id. Without one (or
-    // with a malformed one) the FlaschenpostPut would go out with an empty
-    // oh_id, which the node's legacy garlic-parsing fallback misparses as a
-    // GMAck frame and silently drops (REDPANDAJ-2DR) — the message would be
-    // lost even though the app believes the retry queue will eventually
-    // deliver it. Fail loudly instead: the app layer keeps the message
-    // pending and retries once the peer OH is known, instead of firing a
-    // packet that can never be understood by the node.
-    if (peerOhId == null || peerOhId.length != GarlicHop.nodeIdLength) {
+    // T45: garlic-only deposit into the peer's mailbox set. A deposit is NEVER
+    // sent as a direct FlaschenpostPut anymore — the connected node must not be
+    // able to observe every deposit pattern (MS04 privacy; binding user
+    // decision 2026-07-20: Garlic ALWAYS, one hop-disjoint route per peer OH).
+    // Each known peer OH gets its own garlic route with forward hops kept
+    // disjoint across routes (best-effort anti-correlation); a degenerate net
+    // with no relay candidates routes the packet through the connected node
+    // itself (uniform garlic — still command 142, never a direct 141 deposit).
+    final targets =
+        _channelPeerOhSet[channelId]
+            ?.where((t) => t.ohId.length == GarlicHop.nodeIdLength)
+            .toList(growable: false) ??
+        const <_PeerOh>[];
+    if (targets.isEmpty) {
+      // No known peer OH — no route can be built. Keep the message pending
+      // (the app retries it) and kick off a rendezvous DHT recovery so a later
+      // retry finds the peer's current mailboxes (T44).
       RpLog.info(
         'RedPandaLightClient: sendMessage() channel $channelId has no known '
-        'peer OH — refusing the direct-deposit fallback, message stays '
-        'pending for retry',
+        'peer OH — message stays pending for retry',
       );
-      // T44: all of the peer's OHs are unknown/dead — kick off a rendezvous
-      // DHT recovery so a subsequent retry finds the peer's current mailboxes.
       unawaited(_recoverViaRendezvous(channelId));
       throw UnknownPeerException(channelId);
     }
-    lastSendHopCount = 0;
-
-    // Direct fallback (MS01/MS02b): FlaschenpostPut with target OH mailbox
-    // id. want_response (MS02b) opts into a FlaschenpostPutResponse
-    // (command 158) from the directly connected node, so deposit rejections
-    // surface here instead of failing silently.
-    final flaschenpost = FlaschenpostPut()
-      ..content = payload
-      ..ohId = peerOhId
-      ..wantResponse = true;
-
-    final completer = _putResponses.register();
-
-    final buffer = flaschenpost.writeToBuffer();
-    RpLog.debug(
-      'RedPandaLightClient: sendMessage() serialized ${buffer.length} bytes for channel $channelId',
+    await _depositViaGarlicToAll(
+      activePeer,
+      targets,
+      payload,
+      channelId,
+      messageIdHex: messageIdHex,
     );
-    activePeer.sendCommand(141, Uint8List.fromList(buffer));
-
-    final List<int> responseBytes;
-    try {
-      responseBytes = await completer.future.timeout(depositResponseTimeout);
-    } on TimeoutException {
-      _putResponses.abandon(completer);
-      // No response — pre-MS02b nodes never answer deposits. Fall back to the
-      // legacy fire-and-forget semantics and treat the message as handed off;
-      // a genuinely lost deposit is re-sent and deduplicated by message_id.
-      RpLog.info(
-        'RedPandaLightClient: sendMessage() no deposit response within '
-        '${depositResponseTimeout.inSeconds}s, assuming accepted (legacy node?)',
-      );
-      return messageIdHex;
-    }
-
-    final response = FlaschenpostPutResponse.fromBuffer(responseBytes);
-    if (response.status != Status.OK) {
-      RpLog.info(
-        'RedPandaLightClient: sendMessage() deposit rejected: ${response.status}',
-      );
-      throw DepositException(response.status.name);
-    }
-
     return messageIdHex;
   }
 
@@ -1637,42 +1570,71 @@ class RedPandaLightClient implements RedPandaClient {
     _pendingLoopbacks[messageIdHex] = completer;
     final started = DateTime.now();
 
-    // Deposit into the OWN mailbox over the same paths a regular send uses:
-    // garlic-routed when relay hops are known, direct FlaschenpostPut
-    // otherwise. No return path — the round trip itself is the proof.
-    final hops = _hopSelector.selectHops(
-      count: defaultHopCount,
-      excludeAddresses: {activePeer.address, ?ownOh.serverEndpoint},
-      excludeNodeIds: {?activePeer.discoveredNodeId},
+    // Deposit into the OWN mailbox over the same garlic path a regular send
+    // uses (T45: NEVER a direct FlaschenpostPut — with no relay candidate the
+    // route goes through the connected node itself). T41: retry over FRESH,
+    // disjoint hops when the round trip does not complete, so a single dead
+    // relay hop cannot make a healthy channel look broken (realnet
+    // 2026-07-18). Over a genuine relay path the deposit requests an R-ACK, so
+    // the [NodeScorer] learns which hops delivered and steers later routes
+    // around a bad one (option b); a self-hop has no return path.
+    const maxAttempts = 2;
+    final attemptTimeout = Duration(
+      milliseconds: (timeout.inMilliseconds / maxAttempts).round(),
     );
-    try {
-      if (hops.isNotEmpty) {
-        await _sendViaGarlic(activePeer, hops, ownOh.ohId, payload, channelId);
-      } else {
-        await _depositDirect(activePeer, ownOh.ohId, payload);
-      }
-    } catch (e) {
-      _pendingLoopbacks.remove(messageIdHex);
-      return LoopbackResult.failed('deposit failed: $e', hopCount: hops.length);
-    }
-
-    // Pull the next mailbox poll forward so the result does not wait for
-    // the idle cadence; the active window keeps polling fast afterwards.
-    _notePollActivity();
-    _schedulePoll(const Duration(seconds: 1));
-
-    try {
-      await completer.future.timeout(timeout);
-    } on TimeoutException {
-      // Entry stays registered: a late arrival must still be swallowed.
-      return LoopbackResult.failed(
-        'not received within ${timeout.inSeconds}s',
-        hopCount: hops.length,
+    final triedNodeIds = <String>{};
+    var lastHopCount = 0;
+    for (var attempt = 0; attempt < maxAttempts; attempt++) {
+      final route = _garlicRoute(
+        activePeer,
+        ohEndpoint: ownOh.serverEndpoint,
+        excludeNodeIds: triedNodeIds,
       );
+      if (route == null) {
+        _pendingLoopbacks.remove(messageIdHex);
+        return const LoopbackResult.failed('no route to own mailbox');
+      }
+      lastHopCount = route.selfHop ? 0 : route.hops.length;
+      for (final hop in route.hops) {
+        triedNodeIds.add(_hexEncode(hop.nodeId));
+      }
+      try {
+        await _sendViaGarlic(
+          activePeer,
+          route.hops,
+          ownOh.ohId,
+          payload,
+          channelId,
+          messageIdHex: route.selfHop ? null : messageIdHex,
+        );
+      } catch (e) {
+        _pendingLoopbacks.remove(messageIdHex);
+        return LoopbackResult.failed(
+          'deposit failed: $e',
+          hopCount: lastHopCount,
+        );
+      }
+
+      // Pull the next mailbox poll forward so the result does not wait for
+      // the idle cadence; the active window keeps polling fast afterwards.
+      _notePollActivity();
+      _schedulePoll(const Duration(seconds: 1));
+
+      try {
+        await completer.future.timeout(attemptTimeout);
+        return LoopbackResult.ok(
+          roundtripMs: DateTime.now().difference(started).inMilliseconds,
+          hopCount: lastHopCount,
+        );
+      } on TimeoutException {
+        // No round trip yet — retry over fresh, disjoint hops (or give up
+        // after the last attempt). The entry stays registered so a late
+        // arrival is still swallowed.
+      }
     }
-    return LoopbackResult.ok(
-      roundtripMs: DateTime.now().difference(started).inMilliseconds,
-      hopCount: hops.length,
+    return LoopbackResult.failed(
+      'not received within ${timeout.inSeconds}s',
+      hopCount: lastHopCount,
     );
   }
 
@@ -1986,126 +1948,151 @@ class RedPandaLightClient implements RedPandaClient {
     return '${d.inDays} d';
   }
 
-  /// Deposits [payload] into the mailbox [ohId] as a direct FlaschenpostPut
-  /// (MS01/MS02b) and awaits the node's response. Mirrors the sendMessage
-  /// fallback semantics: a timeout counts as accepted (pre-MS02b nodes never
-  /// answer), a non-OK status throws a [DepositException].
-  Future<void> _depositDirect(
-    ActivePeer activePeer,
-    List<int> ohId,
-    Uint8List payload,
-  ) async {
-    final flaschenpost = FlaschenpostPut()
-      ..content = payload
-      ..ohId = ohId
-      ..wantResponse = true;
-    final completer = _putResponses.register();
-    activePeer.sendCommand(
-      141,
-      Uint8List.fromList(flaschenpost.writeToBuffer()),
+  /// Builds a garlic hop for the connected node [submitVia] itself, or null
+  /// when its identity/encryption key are not yet known. Used as the
+  /// last-resort single hop in a degenerate network with no other relay
+  /// candidates (T45): the node peels its own layer and deposits/forwards
+  /// locally. This carries no relay privacy, but keeps the send path a single,
+  /// uniform garlic path — a deposit is NEVER a direct FlaschenpostPut.
+  GarlicHop? _selfHop(ActivePeer submitVia) {
+    final nodeIdHex = submitVia.discoveredNodeId;
+    if (nodeIdHex == null || nodeIdHex.length != GarlicHop.nodeIdLength * 2) {
+      return null;
+    }
+    final keyHex = _peerRepository
+        .getPeer(submitVia.address)
+        ?.encryptionPublicKey;
+    if (keyHex == null || keyHex.length != 64) return null;
+    return GarlicHop(
+      nodeId: _hexDecode(nodeIdHex),
+      encryptionPublicKey: _hexDecode(keyHex),
     );
+  }
 
-    final List<int> responseBytes;
-    try {
-      responseBytes = await completer.future.timeout(depositResponseTimeout);
-    } on TimeoutException {
-      _putResponses.abandon(completer);
-      RpLog.info(
-        'RedPandaLightClient: _depositDirect() no deposit response within '
-        '${depositResponseTimeout.inSeconds}s, assuming accepted (legacy node?)',
+  /// Selects the forward hop list for one garlic route to a mailbox at
+  /// [ohEndpoint] (T45). Prefers genuine relay hops disjoint from
+  /// [excludeNodeIds] (sibling routes) and the submit node; when no relay
+  /// candidate is left, falls back to routing through the connected node
+  /// itself ([selfHop] true). Returns null only when not even a self-hop can
+  /// be formed. A self-hop route carries no privacy and must not request an
+  /// R-ACK (it has no return relay path).
+  ({List<GarlicHop> hops, bool selfHop})? _garlicRoute(
+    ActivePeer submitVia, {
+    String? ohEndpoint,
+    Set<String> excludeNodeIds = const {},
+  }) {
+    var hops = _hopSelector.selectHops(
+      count: defaultHopCount,
+      excludeAddresses: {submitVia.address, ?ohEndpoint},
+      excludeNodeIds: {?submitVia.discoveredNodeId, ...excludeNodeIds},
+    );
+    if (hops.isEmpty && excludeNodeIds.isNotEmpty) {
+      // Not enough DISJOINT candidates left for this extra route — reuse relay
+      // hops rather than degrade to a privacy-less self-hop. Disjointness
+      // across routes is best-effort under hop scarcity (fewer than
+      // routeCount × hopCount relay candidates).
+      hops = _hopSelector.selectHops(
+        count: defaultHopCount,
+        excludeAddresses: {submitVia.address, ?ohEndpoint},
+        excludeNodeIds: {?submitVia.discoveredNodeId},
       );
-      return;
     }
-    final response = FlaschenpostPutResponse.fromBuffer(responseBytes);
-    if (response.status != Status.OK) {
-      throw DepositException(response.status.name);
-    }
+    if (hops.isNotEmpty) return (hops: hops, selfHop: false);
+    final self = _selfHop(submitVia);
+    if (self == null) return null;
+    return (hops: [self], selfHop: true);
   }
 
-  /// Deposits [payload] into mailbox [ohId] via [activePeer] and returns true
-  /// ONLY on a confirmed FlaschenpostPutResponse OK. Unlike [_depositDirect],
-  /// a timeout returns false instead of being assumed accepted (T39: an
-  /// unanswered deposit is NOT a delivery — for a multi-deposit only a real
-  /// confirmation may count as success). A non-OK status throws.
-  Future<bool> _depositConfirmed(
-    ActivePeer activePeer,
-    List<int> ohId,
-    Uint8List payload,
-  ) async {
-    final flaschenpost = FlaschenpostPut()
-      ..content = payload
-      ..ohId = ohId
-      ..wantResponse = true;
-    final completer = _putResponses.register();
-    activePeer.sendCommand(
-      141,
-      Uint8List.fromList(flaschenpost.writeToBuffer()),
-    );
-    final List<int> responseBytes;
-    try {
-      responseBytes = await completer.future.timeout(depositResponseTimeout);
-    } on TimeoutException {
-      _putResponses.abandon(completer);
-      return false;
-    }
-    final response = FlaschenpostPutResponse.fromBuffer(responseBytes);
-    if (response.status != Status.OK) {
-      throw DepositException(response.status.name);
-    }
-    return true;
-  }
-
-  /// T42 multi-deposit: fans [payload] out to EVERY peer OH in [targets] in
-  /// parallel and completes as soon as the FIRST deposit is confirmed OK.
-  /// Throws [DepositException] when every deposit failed or timed out — no
-  /// confirmation means the message stays pending and is retried (T39), never
-  /// silently marked delivered. The receiver deduplicates the copies by
-  /// message_id.
-  Future<void> _depositToAllPeerOhs(
-    ActivePeer activePeer,
+  /// T45: deposits [payload] into EVERY known peer OH in [targets], each over
+  /// its OWN garlic route (command 142) — never a direct FlaschenpostPut.
+  /// Forward hop sets are kept disjoint across the routes as far as relay
+  /// candidates allow (best-effort anti-correlation: no single relay observes
+  /// all copies). The receiver deduplicates the copies by message_id.
+  ///
+  /// The PRIMARY route (first OH) requests an R-ACK when it travels a genuine
+  /// relay path, so the send is confirmed and the [NodeScorer] learns which
+  /// hops delivered; the remaining routes are redundant fire-and-forget copies
+  /// (a single R-ACK expectation avoids sibling-timeout bookkeeping while the
+  /// extra copies still add delivery redundancy). A missing R-ACK stays
+  /// unconfirmed (T39) — the app re-sends over fresh hops, and the scorer
+  /// steers the retry away from a dead hop.
+  ///
+  /// Throws [DepositException] when not a single route could be built (the
+  /// message then stays pending and is retried); a rendezvous recovery is
+  /// kicked off so a later retry has fresh targets.
+  Future<void> _depositViaGarlicToAll(
+    ActivePeer submitVia,
     List<_PeerOh> targets,
     Uint8List payload,
-    String channelId,
-  ) async {
-    final firstOk = Completer<void>();
-    var remaining = 0;
-    for (final target in targets) {
+    String channelId, {
+    String? messageIdHex,
+  }) async {
+    final usedNodeIds = <String>{};
+    var sent = 0;
+    var primaryHopCount = 0;
+    var primaryAckRequested = false;
+    for (var i = 0; i < targets.length; i++) {
+      final target = targets[i];
       if (target.ohId.length != GarlicHop.nodeIdLength) continue;
-      remaining++;
-      unawaited(() async {
-        var ok = false;
-        try {
-          ok = await _depositConfirmed(activePeer, target.ohId, payload);
-        } catch (e) {
-          RpLog.info(
-            'RedPandaLightClient: multi-deposit for channel $channelId to one '
-            'peer OH rejected: $e',
-          );
-        } finally {
-          remaining--;
-          if (ok && !firstOk.isCompleted) {
-            firstOk.complete();
-          } else if (remaining == 0 && !firstOk.isCompleted) {
-            // T44: every known peer OH host is unreachable — the in-band path
-            // is exhausted. Recover the peer's current mailboxes from the
-            // rendezvous DHT record so the next retry has fresh targets.
-            unawaited(_recoverViaRendezvous(channelId));
-            firstOk.completeError(
-              DepositException(
-                'all ${targets.length} peer OH deposits failed for channel '
-                '$channelId',
-              ),
-            );
-          }
-        }
-      }());
+      final route = _garlicRoute(
+        submitVia,
+        ohEndpoint: target.endpoint,
+        excludeNodeIds: usedNodeIds,
+      );
+      if (route == null) continue;
+      // The primary route requests an R-ACK so the send gets delivery feedback
+      // (and the app re-sends over fresh hops on a timeout, T39/T41). This is
+      // requested even for a self-hop route: the depositing node answers with
+      // a RoutingAck (STORED on success, HANDLE_EXPIRED when the OH is not yet
+      // hosted / could not be resolved), via a 0-hop return path straight into
+      // our own mailbox — so a deposit that races an OH registration in a
+      // degenerate net is retried instead of being silently lost.
+      final wantAck = i == 0;
+      try {
+        await _sendViaGarlic(
+          submitVia,
+          route.hops,
+          target.ohId,
+          payload,
+          channelId,
+          messageIdHex: wantAck ? messageIdHex : null,
+        );
+      } on DepositException catch (e) {
+        // A payload that exceeds the garlic budget is permanently
+        // undeliverable — re-sending the SAME content over any route can
+        // never succeed, so surface it instead of retrying forever.
+        if (e.isBadRequest) rethrow;
+        RpLog.info(
+          'RedPandaLightClient: garlic deposit to one peer OH for channel '
+          '$channelId failed: $e',
+        );
+        continue;
+      } catch (e) {
+        RpLog.info(
+          'RedPandaLightClient: garlic deposit to one peer OH for channel '
+          '$channelId failed: $e',
+        );
+        continue;
+      }
+      sent++;
+      for (final hop in route.hops) {
+        usedNodeIds.add(_hexEncode(hop.nodeId));
+      }
+      if (i == 0) {
+        primaryHopCount = route.selfHop ? 0 : route.hops.length;
+        primaryAckRequested = wantAck && lastSendAckRequested;
+      }
     }
-    if (remaining == 0) {
+    if (sent == 0) {
+      unawaited(_recoverViaRendezvous(channelId));
       throw DepositException(
-        'no valid peer OH to deposit to for channel $channelId',
+        'no garlic route could be built for channel $channelId',
       );
     }
-    await firstOk.future;
+    // Report the primary route's diagnostics regardless of send order.
+    lastSendHopCount = primaryHopCount;
+    lastSendViaRgb = false;
+    lastSendAckRequested = primaryAckRequested;
   }
 
   /// Builds a fresh Reverse Garlic Block for [channelId] (MS05) and registers
@@ -2921,15 +2908,18 @@ class RedPandaLightClient implements RedPandaClient {
   }
 
   /// Sends the queued `oh_update` announce for [channelId] to the partner's
-  /// mailbox — ratchet-encrypted like any regular message, but always as a
-  /// DIRECT deposit with a confirmed response, never over garlic hops: right
-  /// after a node death the hop candidates are guaranteed to contain the
-  /// dead node (the scorer only learns via R-ACK timeouts much later), and a
-  /// garlic one-shot dying on a dead hop would silently lose the one message
-  /// the channel's healing depends on (observed live; same class as T41).
-  /// Each attempt re-encrypts with a fresh message key but keeps the SAME
-  /// message id, so the partner applies the first copy and ignores the
-  /// duplicates.
+  /// mailbox — ratchet-encrypted like any regular message and, since T45, over
+  /// GARLIC like any other deposit (never a direct FlaschenpostPut; binding
+  /// user decision 2026-07-20). It is deposited into EVERY known peer OH (one
+  /// hop-disjoint route each) and re-sent on the poll loop over fresh hops
+  /// (the [_PendingOhUpdate.remainingSends] budget), so a single dead relay
+  /// hop cannot swallow the one message the channel's healing depends on — the
+  /// robustness that used to come from the direct deposit now comes from the
+  /// budgeted re-send over fresh hops plus the R-ACK-fed scorer steering away
+  /// from a bad hop. In a degenerate net the route falls back to the connected
+  /// node itself. Each attempt re-encrypts with a fresh message key but keeps
+  /// the SAME message id, so the partner applies the first copy and ignores
+  /// the duplicates.
   Future<void> _sendPendingOhUpdate(String channelId) async {
     final pending = _pendingOhUpdates[channelId];
     if (pending == null) return;
@@ -2956,24 +2946,31 @@ class RedPandaLightClient implements RedPandaClient {
     final payload = await session.encrypt(message, channelId);
     _emitRatchetState(channelId, session);
 
-    // T42: deposit the announce into EVERY known peer OH (always direct — a
-    // garlic one-shot over a possibly-dead hop would silently lose the one
-    // message the channel's healing depends on, see T41). One confirmed
-    // deposit is enough; the same message id lets the partner deduplicate.
-    var delivered = false;
-    for (final target in targets) {
-      if (target.ohId.length != GarlicHop.nodeIdLength) continue;
-      try {
-        await _depositDirect(activePeer, target.ohId, payload);
-        delivered = true;
-      } catch (e) {
-        RpLog.info(
-          'RedPandaLightClient: oh_update announce for channel $channelId '
-          'to one peer OH failed: $e',
-        );
-      }
+    // T45/T47d: deposit the announce into EVERY known peer OH over garlic (one
+    // hop-disjoint route each), with the primary route requesting an R-ACK.
+    // The stable message id lets the partner deduplicate the copies.
+    final validTargets = targets
+        .where((t) => t.ohId.length == GarlicHop.nodeIdLength)
+        .toList(growable: false);
+    if (validTargets.isEmpty) {
+      _pendingOhUpdates.remove(channelId);
+      return;
     }
-    if (!delivered) return; // budget unchanged — retry on the next poll cycle
+    try {
+      await _depositViaGarlicToAll(
+        activePeer,
+        validTargets,
+        payload,
+        channelId,
+        messageIdHex: _hexEncode(pending.messageId),
+      );
+    } catch (e) {
+      RpLog.info(
+        'RedPandaLightClient: oh_update announce for channel $channelId '
+        'failed (will retry on the poll loop): $e',
+      );
+      return; // budget unchanged — retry on the next poll cycle
+    }
     pending.remainingSends--;
     if (pending.remainingSends <= 0) {
       _pendingOhUpdates.remove(channelId);
@@ -3619,27 +3616,28 @@ class RedPandaLightClient implements RedPandaClient {
     final payload = await session.encrypt(ackMessage, channelId);
     _emitRatchetState(channelId, session);
 
-    final hops = _selectGarlicHops(channelId, activePeer);
-    if (hops.isNotEmpty &&
-        payload.length <= GarlicBuilder.maxPayloadLength(hops.length)) {
-      final packet = await GarlicBuilder.build(
-        hops: hops,
-        ohId: peerOhId,
-        payload: payload,
+    // T45: the channel ACK travels over garlic like any other deposit — never
+    // a direct FlaschenpostPut. In a degenerate net the route falls back to
+    // the connected node itself. Lightweight: no R-ACK requested (a lost ACK
+    // is repaired by the next one).
+    final route = _garlicRoute(
+      activePeer,
+      ohEndpoint: _channelPeerOhEndpoints[channelId],
+    );
+    if (route == null ||
+        payload.length > GarlicBuilder.maxPayloadLength(route.hops.length)) {
+      RpLog.info(
+        'RedPandaLightClient: dropping channel ack for $channelId — no garlic '
+        'route or payload too large',
       );
-      activePeer.sendCommand(142, packet);
       return;
     }
-
-    // Direct fallback without want_response: best effort, never interferes
-    // with the deposit-response queue of regular sends.
-    final flaschenpost = FlaschenpostPut()
-      ..content = payload
-      ..ohId = peerOhId;
-    activePeer.sendCommand(
-      141,
-      Uint8List.fromList(flaschenpost.writeToBuffer()),
+    final packet = await GarlicBuilder.build(
+      hops: route.hops,
+      ohId: peerOhId,
+      payload: payload,
     );
+    activePeer.sendCommand(142, packet);
   }
 
   // =========================================================================

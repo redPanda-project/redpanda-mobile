@@ -14,16 +14,22 @@ import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/domain/peer_oh_update.dart';
 import 'package:redpanda_light_client/src/domain/send_exceptions.dart';
+import 'package:hex/hex.dart';
 import 'package:redpanda_light_client/src/generated/commands.pb.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
+import 'package:redpanda_light_client/src/peer_repository.dart';
+
+import '../helpers/garlic_test_utils.dart';
 
 /// T42 multi-OH / multi-deposit unit tests. A scripted in-memory Socket plays
-/// the single connected node (it forwards every deposit by oh_id, MS02b), so a
-/// fan-out of FlaschenpostPuts to several peer OHs all lands on this one
-/// connection — exactly what the client does at runtime. The exchange stays
-/// plaintext (the encryption handshake is never completed; framing is
-/// identical).
+/// the single connected node; the client's peer repository is pre-seeded with
+/// relay candidates so each deposit travels its own GARLIC route (T45: sends
+/// are garlic-only, one hop-disjoint route per peer OH — never a direct
+/// FlaschenpostPut). The mock captures the command-142 frames and peels them
+/// with the known relay keys to recover which OH each route deposits into. The
+/// exchange stays plaintext (the encryption handshake is never completed;
+/// framing is identical).
 class ScriptedSocket implements Socket {
   @override
   Future<void> get done => Completer<void>().future;
@@ -122,16 +128,29 @@ class ScriptedSocket implements Socket {
 
 const liveEndpoint = 'scripted:1';
 
-Future<(RedPandaLightClient, ScriptedSocket)> connectedClient({
+Future<(RedPandaLightClient, ScriptedSocket, List<TestHop>)> connectedClient({
   Duration depositResponseTimeout = const Duration(seconds: 10),
+  int hopCount = 3,
 }) async {
   final socket = ScriptedSocket();
+  final repo = InMemoryPeerRepository();
+  final relays = <TestHop>[];
+  for (var i = 0; i < hopCount; i++) {
+    final hop = await TestHop.generate(i + 1);
+    relays.add(hop);
+    repo.updatePeer(
+      '10.2.0.$i:5000',
+      nodeId: HEX.encode(hop.nodeId),
+      encryptionPublicKey: HEX.encode(hop.keys.publicKey),
+    );
+  }
   final keys = await KeyPair.generate();
   final client = RedPandaLightClient(
     selfNodeId: NodeId.fromPublicKey(keys),
     selfKeys: keys,
     seeds: [liveEndpoint],
     depositResponseTimeout: depositResponseTimeout,
+    peerRepository: repo,
     socketFactory: (h, p) async {
       if (h == 'scripted') return socket;
       throw const SocketException('test: unreachable');
@@ -145,7 +164,7 @@ Future<(RedPandaLightClient, ScriptedSocket)> connectedClient({
     }
     await Future.delayed(const Duration(milliseconds: 10));
   }
-  return (client, socket);
+  return (client, socket, relays);
 }
 
 Future<void> pumpUntil(
@@ -162,14 +181,6 @@ Future<void> pumpUntil(
   }
 }
 
-bool _sameBytes(List<int> a, List<int> b) {
-  if (a.length != b.length) return false;
-  for (var i = 0; i < a.length; i++) {
-    if (a[i] != b[i]) return false;
-  }
-  return true;
-}
-
 final channelKey = List<int>.generate(32, (i) => i + 1);
 
 OHDescriptor peerOh(int seed, String endpoint) => OHDescriptor(
@@ -179,24 +190,20 @@ OHDescriptor peerOh(int seed, String endpoint) => OHDescriptor(
 );
 
 void main() {
-  group('T42 multi-deposit: fan-out to all known peer OHs', () {
-    test('deposits into every peer OH; first confirmation is enough', () async {
-      final (client, socket) = await connectedClient();
+  group('T45 multi-OH: one garlic route per peer OH (never direct)', () {
+    test('fans out to every peer OH over garlic; no direct deposit', () async {
+      // Six relays so the two 3-hop routes can be fully disjoint.
+      final (client, socket, relays) = await connectedClient(hopCount: 6);
       addTearDown(client.disconnect);
 
       final ohA = peerOh(10, 'nodeA:1');
       final ohB = peerOh(90, 'nodeB:2');
 
-      final deposits = <FlaschenpostPut>[];
+      final garlicFrames = <Uint8List>[];
+      var directDeposits = 0;
       socket.onCommandFrame = (command, payload) {
-        if (command == 141) {
-          final put = FlaschenpostPut.fromBuffer(payload);
-          deposits.add(put);
-          socket.replyCommand(
-            158,
-            (FlaschenpostPutResponse()..status = Status.OK).writeToBuffer(),
-          );
-        }
+        if (command == 142) garlicFrames.add(payload);
+        if (command == 141) directDeposits++;
       };
 
       client.addChannelKeys(
@@ -210,37 +217,45 @@ void main() {
       expect(id, isNotEmpty);
 
       await pumpUntil(
-        () => deposits.length >= 2,
-        reason: 'the send did not fan out to both peer OHs',
+        () => garlicFrames.length >= 2,
+        reason: 'the send did not fan out to both peer OHs over garlic',
       );
-      final targetIds = deposits.map((d) => d.ohId).toList();
-      expect(targetIds.any((t) => _sameBytes(t, ohA.handleId)), isTrue);
-      expect(targetIds.any((t) => _sameBytes(t, ohB.handleId)), isTrue);
-      // Direct fan-out, no garlic hops.
-      expect(client.lastSendHopCount, equals(0));
+      expect(directDeposits, equals(0), reason: 'no deposit may go out direct');
+      // Peel each route and confirm both peer OHs are covered — with disjoint
+      // relay hop sets across the two routes (best-effort anti-correlation).
+      final ohIds = <String>{};
+      final firstHops = <String>[];
+      for (final frame in garlicFrames.take(2)) {
+        firstHops.add(HEX.encode(ParsedPacket.parse(frame).nextHop));
+        final deposit = await peelGarlicDeposit(frame, relays);
+        ohIds.add(HEX.encode(deposit!.ohId));
+      }
+      expect(ohIds, contains(HEX.encode(ohA.handleId)));
+      expect(ohIds, contains(HEX.encode(ohB.handleId)));
+      expect(client.lastSendHopCount, greaterThan(0));
+      expect(
+        firstHops.toSet(),
+        hasLength(2),
+        reason: 'the two routes must start on disjoint relay hops',
+      );
     });
 
-    test('one dead OH-host does not stall delivery (no wait)', () async {
-      // ohA never gets a deposit response (its host is "down"); ohB confirms.
-      // The send must complete on ohB's confirmation without waiting out ohA's
-      // 10 s deposit timeout.
-      final (client, socket) = await connectedClient();
+    test('fan-out is non-blocking: garlic submission never waits on a '
+        'confirmation (T39: submit != delivered)', () async {
+      // Garlic is fire-and-forget: sendMessage returns once the packets are
+      // submitted, regardless of whether any OH host is reachable. Delivery is
+      // confirmed asynchronously by the R-ACK (or re-sent on its timeout) — a
+      // dead OH host can never stall the send call.
+      final (client, socket, _) = await connectedClient();
       addTearDown(client.disconnect);
 
       final ohA = peerOh(10, 'deadhost:1');
       final ohB = peerOh(90, 'livehost:2');
 
+      var garlic = 0;
       socket.onCommandFrame = (command, payload) {
-        if (command == 141) {
-          final put = FlaschenpostPut.fromBuffer(payload);
-          if (_sameBytes(put.ohId, ohB.handleId)) {
-            socket.replyCommand(
-              158,
-              (FlaschenpostPutResponse()..status = Status.OK).writeToBuffer(),
-            );
-          }
-          // ohA: intentionally no response (dead host).
-        }
+        if (command == 142) garlic++;
+        // No FlaschenpostPutResponse is ever sent — irrelevant for garlic.
       };
 
       client.addChannelKeys(
@@ -252,34 +267,29 @@ void main() {
 
       final started = DateTime.now();
       final id = await client
-          .sendMessage('chan', 'reach me via the live OH')
+          .sendMessage('chan', 'reach me via any live OH')
           .timeout(const Duration(seconds: 3));
       final elapsed = DateTime.now().difference(started);
       expect(id, isNotEmpty);
-      expect(
-        elapsed,
-        lessThan(const Duration(seconds: 3)),
-        reason: 'delivery must not wait out the dead OH deposit timeout',
-      );
+      expect(elapsed, lessThan(const Duration(seconds: 3)));
+      await pumpUntil(() => garlic >= 2, reason: 'both routes must be sent');
     });
 
     test(
-      'all deposits unconfirmed ⇒ throws (timeout is NOT success, T39)',
+      'no route can be built ⇒ throws, nothing sent (stays pending)',
       () async {
-        // No 158 response for ANY deposit — the message must stay undelivered so
-        // the app keeps it pending and retries. Short deposit timeout keeps the
-        // test fast.
-        final (client, socket) = await connectedClient(
-          depositResponseTimeout: const Duration(milliseconds: 400),
-        );
+        // No relay candidates AND no self-hop identity (scripted handshake sends
+        // no 64-byte export): a garlic route cannot be formed, so the message
+        // stays pending — and NOTHING goes out as a direct deposit.
+        final (client, socket, _) = await connectedClient(hopCount: 0);
         addTearDown(client.disconnect);
 
-        final ohA = peerOh(10, 'deadA:1');
-        final ohB = peerOh(90, 'deadB:2');
+        final ohA = peerOh(10, 'nodeA:1');
+        final ohB = peerOh(90, 'nodeB:2');
 
-        var deposits = 0;
+        var frames = 0;
         socket.onCommandFrame = (command, payload) {
-          if (command == 141) deposits++; // never answered
+          if (command == 141 || command == 142) frames++;
         };
 
         client.addChannelKeys(
@@ -290,10 +300,10 @@ void main() {
         );
 
         await expectLater(
-          client.sendMessage('chan', 'nobody home'),
+          client.sendMessage('chan', 'nobody to route through'),
           throwsA(isA<DepositException>()),
         );
-        expect(deposits, equals(2), reason: 'both peer OHs must be attempted');
+        expect(frames, equals(0), reason: 'no deposit of any kind may be sent');
       },
     );
   });
@@ -302,7 +312,7 @@ void main() {
     test(
       'a 2-descriptor announce makes future sends fan out to both',
       () async {
-        final (client, socket) = await connectedClient();
+        final (client, socket, relays) = await connectedClient();
         addTearDown(client.disconnect);
 
         final ohA = peerOh(10, 'nodeA:1');
@@ -323,7 +333,7 @@ void main() {
         );
         final announcePayload = await partnerSession.encrypt(announce, 'chan');
 
-        final deposits = <FlaschenpostPut>[];
+        final garlicFrames = <Uint8List>[];
         var announceDelivered = false;
         socket.onCommandFrame = (command, payload) {
           if (command == 150) {
@@ -352,12 +362,8 @@ void main() {
                 );
             }
             socket.replyCommand(153, response.writeToBuffer());
-          } else if (command == 141) {
-            deposits.add(FlaschenpostPut.fromBuffer(payload));
-            socket.replyCommand(
-              158,
-              (FlaschenpostPutResponse()..status = Status.OK).writeToBuffer(),
-            );
+          } else if (command == 142) {
+            garlicFrames.add(payload);
           }
         };
 
@@ -391,15 +397,20 @@ void main() {
         );
         expect(updates.single.descriptors, hasLength(2));
 
-        // A follow-up send now fans out to BOTH announced mailboxes.
+        // A follow-up send now fans out to BOTH announced mailboxes, each over
+        // its own garlic route.
         await client.sendMessage('chan', 'after the array announce');
         await pumpUntil(
-          () => deposits.length >= 2,
-          reason: 'the send after the announce did not fan out',
+          () => garlicFrames.length >= 2,
+          reason: 'the send after the announce did not fan out over garlic',
         );
-        final ids = deposits.map((d) => d.ohId).toList();
-        expect(ids.any((t) => _sameBytes(t, ohA.handleId)), isTrue);
-        expect(ids.any((t) => _sameBytes(t, ohB.handleId)), isTrue);
+        final ohIds = <String>{};
+        for (final frame in garlicFrames.take(2)) {
+          final deposit = await peelGarlicDeposit(frame, relays);
+          ohIds.add(HEX.encode(deposit!.ohId));
+        }
+        expect(ohIds, contains(HEX.encode(ohA.handleId)));
+        expect(ohIds, contains(HEX.encode(ohB.handleId)));
       },
     );
   });
