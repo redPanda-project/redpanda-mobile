@@ -9,6 +9,7 @@ import 'package:redpanda/repositories/group_repository.dart';
 import 'package:redpanda/services/channel_health.dart';
 import 'package:redpanda/services/group_service.dart';
 import 'package:redpanda/shared/widgets/connection_status_badge.dart';
+import 'package:redpanda/shared/widgets/glass_backdrop.dart';
 import 'package:redpanda/shared/widgets/glass_surface.dart';
 
 /// Traffic-light health indicator for one channel tile. Green: everything
@@ -181,122 +182,124 @@ class HomeScreen extends ConsumerWidget {
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: const _GlassTopBar(),
-      body: channelsAsync.when(
-        data: (channels) {
-          if (channels.isEmpty && groups.isEmpty && invites.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    Icons.perm_contact_calendar_outlined,
-                    size: 64,
-                    color: Colors.grey[400],
+      body: GlassBackdrop(
+        child: channelsAsync.when(
+          data: (channels) {
+            if (channels.isEmpty && groups.isEmpty && invites.isEmpty) {
+              return Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.perm_contact_calendar_outlined,
+                      size: 64,
+                      color: Colors.grey[400],
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      "No channels yet",
+                      style: TextStyle(color: Colors.grey[600]),
+                    ),
+                  ],
+                ),
+              );
+            }
+            return ListView(
+              padding: EdgeInsets.fromLTRB(0, topInset + 76, 0, 96),
+              children: [
+                _platformNotice(context),
+                // MS08: pending group invites first — they need a decision.
+                for (final invite in invites)
+                  Card(
+                    margin: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 4,
+                    ),
+                    child: ListTile(
+                      leading: const CircleAvatar(child: Icon(Icons.group_add)),
+                      title: Text(invite.groupName),
+                      subtitle: const Text('Group invite'),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.check, color: Colors.green),
+                            onPressed: () async {
+                              final messenger = ScaffoldMessenger.of(context);
+                              try {
+                                await ref
+                                    .read(groupServiceProvider)
+                                    .acceptInvite(invite.groupId);
+                              } catch (e) {
+                                messenger.showSnackBar(
+                                  SnackBar(
+                                    content: Text('Could not join group: $e'),
+                                  ),
+                                );
+                              }
+                            },
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close, color: Colors.red),
+                            onPressed: () => ref
+                                .read(groupServiceProvider)
+                                .dismissInvite(invite.groupId),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
-                  const SizedBox(height: 16),
-                  Text(
-                    "No channels yet",
-                    style: TextStyle(color: Colors.grey[600]),
+                for (final group in groups)
+                  Card(
+                    margin: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 4,
+                    ),
+                    child: ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: Theme.of(
+                          context,
+                        ).colorScheme.secondaryContainer,
+                        child: const Icon(Icons.group),
+                      ),
+                      title: Text(group.label),
+                      subtitle: Text(
+                        group.keyEpoch == 0
+                            ? 'Waiting for the group key…'
+                            : 'Group',
+                      ),
+                      onTap: () {
+                        context.push('/chat/${group.groupId}');
+                      },
+                    ),
                   ),
-                ],
-              ),
+                for (final channel in channels)
+                  Card(
+                    margin: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 4,
+                    ),
+                    child: ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: Theme.of(
+                          context,
+                        ).colorScheme.primaryContainer,
+                        child: Text(channel.label[0].toUpperCase()),
+                      ),
+                      title: Text(channel.label),
+                      subtitle: const Text('Private Channel'),
+                      trailing: _ChannelHealthDot(channelId: channel.id),
+                      onTap: () {
+                        context.push('/chat/${channel.id}');
+                      },
+                    ),
+                  ),
+              ],
             );
-          }
-          return ListView(
-            padding: EdgeInsets.fromLTRB(0, topInset + 76, 0, 96),
-            children: [
-              _platformNotice(context),
-              // MS08: pending group invites first — they need a decision.
-              for (final invite in invites)
-                Card(
-                  margin: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 4,
-                  ),
-                  child: ListTile(
-                    leading: const CircleAvatar(child: Icon(Icons.group_add)),
-                    title: Text(invite.groupName),
-                    subtitle: const Text('Group invite'),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton(
-                          icon: const Icon(Icons.check, color: Colors.green),
-                          onPressed: () async {
-                            final messenger = ScaffoldMessenger.of(context);
-                            try {
-                              await ref
-                                  .read(groupServiceProvider)
-                                  .acceptInvite(invite.groupId);
-                            } catch (e) {
-                              messenger.showSnackBar(
-                                SnackBar(
-                                  content: Text('Could not join group: $e'),
-                                ),
-                              );
-                            }
-                          },
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.close, color: Colors.red),
-                          onPressed: () => ref
-                              .read(groupServiceProvider)
-                              .dismissInvite(invite.groupId),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              for (final group in groups)
-                Card(
-                  margin: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 4,
-                  ),
-                  child: ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: Theme.of(
-                        context,
-                      ).colorScheme.secondaryContainer,
-                      child: const Icon(Icons.group),
-                    ),
-                    title: Text(group.label),
-                    subtitle: Text(
-                      group.keyEpoch == 0
-                          ? 'Waiting for the group key…'
-                          : 'Group',
-                    ),
-                    onTap: () {
-                      context.push('/chat/${group.groupId}');
-                    },
-                  ),
-                ),
-              for (final channel in channels)
-                Card(
-                  margin: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 4,
-                  ),
-                  child: ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: Theme.of(
-                        context,
-                      ).colorScheme.primaryContainer,
-                      child: Text(channel.label[0].toUpperCase()),
-                    ),
-                    title: Text(channel.label),
-                    subtitle: const Text('Private Channel'),
-                    trailing: _ChannelHealthDot(channelId: channel.id),
-                    onTap: () {
-                      context.push('/chat/${channel.id}');
-                    },
-                  ),
-                ),
-            ],
-          );
-        },
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (err, stack) => Center(child: Text("Error: $err")),
+          },
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (err, stack) => Center(child: Text("Error: $err")),
+        ),
       ),
       floatingActionButton: const _GlassActionCapsule(),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
