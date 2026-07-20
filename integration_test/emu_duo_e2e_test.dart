@@ -396,35 +396,42 @@ Future<void> runAlice(WidgetTester tester) async {
   if (ownDesc == null) {
     throw StateError('own OH descriptor unavailable despite registered state');
   }
-  final qrData = myChannel.copyWith(peerOhDescriptor: ownDesc).toJson();
+  // QR v4 carries only the channel secret; the OH is exchanged out of band
+  // (in production over the rendezvous DHT — here over the coord server, which
+  // stands in for the DHT so the pairing stays deterministic and fast).
+  final qrData = myChannel.toJson();
   await kvPut('alice_qr', qrData);
-  log('channel created, QR exported (${qrData.length} chars)');
+  await kvPut('alice_oh', ownDesc.toJson());
+  log('channel created, QR + OH exported (${qrData.length} chars)');
 
   await tester.tap(find.text('Done'));
   await openChat(tester);
 
-  // Wait for Bob's QR (his OH descriptor) so we know where to send.
+  // Wait for Bob's channel secret + OH so we know where to send.
   final bobQr = await waitForKv(
     tester,
     'bob_qr',
     timeout: const Duration(minutes: 6),
   );
   if (bobQr == null) throw StateError('bob_qr never appeared');
-  final bobChannel = Channel.fromJson(bobQr);
-  final desc = bobChannel.peerOhDescriptor;
-  if (desc == null) throw StateError('Bob QR contains no OH descriptor');
-  if (bobChannel.id != Channel.fromJson(qrData).id) {
+  final bobOhJson = await waitForKv(
+    tester,
+    'bob_oh',
+    timeout: const Duration(minutes: 6),
+  );
+  if (bobOhJson == null) throw StateError('bob_oh never appeared');
+  final desc = OHDescriptor.fromJson(bobOhJson);
+  if ((await Channel.fromJson(bobQr)).id !=
+      (await Channel.fromJson(qrData)).id) {
     throw StateError('Bob QR is for a different channel');
   }
 
-  // The in-app path for this step is scanning Bob's QR, which goes through
-  // addChannel/insertOrReplace and would WIPE our channel auth private key
-  // (QR v3 carries only public material). Instead update just the peer-OH
-  // columns — the part the scan is actually supposed to contribute.
+  // Import just the peer-OH columns (the part rendezvous discovery contributes)
+  // without going through addChannel, which would wipe our role marker.
   final db = container.read(dbProvider);
   await (db.update(
     db.channels,
-  )..where((t) => t.uuid.equals(bobChannel.id))).write(
+  )..where((t) => t.uuid.equals(myChannel.id))).write(
     appdb.ChannelsCompanion(
       peerOhEndpoint: drift.Value(desc.serverEndpoint),
       peerOhId: drift.Value(HEX.encode(desc.handleId)),
@@ -435,13 +442,17 @@ Future<void> runAlice(WidgetTester tester) async {
   // on startup when restoring persisted state.
   final row = await (db.select(
     db.channels,
-  )..where((t) => t.uuid.equals(bobChannel.id))).getSingle();
+  )..where((t) => t.uuid.equals(myChannel.id))).getSingle();
   container
       .read(redPandaClientProvider)
       .addChannelKeys(
         row.uuid,
         HEX.decode(row.encryptionKey),
+        channelSecret: row.channelSecret != null
+            ? HEX.decode(row.channelSecret!)
+            : null,
         peerOhId: HEX.decode(row.peerOhId!),
+        peerOhEndpoint: row.peerOhEndpoint,
         isChannelCreator: row.authPrivateKey != null,
         ratchetState: row.ratchetState,
       );
@@ -538,9 +549,20 @@ Future<void> runBob(WidgetTester tester) async {
     timeout: const Duration(minutes: 6),
   );
   if (aliceQr == null) throw StateError('alice_qr never appeared');
+  final aliceOhJson = await waitForKv(
+    tester,
+    'alice_oh',
+    timeout: const Duration(minutes: 6),
+  );
+  if (aliceOhJson == null) throw StateError('alice_oh never appeared');
 
-  // Same code path as the QR scanner (join screen), minus the camera.
-  final channel = Channel.fromJson(aliceQr);
+  // Same code path as the QR scanner (join screen), minus the camera. QR v4
+  // carries only the secret; Alice's OH arrives out of band (stands in for the
+  // rendezvous DHT) and is attached as the peer descriptor.
+  final aliceDesc = OHDescriptor.fromJson(aliceOhJson);
+  final channel = (await Channel.fromJson(
+    aliceQr,
+  )).copyWith(peerOhDescriptor: aliceDesc);
   final container = containerOf(tester);
   await container.read(channelRepositoryProvider).addChannel(channel);
   log('joined channel from Alice QR');
@@ -582,21 +604,9 @@ Future<void> runBob(WidgetTester tester) async {
     throw StateError('own OH never became available');
   }
 
-  // Same QR JSON the chat share dialog builds (v3: public material + oh).
-  final db = container.read(dbProvider);
-  final row = await (db.select(
-    db.channels,
-  )..where((t) => t.uuid.equals(channel.id))).getSingle();
-  await kvPut(
-    'bob_qr',
-    jsonEncode({
-      'l': row.label,
-      'k_enc': row.encryptionKey,
-      'k_auth_pub': row.authPublicKey,
-      'oh': ownDesc.toJsonMap(),
-      'v': 3,
-    }),
-  );
+  // QR v4 (secret only) plus our OH exchanged out of band, mirroring Alice.
+  await kvPut('bob_qr', channel.toJson());
+  await kvPut('bob_oh', ownDesc.toJson());
   log('own QR exported');
 
   // --- S1 ---

@@ -43,6 +43,7 @@ void main() {
   Future<Channel> insertPeerChannel(String label) async {
     final channel = Channel(
       label: label,
+      channelSecret: List.filled(32, 3),
       encryptionKey: List.filled(32, 1),
       authPublicKey: List.filled(32, 2),
       peerOhDescriptor: OHDescriptor(

@@ -22,6 +22,7 @@ class DriftChannelRepository implements ChannelRepository {
       uuid: channel.id,
       label: channel.label,
       encryptionKey: HEX.encode(channel.encryptionKey),
+      channelSecret: drift.Value(HEX.encode(channel.channelSecret)),
       authPrivateKey: drift.Value(
         channel.authPrivateKey != null
             ? HEX.encode(channel.authPrivateKey!)
@@ -74,6 +75,11 @@ class DriftChannelRepository implements ChannelRepository {
 
     return Channel(
       label: data.label,
+      // v4 channels always persist the secret; the `??` only guards the
+      // impossible legacy-row case (v3 rows are wiped by the v17 migration).
+      channelSecret: data.channelSecret != null
+          ? HEX.decode(data.channelSecret!)
+          : const <int>[],
       encryptionKey: HEX.decode(data.encryptionKey),
       authPrivateKey: data.authPrivateKey != null
           ? HEX.decode(data.authPrivateKey!)

@@ -87,29 +87,27 @@ void main() async {
           authPublicKey: oh.keypair.publicKeyBytes.toList(),
         );
 
-        // Create v2 channel
-        final channel = (await Channel.generate(
-          'My Channel',
-        )).copyWith(peerOhDescriptor: descriptor);
+        // Create channel (QR v4 carries only the channel secret)
+        final channel = await Channel.generate('My Channel');
 
-        // Serialize for QR code
+        // Serialize for QR code (v4, no OH embedded)
         final qr = channel.toJson();
-        expect(qr.contains('"v":3'), isTrue);
+        expect(qr.contains('"v":4'), isTrue);
+        expect(qr.contains('"oh"'), isFalse);
 
-        // Deserialize
-        final restored = Channel.fromJson(qr);
-        expect(restored.peerOhDescriptor, isNotNull);
-        expect(restored.peerOhDescriptor!.handleId, equals(oh.ohId));
-        expect(
-          restored.peerOhDescriptor!.authPublicKey,
-          equals(oh.keypair.publicKeyBytes),
-        );
+        // Deserialize (async in v4)
+        final restored = await Channel.fromJson(qr);
+        expect(restored.id, channel.id);
+        expect(restored.peerOhDescriptor, isNull);
 
-        // sendMessage should work without error
+        // sendMessage should work without error. Bob's OH is discovered out
+        // of band (rendezvous DHT) — here passed directly.
         client.addChannelKeys(
           channel.id,
           channel.encryptionKey,
+          channelSecret: channel.channelSecret,
           peerOhId: oh.ohId,
+          peerOhEndpoint: descriptor.serverEndpoint,
           isChannelCreator: true,
         );
         final msgId = await client.sendMessage(channel.id, 'Test message');

@@ -444,6 +444,10 @@ class MessageSyncService {
       _client.addChannelKeys(
         channel.uuid,
         HEX.decode(channel.encryptionKey),
+        // T44: the channel secret enables the rendezvous DHT layer.
+        channelSecret: channel.channelSecret != null
+            ? HEX.decode(channel.channelSecret!)
+            : null,
         peerOhId: channel.peerOhId != null
             ? HEX.decode(channel.peerOhId!)
             : null,

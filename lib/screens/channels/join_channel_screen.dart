@@ -43,8 +43,8 @@ class _JoinChannelScreenState extends ConsumerState<JoinChannelScreen> {
     });
 
     try {
-      // Decode channel
-      final channel = Channel.fromJson(code);
+      // Decode channel (QR v4: the code carries only the channel secret).
+      final channel = await Channel.fromJson(code);
 
       // Add to repository
       await ref.read(channelRepositoryProvider).addChannel(channel);

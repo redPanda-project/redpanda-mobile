@@ -102,6 +102,14 @@ class OwnOhData {
 class CmdAddChannelKeys extends IsolateCommand {
   final String channelId;
   final List<int> encryptionKey;
+
+  /// T44: the 32-byte channel secret (QR v4), needed for the rendezvous DHT
+  /// derivations (record key, signature, k_enc). Null for legacy callers.
+  final List<int>? channelSecret;
+
+  /// T44: our display name to advertise in the rendezvous record.
+  final String? ownDisplayName;
+
   final List<int>? peerOhId;
 
   /// MS04: host:port of the node hosting the peer's OH; kept out of the
@@ -130,6 +138,8 @@ class CmdAddChannelKeys extends IsolateCommand {
   CmdAddChannelKeys(
     this.channelId,
     this.encryptionKey, {
+    this.channelSecret,
+    this.ownDisplayName,
     this.peerOhId,
     this.peerOhEndpoint,
     this.peerOhSet,
