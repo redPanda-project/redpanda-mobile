@@ -10,9 +10,13 @@ import 'package:redpanda_light_client/src/crypto/channel_message.dart';
 import 'package:redpanda_light_client/src/crypto/message_crypto_v3.dart';
 import 'package:redpanda_light_client/src/domain/channel.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
+import 'package:hex/hex.dart';
 import 'package:redpanda_light_client/src/generated/commands.pb.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
+import 'package:redpanda_light_client/src/peer_repository.dart';
+
+import '../helpers/garlic_test_utils.dart';
 
 /// A scripted in-memory Socket: captures client writes and lets the test
 /// inject node responses. The exchange stays in plaintext because the
@@ -77,6 +81,7 @@ class ScriptedSocket implements Socket {
     while (_outBuffer.isNotEmpty) {
       final command = _outBuffer[0];
       if (command == 141 ||
+          command == 142 ||
           command == 150 ||
           command == 152 ||
           command == 156 ||
@@ -136,15 +141,37 @@ class ScriptedSocket implements Socket {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-/// Client wired to a [ScriptedSocket]; waits until the peer is verified.
-Future<(RedPandaLightClient, ScriptedSocket)> connectedClient() async {
+/// Client wired to a [ScriptedSocket] with a peer repository pre-seeded with
+/// relay candidates (so the garlic-only loopback can build a real route);
+/// waits until the peer is verified.
+Future<(RedPandaLightClient, ScriptedSocket, List<TestHop>)>
+connectedClient() async {
   final socket = ScriptedSocket();
+  final repo = InMemoryPeerRepository();
+  final relays = <TestHop>[];
+  for (var i = 0; i < 3; i++) {
+    final hop = await TestHop.generate(i + 1);
+    relays.add(hop);
+    repo.updatePeer(
+      '10.3.0.$i:5000',
+      nodeId: HEX.encode(hop.nodeId),
+      encryptionPublicKey: HEX.encode(hop.keys.publicKey),
+    );
+  }
   final keys = await KeyPair.generate();
   final client = RedPandaLightClient(
     selfNodeId: NodeId.fromPublicKey(keys),
     selfKeys: keys,
     seeds: ['scripted:1'],
-    socketFactory: (h, p) async => socket,
+    peerRepository: repo,
+    // Only the scripted node is dialable; the relays are KNOWN peers (garlic
+    // hop candidates), never open connections.
+    socketFactory: (h, p) async {
+      if (h != 'scripted') {
+        throw const SocketException('test: only the scripted node is dialable');
+      }
+      return socket;
+    },
   );
   await client.connect();
   final deadline = DateTime.now().add(const Duration(seconds: 15));
@@ -154,21 +181,25 @@ Future<(RedPandaLightClient, ScriptedSocket)> connectedClient() async {
     }
     await Future.delayed(const Duration(milliseconds: 10));
   }
-  return (client, socket);
+  return (client, socket, relays);
 }
 
 /// Scripted node behavior for the loopback flow: answers OH registrations
-/// (150) with OK, deposits (141) with OK while capturing their content, and
-/// fetches (152) with every payload deposited so far (delivered once,
-/// while [deliverOnFetch] is true).
+/// (150) with OK; peels each garlic deposit (142) with the known relay keys
+/// and captures its payload (T45: the loopback is garlic-only now — no direct
+/// 141 deposit); and answers fetches (152) with every payload deposited so far
+/// (delivered once, while [deliverOnFetch] is true). The R-ACK return path of
+/// the deposit is ignored — the loopback proves delivery via the fetch round
+/// trip, not the R-ACK.
 class LoopbackNodeScript {
   final ScriptedSocket socket;
+  final List<TestHop> relays;
   bool deliverOnFetch;
   int deposits = 0;
   final _mailbox = <List<int>>[];
   var _cursor = 0;
 
-  LoopbackNodeScript(this.socket, {required this.deliverOnFetch}) {
+  LoopbackNodeScript(this.socket, this.relays, {required this.deliverOnFetch}) {
     socket.onCommandFrame = _handle;
   }
 
@@ -180,12 +211,14 @@ class LoopbackNodeScript {
     if (command == 150) {
       final response = RegisterOhResponse()..status = Status.OK;
       socket.replyCommand(151, response.writeToBuffer());
-    } else if (command == 141) {
-      final put = FlaschenpostPut.fromBuffer(payload);
-      _mailbox.add(put.content);
+    } else if (command == 142) {
       deposits++;
-      final response = FlaschenpostPutResponse()..status = Status.OK;
-      socket.replyCommand(158, response.writeToBuffer());
+      // Peel asynchronously; the loopback schedules its fetch 1 s later, well
+      // after this fast crypto peel completes.
+      unawaited(() async {
+        final deposit = await peelGarlicDeposit(payload, relays);
+        if (deposit != null) _mailbox.add(deposit.payload);
+      }());
     } else if (command == 152) {
       final response = FetchResponse()..status = Status.OK;
       if (deliverOnFetch) {
@@ -211,9 +244,9 @@ void main() {
   group('T20 runLoopbackTest', () {
     test('round trip: deposit comes back via fetch, never surfaces as a '
         'chat message', () async {
-      final (client, socket) = await connectedClient();
+      final (client, socket, relays) = await connectedClient();
       addTearDown(client.disconnect);
-      LoopbackNodeScript(socket, deliverOnFetch: true);
+      LoopbackNodeScript(socket, relays, deliverOnFetch: true);
 
       final channel = await Channel.generate('Test');
       client.addChannelKeys(
@@ -231,8 +264,8 @@ void main() {
 
       expect(result.success, isTrue, reason: 'error: ${result.error}');
       expect(result.roundtripMs, isNotNull);
-      // No other peers are known to the hop selector — direct deposit.
-      expect(result.hopCount, equals(0));
+      // The deposit travels a real garlic route (T45: never direct).
+      expect(result.hopCount, greaterThan(0));
 
       // The test message must have been swallowed by the fetch pipeline.
       await Future.delayed(const Duration(milliseconds: 100));
@@ -241,9 +274,9 @@ void main() {
 
     test('a re-delivered self-test without a pending entry is swallowed, '
         'not surfaced as a chat message', () async {
-      final (client, socket) = await connectedClient();
+      final (client, socket, relays) = await connectedClient();
       addTearDown(client.disconnect);
-      final node = LoopbackNodeScript(socket, deliverOnFetch: true);
+      final node = LoopbackNodeScript(socket, relays, deliverOnFetch: true);
 
       final channel = await Channel.generate('Test');
       client.addChannelKeys(
@@ -280,9 +313,9 @@ void main() {
     });
 
     test('no own mailbox → failure result, nothing sent', () async {
-      final (client, socket) = await connectedClient();
+      final (client, socket, relays) = await connectedClient();
       addTearDown(client.disconnect);
-      final node = LoopbackNodeScript(socket, deliverOnFetch: true);
+      final node = LoopbackNodeScript(socket, relays, deliverOnFetch: true);
 
       final channel = await Channel.generate('Test');
       client.addChannelKeys(
@@ -301,10 +334,10 @@ void main() {
 
     test('message never comes back → timeout failure; a late arrival is '
         'still swallowed', () async {
-      final (client, socket) = await connectedClient();
+      final (client, socket, relays) = await connectedClient();
       addTearDown(client.disconnect);
       // Deposits are accepted but fetches return an empty mailbox.
-      final node = LoopbackNodeScript(socket, deliverOnFetch: false);
+      final node = LoopbackNodeScript(socket, relays, deliverOnFetch: false);
 
       final channel = await Channel.generate('Test');
       client.addChannelKeys(

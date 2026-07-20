@@ -4,6 +4,74 @@ import 'package:test/test.dart';
 
 import 'package:redpanda_light_client/src/crypto/crypto_utils.dart';
 import 'package:redpanda_light_client/src/garlic/garlic_builder.dart';
+import 'package:redpanda_light_client/src/garlic/return_path.dart';
+
+/// The innermost deposit of a peeled garlic packet: the target OH mailbox id
+/// and the delivered payload.
+class GarlicDeposit {
+  final Uint8List ohId;
+  final Uint8List payload;
+  final int hopCount;
+  const GarlicDeposit(this.ohId, this.payload, this.hopCount);
+}
+
+/// Peels every forward layer of a submitted 2048-byte garlic [packet] with the
+/// known [hops] (relay-side view) and returns the innermost deposit — handling
+/// CMD_DELIVER, CMD_DELIVER_TAGGED and CMD_DELIVER_ACKED. Returns null when the
+/// innermost layer is a CMD_RECORD_STORE / CMD_RECORD_LOOKUP (a T44 rendezvous
+/// packet, not a mailbox deposit) so a mock can simply ignore those. Fails if a
+/// layer is addressed to an unknown hop. Mirrors what the backend relays do end
+/// to end, so a scripted single-node mock can extract the deposit a client sent
+/// over garlic (T45: sends are garlic-only now).
+Future<GarlicDeposit?> peelGarlicDeposit(
+  Uint8List packet,
+  List<TestHop> hops,
+) async {
+  var hopCount = 0;
+  while (true) {
+    final parsed = ParsedPacket.parse(packet);
+    final hop = hops.firstWhere(
+      (h) => _hex(h.nodeId) == _hex(parsed.nextHop),
+      orElse: () => fail('garlic next_hop is not one of the known relays'),
+    );
+    hopCount++;
+    final plaintext = await parsed.decryptLayer(hop.keys.privateKey);
+    final cmd = plaintext[0];
+    if (cmd == GarlicBuilder.cmdForward) {
+      packet = GarlicBuilder.buildPacket(
+        plaintext.sublist(1, 21),
+        plaintext.sublist(21),
+      );
+      continue;
+    }
+    var offset = 1;
+    final ohId = Uint8List.fromList(plaintext.sublist(offset, offset += 20));
+    if (cmd == GarlicBuilder.cmdDeliverTagged) {
+      offset += GarlicBuilder.sessionTagLength; // skip session tag
+    } else if (cmd == GarlicBuilder.cmdDeliverAcked) {
+      final tagLen = plaintext[offset++];
+      offset += tagLen; // skip optional session tag
+      final hopN = plaintext[offset + 36]; // return-path hop_count byte
+      offset += ReturnPathBlock.serializedLength(hopN);
+    } else if (cmd == GarlicBuilder.cmdRecordStore ||
+        cmd == GarlicBuilder.cmdRecordLookup) {
+      return null; // T44 rendezvous packet, not a mailbox deposit
+    } else if (cmd != GarlicBuilder.cmdDeliver) {
+      fail('unexpected garlic deliver command $cmd');
+    }
+    final payloadLen = ByteData.sublistView(
+      Uint8List.fromList(plaintext),
+    ).getUint32(offset);
+    offset += 4;
+    final payload = Uint8List.fromList(
+      plaintext.sublist(offset, offset + payloadLen),
+    );
+    return GarlicDeposit(ohId, payload, hopCount);
+  }
+}
+
+String _hex(List<int> b) =>
+    b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
 
 /// A test hop: X25519 keypair + KademliaId, the relay-side view.
 class TestHop {

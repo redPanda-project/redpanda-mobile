@@ -8,9 +8,13 @@ import 'package:test/test.dart';
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/domain/channel.dart';
 import 'package:redpanda_light_client/src/domain/channel_doctor_report.dart';
+import 'package:hex/hex.dart';
 import 'package:redpanda_light_client/src/generated/commands.pb.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
+import 'package:redpanda_light_client/src/peer_repository.dart';
+
+import '../helpers/garlic_test_utils.dart';
 
 /// A scripted in-memory Socket (see t20_loopback_test.dart): plaintext command
 /// framing, the encryption handshake is never completed.
@@ -67,6 +71,7 @@ class ScriptedSocket implements Socket {
     while (_outBuffer.isNotEmpty) {
       final command = _outBuffer[0];
       if (command == 141 ||
+          command == 142 ||
           command == 150 ||
           command == 152 ||
           command == 156 ||
@@ -125,14 +130,34 @@ class ScriptedSocket implements Socket {
 }
 
 /// Client wired to a [ScriptedSocket]; waits until the peer is verified.
-Future<(RedPandaLightClient, ScriptedSocket)> connectedClient() async {
+Future<(RedPandaLightClient, ScriptedSocket, List<TestHop>)>
+connectedClient() async {
   final socket = ScriptedSocket();
+  final repo = InMemoryPeerRepository();
+  final relays = <TestHop>[];
+  for (var i = 0; i < 3; i++) {
+    final hop = await TestHop.generate(i + 1);
+    relays.add(hop);
+    repo.updatePeer(
+      '10.4.0.$i:5000',
+      nodeId: HEX.encode(hop.nodeId),
+      encryptionPublicKey: HEX.encode(hop.keys.publicKey),
+    );
+  }
   final keys = await KeyPair.generate();
   final client = RedPandaLightClient(
     selfNodeId: NodeId.fromPublicKey(keys),
     selfKeys: keys,
     seeds: ['scripted:1'],
-    socketFactory: (h, p) async => socket,
+    peerRepository: repo,
+    // Only the scripted node is dialable; the relays are KNOWN peers (garlic
+    // hop candidates), never open connections.
+    socketFactory: (h, p) async {
+      if (h != 'scripted') {
+        throw const SocketException('test: only the scripted node is dialable');
+      }
+      return socket;
+    },
   );
   await client.connect();
   final deadline = DateTime.now().add(const Duration(seconds: 15));
@@ -142,19 +167,21 @@ Future<(RedPandaLightClient, ScriptedSocket)> connectedClient() async {
     }
     await Future.delayed(const Duration(milliseconds: 10));
   }
-  return (client, socket);
+  return (client, socket, relays);
 }
 
 /// Scripted node for the doctor flow: OH registrations (150) → OK with a
-/// 7-day expiry; deposits (141) → OK, captured; fetches (152) → deliver
-/// captured deposits once while [deliverOnFetch] is true.
+/// 7-day expiry; garlic deposits (142, T45) are peeled with the known relay
+/// keys and their payload captured; fetches (152) → deliver captured deposits
+/// once while [deliverOnFetch] is true.
 class DoctorNodeScript {
   final ScriptedSocket socket;
+  final List<TestHop> relays;
   bool deliverOnFetch;
   final _mailbox = <List<int>>[];
   var _cursor = 0;
 
-  DoctorNodeScript(this.socket, {required this.deliverOnFetch}) {
+  DoctorNodeScript(this.socket, this.relays, {required this.deliverOnFetch}) {
     socket.onCommandFrame = _handle;
   }
 
@@ -166,13 +193,11 @@ class DoctorNodeScript {
           DateTime.now().add(const Duration(days: 7)).millisecondsSinceEpoch,
         );
       socket.replyCommand(151, response.writeToBuffer());
-    } else if (command == 141) {
-      final put = FlaschenpostPut.fromBuffer(payload);
-      _mailbox.add(put.content);
-      socket.replyCommand(
-        158,
-        (FlaschenpostPutResponse()..status = Status.OK).writeToBuffer(),
-      );
+    } else if (command == 142) {
+      unawaited(() async {
+        final deposit = await peelGarlicDeposit(payload, relays);
+        if (deposit != null) _mailbox.add(deposit.payload);
+      }());
     } else if (command == 152) {
       final response = FetchResponse()..status = Status.OK;
       if (deliverOnFetch) {
@@ -200,9 +225,9 @@ DoctorStage stageNamed(ChannelDoctorReport report, String name) =>
 void main() {
   group('T25 runChannelDoctor', () {
     test('healthy channel: all six stages are green', () async {
-      final (client, socket) = await connectedClient();
+      final (client, socket, relays) = await connectedClient();
       addTearDown(client.disconnect);
-      DoctorNodeScript(socket, deliverOnFetch: true);
+      DoctorNodeScript(socket, relays, deliverOnFetch: true);
 
       final channel = await Channel.generate('Test');
       client.addChannelKeys(
@@ -281,9 +306,9 @@ void main() {
     });
 
     test('peer OH missing: sending stage is amber', () async {
-      final (client, socket) = await connectedClient();
+      final (client, socket, relays) = await connectedClient();
       addTearDown(client.disconnect);
-      DoctorNodeScript(socket, deliverOnFetch: true);
+      DoctorNodeScript(socket, relays, deliverOnFetch: true);
 
       final channel = await Channel.generate('Test');
       // No peerOhId registered.
@@ -302,10 +327,10 @@ void main() {
     });
 
     test('loopback never returns: self-test stage is red', () async {
-      final (client, socket) = await connectedClient();
+      final (client, socket, relays) = await connectedClient();
       addTearDown(client.disconnect);
       // Deposits accepted, but fetches never return the deposited item.
-      DoctorNodeScript(socket, deliverOnFetch: false);
+      DoctorNodeScript(socket, relays, deliverOnFetch: false);
 
       final channel = await Channel.generate('Test');
       client.addChannelKeys(
@@ -327,9 +352,9 @@ void main() {
     });
 
     test('own mailbox expired: mailbox stage is red', () async {
-      final (client, socket) = await connectedClient();
+      final (client, socket, relays) = await connectedClient();
       addTearDown(client.disconnect);
-      DoctorNodeScript(socket, deliverOnFetch: true);
+      DoctorNodeScript(socket, relays, deliverOnFetch: true);
 
       final channel = await Channel.generate('Test');
       client.addChannelKeys(
@@ -352,9 +377,9 @@ void main() {
     });
 
     test('own mailbox renewing soon: mailbox stage is amber', () async {
-      final (client, socket) = await connectedClient();
+      final (client, socket, relays) = await connectedClient();
       addTearDown(client.disconnect);
-      DoctorNodeScript(socket, deliverOnFetch: true);
+      DoctorNodeScript(socket, relays, deliverOnFetch: true);
 
       final channel = await Channel.generate('Test');
       client.addChannelKeys(

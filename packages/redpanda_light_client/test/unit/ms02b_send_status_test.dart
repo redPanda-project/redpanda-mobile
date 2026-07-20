@@ -6,7 +6,6 @@ import 'package:fixnum/fixnum.dart' as fixnum;
 import 'package:test/test.dart';
 
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
-import 'package:redpanda_light_client/src/domain/channel.dart';
 import 'package:redpanda_light_client/src/domain/send_exceptions.dart';
 import 'package:redpanda_light_client/src/generated/commands.pb.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
@@ -231,167 +230,15 @@ void main() {
     );
   });
 
-  group('MS02b sendMessage: deposit response handling', () {
-    Future<void> respondToDeposit(ScriptedSocket socket, Status status) async {
-      socket.onCommandFrame = (command, payload) {
-        if (command != 141) return;
-        final put = FlaschenpostPut.fromBuffer(payload);
-        expect(put.wantResponse, isTrue);
-        final response = FlaschenpostPutResponse()..status = status;
-        socket.replyCommand(158, response.writeToBuffer());
-      };
-    }
-
-    test('OK response resolves with the message id', () async {
-      final (client, socket) = await connectedClient();
-      addTearDown(client.disconnect);
-      await respondToDeposit(socket, Status.OK);
-
-      final channel = await Channel.generate('Test');
-      client.addChannelKeys(
-        channel.id,
-        channel.encryptionKey,
-        // A known peer OH is required for the direct-deposit fallback to be
-        // attempted at all (REDPANDAJ-2DR: sendMessage refuses to deposit
-        // with an unknown/empty oh_id) — these tests exercise the
-        // FlaschenpostPutResponse handling of that deposit.
-        peerOhId: List<int>.generate(20, (i) => i),
-        isChannelCreator: true,
-      );
-
-      final messageId = await client.sendMessage(channel.id, 'Hello');
-      expect(messageId, hasLength(32)); // 16 bytes hex-encoded
-    });
-
-    test('QUOTA_EXCEEDED throws DepositException(quotaExceeded)', () async {
-      final (client, socket) = await connectedClient();
-      addTearDown(client.disconnect);
-      await respondToDeposit(socket, Status.QUOTA_EXCEEDED);
-
-      final channel = await Channel.generate('Test');
-      client.addChannelKeys(
-        channel.id,
-        channel.encryptionKey,
-        // A known peer OH is required for the direct-deposit fallback to be
-        // attempted at all (REDPANDAJ-2DR: sendMessage refuses to deposit
-        // with an unknown/empty oh_id) — these tests exercise the
-        // FlaschenpostPutResponse handling of that deposit.
-        peerOhId: List<int>.generate(20, (i) => i),
-        isChannelCreator: true,
-      );
-
-      await expectLater(
-        client.sendMessage(channel.id, 'Hello'),
-        throwsA(
-          isA<DepositException>().having(
-            (e) => e.isQuotaExceeded,
-            'isQuotaExceeded',
-            isTrue,
-          ),
-        ),
-      );
-    });
-
-    test('BAD_REQUEST throws DepositException(badRequest)', () async {
-      final (client, socket) = await connectedClient();
-      addTearDown(client.disconnect);
-      await respondToDeposit(socket, Status.BAD_REQUEST);
-
-      final channel = await Channel.generate('Test');
-      client.addChannelKeys(
-        channel.id,
-        channel.encryptionKey,
-        // A known peer OH is required for the direct-deposit fallback to be
-        // attempted at all (REDPANDAJ-2DR: sendMessage refuses to deposit
-        // with an unknown/empty oh_id) — these tests exercise the
-        // FlaschenpostPutResponse handling of that deposit.
-        peerOhId: List<int>.generate(20, (i) => i),
-        isChannelCreator: true,
-      );
-
-      await expectLater(
-        client.sendMessage(channel.id, 'Hello'),
-        throwsA(
-          isA<DepositException>().having(
-            (e) => e.isBadRequest,
-            'isBadRequest',
-            isTrue,
-          ),
-        ),
-      );
-    });
-
-    test('no response falls back to fire-and-forget (legacy node)', () async {
-      final (client, _) = await connectedClient(
-        depositResponseTimeout: const Duration(milliseconds: 200),
-      );
-      addTearDown(client.disconnect);
-      // The node never answers — pre-MS02b behavior must be preserved.
-
-      final channel = await Channel.generate('Test');
-      client.addChannelKeys(
-        channel.id,
-        channel.encryptionKey,
-        // A known peer OH is required for the direct-deposit fallback to be
-        // attempted at all (REDPANDAJ-2DR: sendMessage refuses to deposit
-        // with an unknown/empty oh_id) — these tests exercise the
-        // FlaschenpostPutResponse handling of that deposit.
-        peerOhId: List<int>.generate(20, (i) => i),
-        isChannelCreator: true,
-      );
-
-      final messageId = await client.sendMessage(channel.id, 'Hello');
-      expect(messageId, hasLength(32));
-    });
-
-    test('a response arriving after the timeout is not misattributed to the '
-        'next deposit', () async {
-      final (client, socket) = await connectedClient(
-        depositResponseTimeout: const Duration(milliseconds: 200),
-      );
-      addTearDown(client.disconnect);
-
-      final channel = await Channel.generate('Test');
-      client.addChannelKeys(
-        channel.id,
-        channel.encryptionKey,
-        // A known peer OH is required for the direct-deposit fallback to be
-        // attempted at all (REDPANDAJ-2DR: sendMessage refuses to deposit
-        // with an unknown/empty oh_id) — these tests exercise the
-        // FlaschenpostPutResponse handling of that deposit.
-        peerOhId: List<int>.generate(20, (i) => i),
-        isChannelCreator: true,
-      );
-
-      // First deposit: the node answers QUOTA_EXCEEDED, but only after the
-      // client already gave up waiting.
-      var deposits = 0;
-      socket.onCommandFrame = (command, payload) {
-        if (command != 141) return;
-        deposits++;
-        if (deposits == 1) {
-          Future.delayed(const Duration(milliseconds: 400), () {
-            final late = FlaschenpostPutResponse()
-              ..status = Status.QUOTA_EXCEEDED;
-            socket.replyCommand(158, late.writeToBuffer());
-          });
-        } else {
-          final response = FlaschenpostPutResponse()..status = Status.OK;
-          socket.replyCommand(158, response.writeToBuffer());
-        }
-      };
-
-      // Times out and falls back to fire-and-forget.
-      await client.sendMessage(channel.id, 'First');
-
-      // Let the stale QUOTA_EXCEEDED arrive before the next deposit.
-      await Future.delayed(const Duration(milliseconds: 400));
-
-      // The second deposit must see ITS response (OK), not the stale one.
-      final messageId = await client.sendMessage(channel.id, 'Second');
-      expect(messageId, hasLength(32));
-    });
-  });
+  // NOTE (T45): the former "MS02b sendMessage: deposit response handling"
+  // group was removed with the direct-deposit send path — sendMessage now
+  // deposits ONLY over garlic (command 142), never a direct FlaschenpostPut
+  // with a synchronous FlaschenpostPutResponse. The FlaschenpostPut wire
+  // format and the command-158 response-queue plumbing still exist for the
+  // MS08 group send path and stay covered by the protobuf roundtrip group
+  // above, the "command 158 dispatch" group, and the group-chat tests.
+  // Garlic send semantics are covered by ms04_send_garlic_test.dart and
+  // t42_multi_oh_test.dart.
 
   group('MS02b registerOutboundHandle: RegisterOhResponse handling', () {
     test('RATE_LIMIT throws RateLimitException', () async {

@@ -14,9 +14,13 @@ import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/domain/peer_oh_update.dart';
+import 'package:hex/hex.dart';
 import 'package:redpanda_light_client/src/generated/commands.pb.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
+import 'package:redpanda_light_client/src/peer_repository.dart';
+
+import '../helpers/garlic_test_utils.dart';
 
 /// T21 OH failover unit tests. A scripted in-memory Socket plays the ONE
 /// reachable node while the OH's recorded host stays unreachable (every dial
@@ -131,13 +135,26 @@ const liveEndpoint = 'scripted:1';
 
 /// Client whose only reachable node is the [ScriptedSocket]; dials to any
 /// other endpoint (the dead OH host) fail immediately.
-Future<(RedPandaLightClient, ScriptedSocket)> connectedClient() async {
+Future<(RedPandaLightClient, ScriptedSocket, List<TestHop>)>
+connectedClient() async {
   final socket = ScriptedSocket();
+  final repo = InMemoryPeerRepository();
+  final relays = <TestHop>[];
+  for (var i = 0; i < 3; i++) {
+    final hop = await TestHop.generate(i + 1);
+    relays.add(hop);
+    repo.updatePeer(
+      '10.5.0.$i:5000',
+      nodeId: HEX.encode(hop.nodeId),
+      encryptionPublicKey: HEX.encode(hop.keys.publicKey),
+    );
+  }
   final keys = await KeyPair.generate();
   final client = RedPandaLightClient(
     selfNodeId: NodeId.fromPublicKey(keys),
     selfKeys: keys,
     seeds: [liveEndpoint],
+    peerRepository: repo,
     socketFactory: (h, p) async {
       if (h == 'scripted') return socket;
       throw const SocketException('test: unreachable');
@@ -151,7 +168,7 @@ Future<(RedPandaLightClient, ScriptedSocket)> connectedClient() async {
     }
     await Future.delayed(const Duration(milliseconds: 10));
   }
-  return (client, socket);
+  return (client, socket, relays);
 }
 
 Future<void> pumpUntil(
@@ -226,11 +243,12 @@ void main() {
     test(
       'three unreachable fetch cycles move the mailbox and announce it',
       () async {
-        final (client, socket) = await connectedClient();
+        final (client, socket, relays) = await connectedClient();
         addTearDown(client.disconnect);
 
         RegisterOhRequest? registerRequest;
-        FlaschenpostPut? announceDeposit;
+        List<int>? announceOhId;
+        List<int>? announcePayload;
         socket.onCommandFrame = (command, payload) {
           if (command == 150) {
             registerRequest = RegisterOhRequest.fromBuffer(payload);
@@ -255,12 +273,15 @@ void main() {
               153,
               (FetchResponse()..status = Status.OK).writeToBuffer(),
             );
-          } else if (command == 141) {
-            announceDeposit ??= FlaschenpostPut.fromBuffer(payload);
-            socket.replyCommand(
-              158,
-              (FlaschenpostPutResponse()..status = Status.OK).writeToBuffer(),
-            );
+          } else if (command == 142) {
+            // T45: the oh_update announce travels over garlic now — peel it.
+            unawaited(() async {
+              final deposit = await peelGarlicDeposit(payload, relays);
+              if (deposit != null && announcePayload == null) {
+                announceOhId = deposit.ohId;
+                announcePayload = deposit.payload;
+              }
+            }());
           }
         };
 
@@ -325,19 +346,16 @@ void main() {
         // new descriptor, ratchet-encrypted (v4) — decryptable only by the
         // partner's session.
         await pumpUntil(
-          () => announceDeposit != null,
+          () => announcePayload != null,
           reason: 'no oh_update announce was deposited',
         );
-        expect(_sameBytes(announceDeposit!.ohId, peerOhId), isTrue);
+        expect(_sameBytes(announceOhId!, peerOhId), isTrue);
 
         final partnerSession = await RatchetSession.create(
           channelKey: channelKey,
           isChannelCreator: false,
         );
-        final message = await partnerSession.decrypt(
-          announceDeposit!.content,
-          'chan',
-        );
+        final message = await partnerSession.decrypt(announcePayload!, 'chan');
         expect(message.isOhUpdate, isTrue);
         expect(message.content, isEmpty);
         // T42: the announce is a JSON ARRAY of descriptors (the full own set).
@@ -404,7 +422,7 @@ void main() {
 
   group('T21 receive: oh_update applies and deduplicates', () {
     test('fetched oh_update moves the peer mailbox for future sends', () async {
-      final (client, socket) = await connectedClient();
+      final (client, socket, relays) = await connectedClient();
       addTearDown(client.disconnect);
 
       final newPeerOhId = List<int>.generate(20, (i) => 200 - i);
@@ -434,7 +452,7 @@ void main() {
       final firstCopy = await partnerSession.encrypt(announce(), 'chan');
       final secondCopy = await partnerSession.encrypt(announce(), 'chan');
 
-      final deposits = <FlaschenpostPut>[];
+      final depositOhIds = <List<int>>[];
       var itemsDelivered = false;
       socket.onCommandFrame = (command, payload) {
         if (command == 150) {
@@ -477,12 +495,11 @@ void main() {
                   ]))
                 .writeToBuffer(),
           );
-        } else if (command == 141) {
-          deposits.add(FlaschenpostPut.fromBuffer(payload));
-          socket.replyCommand(
-            158,
-            (FlaschenpostPutResponse()..status = Status.OK).writeToBuffer(),
-          );
+        } else if (command == 142) {
+          unawaited(() async {
+            final deposit = await peelGarlicDeposit(payload, relays);
+            if (deposit != null) depositOhIds.add(deposit.ohId);
+          }());
         }
       };
 
@@ -540,17 +557,17 @@ void main() {
         true,
       );
 
-      // A follow-up send deposits into the NEW peer mailbox.
+      // A follow-up send deposits into the NEW peer mailbox (over garlic).
       await client.sendMessage('chan', 'hello after failover');
       await pumpUntil(
-        () => deposits.isNotEmpty,
+        () => depositOhIds.isNotEmpty,
         reason: 'the send after the oh_update never deposited',
       );
-      expect(_sameBytes(deposits.last.ohId, newPeerOhId), isTrue);
+      expect(depositOhIds.any((id) => _sameBytes(id, newPeerOhId)), isTrue);
     });
 
     test('an unreadable oh_update is dropped without touching state', () async {
-      final (client, socket) = await connectedClient();
+      final (client, socket, _) = await connectedClient();
       addTearDown(client.disconnect);
 
       final partnerSession = await RatchetSession.create(
