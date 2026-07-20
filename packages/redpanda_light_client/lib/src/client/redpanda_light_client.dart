@@ -2630,7 +2630,25 @@ class RedPandaLightClient implements RedPandaClient {
   /// T44: if our OH set for [channelId] changed, republish the rendezvous
   /// record. Best-effort — a failed publish is retried on the next change and
   /// by the daily refresh.
+  /// Cheap count of known nodes that could serve as garlic relays (have both a
+  /// KademliaId and a 32-byte X25519 encryption key). Rendezvous store/lookup
+  /// must travel garlic-wrapped to a REMOTE node, so it is only meaningful with
+  /// at least two such nodes (the connected submit node plus one relay). On an
+  /// isolated single-node network this is 1, keeping the whole rendezvous
+  /// network layer dormant so it never competes with the mailbox pairing path.
+  bool get _hasRendezvousRelays {
+    var n = 0;
+    for (final address in _peerRepository.knownAddresses) {
+      final peer = _peerRepository.getPeer(address);
+      if (peer?.nodeId == null) continue;
+      if (peer?.encryptionPublicKey?.length != 64) continue;
+      if (++n >= 2) return true;
+    }
+    return false;
+  }
+
   Future<void> _publishRendezvousIfChanged(String channelId) async {
+    if (!_hasRendezvousRelays) return;
     if (!_rendezvous.knows(channelId)) return;
     final descriptors = _ownDescriptorsFor(channelId);
     if (descriptors.isEmpty) return;
@@ -2655,7 +2673,7 @@ class RedPandaLightClient implements RedPandaClient {
       // network) — it just no-ops until hops appear.
       final hops = _selectGarlicHops(channelId, submitVia);
       if (hops.isEmpty) {
-        RpLog.info(
+        RpLog.debug(
           'RedPandaLightClient: rendezvous publish for $channelId skipped — '
           'no relay hops known',
         );
@@ -2688,7 +2706,16 @@ class RedPandaLightClient implements RedPandaClient {
   /// remote node; the answer returns via a reverse-garlic return path into our
   /// own OH mailbox and is correlated in the fetch loop by its ack tag.
   Future<void> _recoverViaRendezvous(String channelId) async {
+    if (!_hasRendezvousRelays) return;
     if (!_rendezvous.knows(channelId)) return;
+    // Throttle first (before any peer scan / key derivation): recovery fires
+    // on every failing send/deposit, so a retry burst must be cheaply rejected.
+    final nowThrottle = DateTime.now();
+    final lastAttempt = _lastRecoveryAttempt[channelId];
+    if (lastAttempt != null &&
+        nowThrottle.difference(lastAttempt) < _recoveryMinInterval) {
+      return;
+    }
     final submitVia = _peers.values
         .where((p) => p.isHandshakeVerified)
         .firstOrNull;
@@ -2708,19 +2735,15 @@ class RedPandaLightClient implements RedPandaClient {
     final hops = _selectGarlicHops(channelId, submitVia);
     if (hops.isEmpty) return;
 
-    // Throttle: recovery fires on every failing send/deposit; without a floor
-    // a retry burst would repeatedly redo the keygen + DHT lookups.
-    final nowDt = DateTime.now();
-    final last = _lastRecoveryAttempt[channelId];
-    if (last != null && nowDt.difference(last) < _recoveryMinInterval) return;
-    _lastRecoveryAttempt[channelId] = nowDt;
+    // Commit to an attempt only now that we know it can actually be sent.
+    _lastRecoveryAttempt[channelId] = nowThrottle;
 
     final returnHops = _hopSelector.selectHops(
       count: defaultHopCount,
       excludeAddresses: {?ownOh.serverEndpoint, submitVia.address},
       excludeNodeIds: {?submitVia.discoveredNodeId},
     );
-    final now = nowDt.millisecondsSinceEpoch;
+    final now = nowThrottle.millisecondsSinceEpoch;
     final keys = await _rendezvous.lookupKeys(channelId, now);
     for (final recordKey in keys) {
       try {
@@ -4564,6 +4587,19 @@ class RedPandaLightClient implements RedPandaClient {
       _recordLookupTags.remove(tagHex);
       return true;
     });
+    // No relay nodes (e.g. an isolated single-node network) → rendezvous
+    // publishing is inapplicable; stay dormant so it never competes with the
+    // mailbox register/fetch path.
+    if (!_hasRendezvousRelays) return;
+    // Self-throttle the sweep: it is driven by both the fast poll cycle and the
+    // renewal timer, but rendezvous republishing must never compete with the
+    // critical mailbox register/fetch path (a busy sweep during the fragile
+    // pairing window delayed OH confirmation and dropped the first deposit).
+    if (_lastRepublishSweep != null &&
+        now.difference(_lastRepublishSweep!) < _rendezvousSweepInterval) {
+      return;
+    }
+    _lastRepublishSweep = now;
     for (final channelId in _rendezvous.channels.toList()) {
       final last = _lastRendezvousPublish[channelId];
       // Never-published channels (hops not yet ready at registration) retry
@@ -4582,6 +4618,11 @@ class RedPandaLightClient implements RedPandaClient {
 
   /// How often an unchanged rendezvous record is refreshed into the DHT.
   static const Duration _rendezvousRepublishInterval = Duration(minutes: 3);
+
+  /// Minimum spacing between full republish sweeps, independent of how often
+  /// the poll cycle / renewal timer call in.
+  static const Duration _rendezvousSweepInterval = Duration(seconds: 30);
+  DateTime? _lastRepublishSweep;
 
   final Map<String, DateTime> _lastRendezvousPublish = {};
 
