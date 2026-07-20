@@ -12,8 +12,92 @@ import 'package:redpanda/screens/chat/share_qr_dialog.dart';
 import 'package:redpanda/services/message_sync_service.dart';
 import 'package:redpanda/services/send_retry_queue.dart';
 import 'package:redpanda/shared/providers.dart';
+import 'package:redpanda/shared/widgets/glass_surface.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart'
     show DepositException, GroupSendException, UnknownPeerException;
+
+/// Floating, blurred top bar (glass chrome): the message list scrolls
+/// beneath it (`extendBodyBehindAppBar`) instead of sitting under a flat
+/// opaque Material app bar.
+class _GlassChatTopBar extends StatelessWidget implements PreferredSizeWidget {
+  final Widget title;
+  final List<Widget> actions;
+
+  const _GlassChatTopBar({required this.title, required this.actions});
+
+  @override
+  Size get preferredSize => const Size.fromHeight(64);
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      bottom: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+        child: GlassSurface(
+          borderRadius: BorderRadius.circular(24),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          child: Row(
+            children: [
+              IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () => Navigator.of(context).maybePop(),
+              ),
+              Expanded(child: title),
+              ...actions,
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Floating glass capsule replacing the flat, bordered compose bar.
+class _GlassComposer extends StatelessWidget {
+  final TextEditingController controller;
+  final VoidCallback onSend;
+
+  const _GlassComposer({required this.controller, required this.onSend});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SafeArea(
+      minimum: const EdgeInsets.only(bottom: 8),
+      child: GlassSurface(
+        borderRadius: BorderRadius.circular(999),
+        padding: const EdgeInsets.fromLTRB(18, 4, 4, 4),
+        child: Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: controller,
+                decoration: const InputDecoration(
+                  hintText: "Type a message...",
+                  border: InputBorder.none,
+                  isCollapsed: true,
+                ),
+                onSubmitted: (_) => onSend(),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              decoration: BoxDecoration(
+                color: scheme.primary,
+                shape: BoxShape.circle,
+              ),
+              child: IconButton(
+                icon: Icon(Icons.send, color: scheme.onPrimary),
+                onPressed: onSend,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
 class ChatScreen extends ConsumerStatefulWidget {
   final String peerUuid;
@@ -304,11 +388,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }
     });
 
+    final topInset = MediaQuery.paddingOf(context).top;
+
     return Scaffold(
-      appBar: AppBar(
+      extendBodyBehindAppBar: true,
+      appBar: _GlassChatTopBar(
         title: group != null
             ? Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(group.label),
                   Text(
@@ -325,6 +413,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             : channelAsync.when(
                 data: (channel) => Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(channel?.label ?? "Unknown"),
                     const Text(
@@ -384,116 +473,96 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ),
         ],
       ),
-      body: Column(
+      body: Stack(
         children: [
-          Expanded(
-            child: messagesAsync.when(
-              data: (messages) {
-                if (messages.isEmpty) {
-                  return const Center(child: Text("Say hi!"));
-                }
-                return ListView.builder(
-                  reverse:
-                      true, // Show newest at bottom (requires list to be reversed order)
-                  itemCount: messages.length,
-                  itemBuilder: (context, index) {
-                    final msg = messages[index];
-                    // MS08: in groups the sender is a member id, so "mine"
-                    // is decided by the status (incoming rows are always
-                    // `received`); 1:1 keeps the legacy heuristic.
-                    final isMe = group != null
-                        ? msg.status != MessageStatus.received
-                        : msg.conversationId == widget.peerUuid &&
-                              msg.senderId != widget.peerUuid;
+          messagesAsync.when(
+            data: (messages) {
+              if (messages.isEmpty) {
+                return const Center(child: Text("Say hi!"));
+              }
+              return ListView.builder(
+                reverse:
+                    true, // Show newest at bottom (requires list to be reversed order)
+                padding: EdgeInsets.fromLTRB(0, topInset + 76, 0, 88),
+                itemCount: messages.length,
+                itemBuilder: (context, index) {
+                  final msg = messages[index];
+                  // MS08: in groups the sender is a member id, so "mine"
+                  // is decided by the status (incoming rows are always
+                  // `received`); 1:1 keeps the legacy heuristic.
+                  final isMe = group != null
+                      ? msg.status != MessageStatus.received
+                      : msg.conversationId == widget.peerUuid &&
+                            msg.senderId != widget.peerUuid;
 
-                    final statusIcon = isMe ? _statusIcon(msg.status) : null;
-                    // MS08: authenticated sender name for group messages.
-                    final senderName = !isMe && msg.senderMemberId != null
-                        ? memberNames[msg.senderMemberId] ?? 'Unknown member'
-                        : null;
+                  final statusIcon = isMe ? _statusIcon(msg.status) : null;
+                  // MS08: authenticated sender name for group messages.
+                  final senderName = !isMe && msg.senderMemberId != null
+                      ? memberNames[msg.senderMemberId] ?? 'Unknown member'
+                      : null;
 
-                    return Align(
-                      alignment: isMe
-                          ? Alignment.centerRight
-                          : Alignment.centerLeft,
-                      child: GestureDetector(
-                        onTap: isMe ? () => _showDeliveryDetails(msg) : null,
-                        child: Container(
-                          margin: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 4,
-                          ),
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: isMe
-                                ? Theme.of(context).colorScheme.primaryContainer
-                                : Theme.of(
-                                    context,
-                                  ).colorScheme.surfaceContainerHighest,
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (senderName != null)
-                                Text(
-                                  senderName,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.bold,
-                                    color: Theme.of(
-                                      context,
-                                    ).colorScheme.primary,
-                                  ),
+                  return Align(
+                    alignment: isMe
+                        ? Alignment.centerRight
+                        : Alignment.centerLeft,
+                    child: GestureDetector(
+                      onTap: isMe ? () => _showDeliveryDetails(msg) : null,
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 4,
+                        ),
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: isMe
+                              ? Theme.of(context).colorScheme.primaryContainer
+                              : Theme.of(
+                                  context,
+                                ).colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (senderName != null)
+                              Text(
+                                senderName,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  color: Theme.of(context).colorScheme.primary,
                                 ),
-                              Row(
-                                mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                  Flexible(child: Text(msg.content)),
-                                  if (statusIcon != null) ...[
-                                    const SizedBox(width: 6),
-                                    statusIcon,
-                                  ],
-                                ],
                               ),
-                            ],
-                          ),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Flexible(child: Text(msg.content)),
+                                if (statusIcon != null) ...[
+                                  const SizedBox(width: 6),
+                                  statusIcon,
+                                ],
+                              ],
+                            ),
+                          ],
                         ),
                       ),
-                    );
-                  },
-                );
-              },
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (e, s) => Center(child: Text("Error: $e")),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _messageController,
-                    decoration: InputDecoration(
-                      hintText: "Type a message...",
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(24),
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                      ),
                     ),
-                    onSubmitted: (_) => _sendMessage(),
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.send),
-                  onPressed: _sendMessage,
-                ),
-              ],
+                  );
+                },
+              );
+            },
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (e, s) => Center(child: Text("Error: $e")),
+          ),
+          Positioned(
+            left: 12,
+            right: 12,
+            bottom: 0,
+            child: _GlassComposer(
+              controller: _messageController,
+              onSend: _sendMessage,
             ),
           ),
         ],
