@@ -2405,8 +2405,10 @@ class RedPandaLightClient implements RedPandaClient {
     _startPolling();
     // T44: a freshly registered mailbox is a new own-OH — publish/refresh the
     // rendezvous record so peers can discover us over the DHT (idempotent:
-    // only republishes when the own-OH set actually changed).
-    if (channelId != null) {
+    // only republishes when the own-OH set actually changed). Gated on relay
+    // availability so it schedules ZERO work on a single-node network, keeping
+    // the fragile OH-registration/first-delivery window free of any churn.
+    if (channelId != null && _hasRendezvousRelays) {
       unawaited(_publishRendezvousIfChanged(channelId));
     }
     // T27: a freshly registered handle means a brand-new channel — the
@@ -2623,8 +2625,11 @@ class RedPandaLightClient implements RedPandaClient {
         .toList(growable: false);
     _ohRegistrationController.add(set);
     // T44: our OH set just changed — refresh the rendezvous record so peers
-    // can still find us over the DHT (publish on every own-OH change).
-    unawaited(_publishRendezvousIfChanged(channelId));
+    // can still find us over the DHT (publish on every own-OH change). Gated on
+    // relay availability so a single-node network schedules no work here.
+    if (_hasRendezvousRelays) {
+      unawaited(_publishRendezvousIfChanged(channelId));
+    }
   }
 
   /// T44: if our OH set for [channelId] changed, republish the rendezvous
