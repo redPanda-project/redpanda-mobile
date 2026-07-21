@@ -210,88 +210,108 @@ class HomeScreen extends ConsumerWidget {
                 _platformNotice(context),
                 // MS08: pending group invites first — they need a decision.
                 for (final invite in invites)
-                  Card(
+                  Container(
                     margin: const EdgeInsets.symmetric(
                       horizontal: 12,
                       vertical: 4,
                     ),
-                    child: ListTile(
-                      leading: const CircleAvatar(child: Icon(Icons.group_add)),
-                      title: Text(invite.groupName),
-                      subtitle: const Text('Group invite'),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.check, color: Colors.green),
-                            onPressed: () async {
-                              final messenger = ScaffoldMessenger.of(context);
-                              try {
-                                await ref
-                                    .read(groupServiceProvider)
-                                    .acceptInvite(invite.groupId);
-                              } catch (e) {
-                                messenger.showSnackBar(
-                                  SnackBar(
-                                    content: Text('Could not join group: $e'),
-                                  ),
-                                );
-                              }
-                            },
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.close, color: Colors.red),
-                            onPressed: () => ref
-                                .read(groupServiceProvider)
-                                .dismissInvite(invite.groupId),
-                          ),
-                        ],
+                    child: GlassSurface(
+                      borderRadius: BorderRadius.circular(18),
+                      padding: EdgeInsets.zero,
+                      blurSigma: 16,
+                      child: ListTile(
+                        leading: const CircleAvatar(
+                          child: Icon(Icons.group_add),
+                        ),
+                        title: Text(invite.groupName),
+                        subtitle: const Text('Group invite'),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(
+                                Icons.check,
+                                color: Colors.green,
+                              ),
+                              onPressed: () async {
+                                final messenger = ScaffoldMessenger.of(context);
+                                try {
+                                  await ref
+                                      .read(groupServiceProvider)
+                                      .acceptInvite(invite.groupId);
+                                } catch (e) {
+                                  messenger.showSnackBar(
+                                    SnackBar(
+                                      content: Text('Could not join group: $e'),
+                                    ),
+                                  );
+                                }
+                              },
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.close, color: Colors.red),
+                              onPressed: () => ref
+                                  .read(groupServiceProvider)
+                                  .dismissInvite(invite.groupId),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
                 for (final group in groups)
-                  Card(
+                  Container(
                     margin: const EdgeInsets.symmetric(
                       horizontal: 12,
                       vertical: 4,
                     ),
-                    child: ListTile(
-                      leading: CircleAvatar(
-                        backgroundColor: Theme.of(
-                          context,
-                        ).colorScheme.secondaryContainer,
-                        child: const Icon(Icons.group),
+                    child: GlassSurface(
+                      borderRadius: BorderRadius.circular(18),
+                      padding: EdgeInsets.zero,
+                      blurSigma: 16,
+                      child: ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor: Theme.of(
+                            context,
+                          ).colorScheme.secondaryContainer,
+                          child: const Icon(Icons.group),
+                        ),
+                        title: Text(group.label),
+                        subtitle: Text(
+                          group.keyEpoch == 0
+                              ? 'Waiting for the group key…'
+                              : 'Group',
+                        ),
+                        onTap: () {
+                          context.push('/chat/${group.groupId}');
+                        },
                       ),
-                      title: Text(group.label),
-                      subtitle: Text(
-                        group.keyEpoch == 0
-                            ? 'Waiting for the group key…'
-                            : 'Group',
-                      ),
-                      onTap: () {
-                        context.push('/chat/${group.groupId}');
-                      },
                     ),
                   ),
                 for (final channel in channels)
-                  Card(
+                  Container(
                     margin: const EdgeInsets.symmetric(
                       horizontal: 12,
                       vertical: 4,
                     ),
-                    child: ListTile(
-                      leading: CircleAvatar(
-                        backgroundColor: Theme.of(
-                          context,
-                        ).colorScheme.primaryContainer,
-                        child: Text(channel.label[0].toUpperCase()),
+                    child: GlassSurface(
+                      borderRadius: BorderRadius.circular(18),
+                      padding: EdgeInsets.zero,
+                      blurSigma: 16,
+                      child: ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor: Theme.of(
+                            context,
+                          ).colorScheme.primaryContainer,
+                          child: Text(channel.label[0].toUpperCase()),
+                        ),
+                        title: Text(channel.label),
+                        subtitle: const Text('Private Channel'),
+                        trailing: _ChannelHealthDot(channelId: channel.id),
+                        onTap: () {
+                          context.push('/chat/${channel.id}');
+                        },
                       ),
-                      title: Text(channel.label),
-                      subtitle: const Text('Private Channel'),
-                      trailing: _ChannelHealthDot(channelId: channel.id),
-                      onTap: () {
-                        context.push('/chat/${channel.id}');
-                      },
                     ),
                   ),
               ],

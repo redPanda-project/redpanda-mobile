@@ -76,6 +76,7 @@ class _GlassComposer extends StatelessWidget {
                 controller: controller,
                 decoration: const InputDecoration(
                   hintText: "Type a message...",
+                  filled: false,
                   border: InputBorder.none,
                   isCollapsed: true,
                 ),
@@ -303,6 +304,39 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 
+  /// Shared bubble body for both the solid (own) and glass (incoming)
+  /// message containers, so the two decorations wrap identical content.
+  Widget _bubbleContent(
+    BuildContext context,
+    String? senderName,
+    Message msg,
+    Widget? statusIcon,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (senderName != null)
+          Text(
+            senderName,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+          ),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Flexible(child: Text(msg.content)),
+            if (statusIcon != null) ...[const SizedBox(width: 6), statusIcon],
+          ],
+        ),
+      ],
+    );
+  }
+
   /// Status icon for own outgoing messages (MS06 lifecycle: pending → sent
   /// → routed (R-ACK) → delivered (Channel-ACK), or failed).
   Widget? _statusIcon(int status) {
@@ -514,43 +548,38 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             horizontal: 12,
                             vertical: 4,
                           ),
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: isMe
-                                ? Theme.of(context).colorScheme.primaryContainer
-                                : Theme.of(
+                          decoration: isMe
+                              ? BoxDecoration(
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.primaryContainer,
+                                  borderRadius: BorderRadius.circular(16),
+                                )
+                              : null,
+                          padding: isMe
+                              ? const EdgeInsets.all(12)
+                              : EdgeInsets.zero,
+                          child: isMe
+                              ? _bubbleContent(
+                                  context,
+                                  senderName,
+                                  msg,
+                                  statusIcon,
+                                )
+                              : GlassSurface(
+                                  borderRadius: BorderRadius.circular(16),
+                                  padding: const EdgeInsets.all(12),
+                                  blurSigma: 16,
+                                  tint: Theme.of(
                                     context,
                                   ).colorScheme.surfaceContainerHighest,
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (senderName != null)
-                                Text(
-                                  senderName,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.bold,
-                                    color: Theme.of(
-                                      context,
-                                    ).colorScheme.primary,
+                                  child: _bubbleContent(
+                                    context,
+                                    senderName,
+                                    msg,
+                                    statusIcon,
                                   ),
                                 ),
-                              Row(
-                                mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                  Flexible(child: Text(msg.content)),
-                                  if (statusIcon != null) ...[
-                                    const SizedBox(width: 6),
-                                    statusIcon,
-                                  ],
-                                ],
-                              ),
-                            ],
-                          ),
                         ),
                       ),
                     );
