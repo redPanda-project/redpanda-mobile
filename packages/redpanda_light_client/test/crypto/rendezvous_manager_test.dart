@@ -1,3 +1,4 @@
+import 'package:redpanda_light_client/src/crypto/channel_rendezvous.dart';
 import 'package:redpanda_light_client/src/crypto/crypto_utils.dart';
 import 'package:redpanda_light_client/src/crypto/rendezvous_manager.dart';
 import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
@@ -133,6 +134,31 @@ void main() {
       RendezvousManager.recordFromStoreBytes(store),
       now + 1000,
     );
+    expect(adopted, isNull);
+  });
+
+  test('pins the record key: rejects a foreign-signed but decryptable record '
+      '(T47c)', () async {
+    // Adversarial node answers the lookup with a record whose content was
+    // encrypted with OUR k_enc (decryptable!) but signed by a DIFFERENT
+    // record keypair. Signature verification against the embedded key
+    // succeeds — only the pin against the derived record pubkey catches it.
+    final now = DateTime.utc(2026, 7, 19, 12).millisecondsSinceEpoch;
+    final entries = [
+      RendezvousEntry(
+        participantId: ChannelRendezvous.participantId(sk, isCreator: true),
+        name: 'Bob',
+        entryTs: now,
+        ohs: [_oh('6.6.6.6:59558')],
+      ),
+    ];
+    final content = await ChannelRendezvous.encryptRecordContent(sk, entries);
+    final foreignSk = CryptoUtils.randomBytes(32).toList();
+    final forged = await ChannelRendezvous.signContent(foreignSk, content, now);
+    expect(await ChannelRendezvous.verifyRecord(forged), isTrue);
+
+    final alice = joiner();
+    final adopted = await alice.applyResolvedRecord(chan, forged, now + 1000);
     expect(adopted, isNull);
   });
 

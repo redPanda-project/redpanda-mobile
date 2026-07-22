@@ -4624,6 +4624,14 @@ class RedPandaLightClient implements RedPandaClient {
   }
 
   /// How often an unchanged rendezvous record is refreshed into the DHT.
+  /// record_store is fire-and-forget AND _publishRendezvous stamps the publish
+  /// on send (not on arrival), so this periodic refresh is the only heal for a
+  /// store dropped in transit — the interval IS the worst-case blind window
+  /// after such a loss. Stretching it to 30 min for cadence privacy (T47b) was
+  /// tried 2026-07-22 and reverted: the t44 heal E2E showed a dropped first
+  /// store then leaves the channel undiscoverable for the whole window. The
+  /// observability trade-off (record-holding nodes see an opaque per-channel
+  /// publish cadence) is documented in the spec and accepted.
   static const Duration _rendezvousRepublishInterval = Duration(minutes: 3);
 
   /// Minimum spacing between full republish sweeps, independent of how often

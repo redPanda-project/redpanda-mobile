@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:fixnum/fixnum.dart';
 
 import 'package:redpanda_light_client/src/crypto/channel_rendezvous.dart';
+import 'package:redpanda_light_client/src/crypto/crypto_utils.dart';
 import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
 import 'package:redpanda_light_client/src/generated/commands.pb.dart';
 
@@ -146,6 +147,19 @@ class RendezvousManager {
     if (!await ChannelRendezvous.verifyRecord(record)) return null;
     if (nowMs - record.timestampMs > ChannelRendezvous.maxRecordAgeMs) {
       return null; // stale (TTL)
+    }
+    // Pin the record key: only the keypair derived from THIS channel's secret
+    // may sign our rendezvous record. verifyRecord is self-certifying (checks
+    // against the record's own embedded key), so without the pin a node could
+    // re-sign a captured legitimate ciphertext under a throwaway key with a
+    // rolled-forward timestamp and defeat the newest-wins ordering. Runs after
+    // the cheaper signature/TTL checks so junk answers fail before the key
+    // derivation this pin needs.
+    final expectedPub = await ChannelRendezvous.recordPublicExport(
+      state.channelSecret,
+    );
+    if (!CryptoUtils.constantTimeEquals(record.publicKey, expectedPub)) {
+      return null;
     }
     final List<RendezvousEntry> entries;
     try {
