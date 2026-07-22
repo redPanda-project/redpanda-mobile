@@ -11,6 +11,7 @@ class GlassSurface extends StatelessWidget {
   final BorderRadius borderRadius;
   final EdgeInsetsGeometry padding;
   final double blurSigma;
+  final Color? tint;
 
   const GlassSurface({
     super.key,
@@ -18,6 +19,7 @@ class GlassSurface extends StatelessWidget {
     this.borderRadius = const BorderRadius.all(Radius.circular(28)),
     this.padding = const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
     this.blurSigma = 20,
+    this.tint,
   });
 
   @override
@@ -31,7 +33,9 @@ class GlassSurface extends StatelessWidget {
         child: Container(
           padding: padding,
           decoration: BoxDecoration(
-            color: scheme.surface.withValues(alpha: isDark ? 0.55 : 0.7),
+            color: (tint ?? scheme.surface).withValues(
+              alpha: isDark ? 0.55 : 0.7,
+            ),
             borderRadius: borderRadius,
             border: Border.all(color: scheme.outline.withValues(alpha: 0.2)),
           ),
