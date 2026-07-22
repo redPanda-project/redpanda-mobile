@@ -145,20 +145,21 @@ class RendezvousManager {
     final state = _states[channelId];
     if (state == null) return null;
     if (!await ChannelRendezvous.verifyRecord(record)) return null;
+    if (nowMs - record.timestampMs > ChannelRendezvous.maxRecordAgeMs) {
+      return null; // stale (TTL)
+    }
     // Pin the record key: only the keypair derived from THIS channel's secret
     // may sign our rendezvous record. verifyRecord is self-certifying (checks
     // against the record's own embedded key), so without the pin a node could
     // re-sign a captured legitimate ciphertext under a throwaway key with a
     // rolled-forward timestamp and defeat the newest-wins ordering. Runs after
-    // the cheaper signature check so spam answers fail before key derivation.
+    // the cheaper signature/TTL checks so junk answers fail before the key
+    // derivation this pin needs.
     final expectedPub = await ChannelRendezvous.recordPublicExport(
       state.channelSecret,
     );
     if (!CryptoUtils.constantTimeEquals(record.publicKey, expectedPub)) {
       return null;
-    }
-    if (nowMs - record.timestampMs > ChannelRendezvous.maxRecordAgeMs) {
-      return null; // stale (TTL)
     }
     final List<RendezvousEntry> entries;
     try {
