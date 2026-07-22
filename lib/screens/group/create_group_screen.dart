@@ -63,10 +63,7 @@ class _CreateGroupScreenState extends ConsumerState<CreateGroupScreen> {
                 padding: const EdgeInsets.all(16),
                 child: TextField(
                   controller: _nameController,
-                  decoration: const InputDecoration(
-                    labelText: 'Group name',
-                    border: OutlineInputBorder(),
-                  ),
+                  decoration: const InputDecoration(labelText: 'Group name'),
                 ),
               ),
               Padding(

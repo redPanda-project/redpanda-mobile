@@ -118,7 +118,6 @@ class _CreateChannelScreenState extends ConsumerState<CreateChannelScreen> {
               decoration: const InputDecoration(
                 labelText: 'Channel Name',
                 hintText: 'e.g. Family Chat to secret things',
-                border: OutlineInputBorder(),
               ),
             ),
             const SizedBox(height: 20),
