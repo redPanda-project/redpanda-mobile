@@ -4624,7 +4624,12 @@ class RedPandaLightClient implements RedPandaClient {
   }
 
   /// How often an unchanged rendezvous record is refreshed into the DHT.
-  static const Duration _rendezvousRepublishInterval = Duration(minutes: 3);
+  /// record_store is fire-and-forget, so this periodic refresh is the only
+  /// heal for a dropped store and re-seeds each new UTC-day key. Kept well
+  /// below the 48 h TTL but deliberately NOT aggressive: every store shows the
+  /// record-holding node an opaque per-channel online cadence (T47b) — a
+  /// change of the own OH set still publishes immediately.
+  static const Duration _rendezvousRepublishInterval = Duration(minutes: 30);
 
   /// Minimum spacing between full republish sweeps, independent of how often
   /// the poll cycle / renewal timer call in.
