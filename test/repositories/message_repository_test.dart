@@ -1,3 +1,4 @@
+import 'package:drift/drift.dart' as drift;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:redpanda/database/database.dart';
 import 'package:redpanda/repositories/message_repository.dart';
@@ -143,6 +144,143 @@ void main() {
       final requeued = pending.singleWhere((m) => m.id == sentId);
       expect(requeued.retryCount, equals(0));
       expect(requeued.lastRetryAt, isNull);
+    });
+
+    test('markSent stamps lastRetryAt so the message is a stale-sent '
+        'candidate later', () async {
+      final id = await repo.insertOutgoing(
+        conversationId: 'channel-1',
+        senderId: 'me',
+        content: 'Hello',
+      );
+
+      await repo.markSent(id);
+
+      final msg = await (db.select(
+        db.messages,
+      )..where((t) => t.id.equals(id))).getSingle();
+      expect(msg.status, equals(MessageStatus.sent));
+      expect(msg.lastRetryAt, isNotNull);
+      expect(
+        DateTime.now().difference(msg.lastRetryAt!),
+        lessThan(const Duration(seconds: 5)),
+      );
+    });
+
+    group('requeueStaleSent (TD002/T51 safety net)', () {
+      test('re-queues a sent message stuck past the threshold', () async {
+        final id = await repo.insertOutgoing(
+          conversationId: 'channel-1',
+          senderId: 'me',
+          content: 'stuck without an ack tag',
+        );
+        await repo.markSent(id);
+        // Backdate lastRetryAt as if the send happened 5 minutes ago — well
+        // past both the R-ACK timeout (90s) and the default 3 min threshold.
+        await (db.update(db.messages)..where((t) => t.id.equals(id))).write(
+          MessagesCompanion(
+            lastRetryAt: drift.Value(
+              DateTime.now().subtract(const Duration(minutes: 5)),
+            ),
+          ),
+        );
+
+        final count = await repo.requeueStaleSent();
+
+        expect(count, equals(1));
+        final pending = await repo.getPendingMessages();
+        expect(pending.map((m) => m.id), contains(id));
+      });
+
+      test('leaves a recently sent message alone (still within its R-ACK '
+          'window)', () async {
+        final id = await repo.insertOutgoing(
+          conversationId: 'channel-1',
+          senderId: 'me',
+          content: 'freshly sent',
+        );
+        await repo.markSent(id);
+
+        final count = await repo.requeueStaleSent();
+
+        expect(count, equals(0));
+        expect(await repo.getPendingMessages(), isEmpty);
+      });
+
+      test('never touches pending/routed/delivered/failed messages', () async {
+        Future<int> insertWithStatus(String content, int status) async {
+          final id = await repo.insertOutgoing(
+            conversationId: 'channel-1',
+            senderId: 'me',
+            content: content,
+          );
+          await (db.update(db.messages)..where((t) => t.id.equals(id))).write(
+            MessagesCompanion(
+              status: drift.Value(status),
+              lastRetryAt: drift.Value(
+                DateTime.now().subtract(const Duration(minutes: 5)),
+              ),
+            ),
+          );
+          return id;
+        }
+
+        await insertWithStatus('routed', MessageStatus.routed);
+        await insertWithStatus('delivered', MessageStatus.delivered);
+        await insertWithStatus('failed', MessageStatus.failed);
+        final pendingId = await repo.insertOutgoing(
+          conversationId: 'channel-1',
+          senderId: 'me',
+          content: 'already pending',
+        );
+
+        final count = await repo.requeueStaleSent();
+
+        expect(count, equals(0));
+        final pending = await repo.getPendingMessages();
+        expect(pending.map((m) => m.id), equals([pendingId]));
+      });
+
+      test('a stale sent message with no lastRetryAt is not touched '
+          '(pre-fix rows / defensive)', () async {
+        final id = await repo.insertOutgoing(
+          conversationId: 'channel-1',
+          senderId: 'me',
+          content: 'sent without a stamp',
+        );
+        // Simulates a row written before this fix via the generic
+        // updateMessageStatus (no lastRetryAt stamp).
+        await repo.updateMessageStatus(id, MessageStatus.sent);
+
+        final count = await repo.requeueStaleSent(olderThan: Duration.zero);
+
+        expect(count, equals(0));
+        expect(await repo.getPendingMessages(), isEmpty);
+      });
+
+      test('respects a custom olderThan threshold', () async {
+        final id = await repo.insertOutgoing(
+          conversationId: 'channel-1',
+          senderId: 'me',
+          content: 'sent 2 minutes ago',
+        );
+        await repo.markSent(id);
+        await (db.update(db.messages)..where((t) => t.id.equals(id))).write(
+          MessagesCompanion(
+            lastRetryAt: drift.Value(
+              DateTime.now().subtract(const Duration(minutes: 2)),
+            ),
+          ),
+        );
+
+        // Still within a 3 min threshold.
+        expect(await repo.requeueStaleSent(), equals(0));
+        // But past a 1 min threshold.
+        expect(
+          await repo.requeueStaleSent(olderThan: const Duration(minutes: 1)),
+          equals(1),
+        );
+      });
     });
   });
 

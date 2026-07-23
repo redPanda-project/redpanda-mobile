@@ -38,6 +38,14 @@ class SendRetryQueue {
   static const Duration checkInterval = Duration(seconds: 10);
   static const Duration maxBackoff = Duration(minutes: 30);
 
+  /// Safety-net threshold for [MessageRepository.requeueStaleSent] (TD002/
+  /// T51): well above the R-ACK timeout (90s, RedPandaLightClient.ackTimeout)
+  /// so a normally tag-tracked send always gets its own timeout requeue via
+  /// MessageSyncService.handleRoutingAckUpdate first — this only catches
+  /// sends that got no ack tag at all and would otherwise stay `sent` for
+  /// the rest of the running session (no self-heal without an app restart).
+  static const Duration staleSentThreshold = Duration(minutes: 3);
+
   /// How much retryCount is incremented by when the recipient mailbox is
   /// full (QUOTA_EXCEEDED, reject-new). With the fast-early schedule a small
   /// penalty would only defer a few seconds, so it is 4: it lands the next
@@ -128,6 +136,10 @@ class SendRetryQueue {
     if (_passInProgress) return;
     _passInProgress = true;
     try {
+      // TD002/T51: pull back anything stuck `sent` without an ack tag before
+      // looking at the pending set, so a message this sweep just requeued is
+      // picked up by the very same pass instead of waiting another tick.
+      await _messages.requeueStaleSent(olderThan: staleSentThreshold);
       final pending = await _messages.getPendingMessages();
       final now = DateTime.now();
 
@@ -158,7 +170,7 @@ class SendRetryQueue {
           if (msg.messageId == null || msg.messageId!.isEmpty) {
             await _messages.setNetworkMessageId(msg.id, usedId);
           }
-          await _messages.updateMessageStatus(msg.id, MessageStatus.sent);
+          await _messages.markSent(msg.id);
         } on GroupSendException catch (e) {
           // MS08: some members were not reached — normal backoff. Persist
           // the id the partial fan-out used so the re-send deduplicates at

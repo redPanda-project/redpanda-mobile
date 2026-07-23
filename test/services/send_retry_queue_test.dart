@@ -230,6 +230,60 @@ void main() {
 
       expect(client.sentMessages, isEmpty);
     });
+
+    test('TD002/T51: a message stuck sent without an ack (e.g. no ack tag was '
+        'ever requested) self-heals during a running session, no app restart '
+        'needed', () async {
+      final id = await insertPending(content: 'lost without an ack tag');
+      // First attempt "succeeds" (handed to the network) but never gets an
+      // R-ACK — the scenario RedPandaLightClient._buildReturnPath produces
+      // when the sender has no own OH yet / the payload exceeds the ack
+      // budget: sendMessage() returns normally, so the row is marked sent,
+      // but no AckTagStore entry (and hence no timeout requeue) ever
+      // exists for it.
+      await queue.retryPending();
+      expect((await messageById(id)).status, equals(MessageStatus.sent));
+      expect(client.sentMessages, hasLength(1));
+
+      // Backdate lastRetryAt past the staleSentThreshold — simulates time
+      // passing with the app still running (no restart, no
+      // requeueStuckSent()).
+      await (db.update(db.messages)..where((t) => t.id.equals(id))).write(
+        MessagesCompanion(
+          lastRetryAt: drift.Value(
+            DateTime.now().subtract(
+              SendRetryQueue.staleSentThreshold + const Duration(seconds: 1),
+            ),
+          ),
+        ),
+      );
+
+      await queue.retryPending();
+
+      expect(
+        client.sentMessages,
+        hasLength(2),
+        reason:
+            'the stale-sent sweep must pull the message back into '
+            'pending and the very same pass must resend it',
+      );
+      expect((await messageById(id)).status, equals(MessageStatus.sent));
+    });
+
+    test('TD002/T51: a sent message still within the ack-timeout window is '
+        'left alone by the stale-sent sweep', () async {
+      final id = await insertPending(content: 'freshly sent');
+      await queue.retryPending();
+      expect(client.sentMessages, hasLength(1));
+
+      // Immediately re-run the sweep: lastRetryAt is only seconds old, far
+      // below staleSentThreshold — must not be touched (would otherwise
+      // race the normal R-ACK-timeout requeue and duplicate-send).
+      await queue.retryPending();
+
+      expect(client.sentMessages, hasLength(1));
+      expect((await messageById(id)).status, equals(MessageStatus.sent));
+    });
   });
 
   group('SendRetryQueue backoff', () {

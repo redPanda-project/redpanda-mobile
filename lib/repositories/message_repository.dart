@@ -152,6 +152,53 @@ class MessageRepository {
     );
   }
 
+  /// Marks a message `sent` and stamps [Messages.lastRetryAt] with the
+  /// current time (TD002/T51): [requeueStaleSent] uses that stamp as "since
+  /// when has this been sitting in `sent`" — without it, a message that
+  /// succeeded on its very first attempt would have a null `lastRetryAt` and
+  /// never qualify for the staleness sweep. Use this instead of
+  /// [updateMessageStatus] for every sent-transition.
+  Future<void> markSent(int id) async {
+    await (_db.update(_db.messages)..where((t) => t.id.equals(id))).write(
+      MessagesCompanion(
+        status: const drift.Value(MessageStatus.sent),
+        lastRetryAt: drift.Value(DateTime.now()),
+      ),
+    );
+  }
+
+  /// Safety net (TD002/T51): re-queues messages that have sat in `sent` for
+  /// longer than [olderThan] for a fresh send attempt.
+  ///
+  /// Delivery feedback for a sent message normally comes from the R-ACK
+  /// timeout path (MessageSyncService.handleRoutingAckUpdate via
+  /// RedPandaLightClient's in-memory AckTagStore, ~90s) — but a send that
+  /// got no ack tag at all (no own OH mailbox yet at send time, or an
+  /// oversized payload — see RedPandaLightClient._buildReturnPath) produces
+  /// no timeout event and no ack, ever. Without this sweep such a message
+  /// stays `sent` for the rest of the running session; only the next app
+  /// restart's [requeueStuckSent] would catch it. [olderThan] must stay well
+  /// above the R-ACK timeout so a normally tag-tracked send always gets its
+  /// own timeout requeue first — this only catches what falls through that
+  /// net. Reuses the same `lastRetryAt` stamp [markSent] and
+  /// [requeueSentByNetworkId] already maintain, so retryCount/backoff
+  /// bookkeeping stays consistent with a normal ack-timeout requeue.
+  ///
+  /// Returns the number of re-queued messages.
+  Future<int> requeueStaleSent({
+    Duration olderThan = const Duration(minutes: 3),
+  }) {
+    final cutoff = DateTime.now().subtract(olderThan);
+    return (_db.update(_db.messages)..where(
+          (t) =>
+              t.status.equals(MessageStatus.sent) &
+              t.lastRetryAt.isSmallerOrEqualValue(cutoff),
+        ))
+        .write(
+          const MessagesCompanion(status: drift.Value(MessageStatus.pending)),
+        );
+  }
+
   /// MS06: marks the outgoing message with network id [messageIdHex] in
   /// [conversationId] as routed (R-ACK received). Only upgrades — a message
   /// already delivered (or failed after the ack raced the last retry) keeps
