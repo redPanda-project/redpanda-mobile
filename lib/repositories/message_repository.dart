@@ -152,6 +152,79 @@ class MessageRepository {
     );
   }
 
+  /// Marks a message `sent` and stamps [Messages.lastRetryAt] with the
+  /// current time (TD002/T51): [requeueStaleSent] uses that stamp as "since
+  /// when has this been sitting in `sent`" — without it, a message that
+  /// succeeded on its very first attempt would have a null `lastRetryAt` and
+  /// never qualify for the staleness sweep. Use this instead of
+  /// [updateMessageStatus] for every sent-transition.
+  Future<void> markSent(int id) async {
+    await (_db.update(_db.messages)..where((t) => t.id.equals(id))).write(
+      MessagesCompanion(
+        status: const drift.Value(MessageStatus.sent),
+        lastRetryAt: drift.Value(DateTime.now()),
+      ),
+    );
+  }
+
+  /// Safety net (TD002/T51): re-queues messages that have sat in `sent` for
+  /// longer than [olderThan] for a fresh send attempt.
+  ///
+  /// Delivery feedback for a sent message normally comes from the R-ACK
+  /// timeout path (MessageSyncService.handleRoutingAckUpdate via
+  /// RedPandaLightClient's in-memory AckTagStore, ~90s) — but a send that
+  /// got no ack tag at all (no own OH mailbox yet at send time, or an
+  /// oversized payload — see RedPandaLightClient._buildReturnPath) produces
+  /// no timeout event and no ack, ever. Without this sweep such a message
+  /// stays `sent` for the rest of the running session; only the next app
+  /// restart's [requeueStuckSent] would catch it. [olderThan] must stay well
+  /// above the R-ACK timeout so a normally tag-tracked send always gets its
+  /// own timeout requeue first — this only catches what falls through that
+  /// net.
+  ///
+  /// Increments `retryCount` like [requeueSentByNetworkId] does, so a
+  /// permanently ack-less send (e.g. a channel whose partner never has an
+  /// OH) does not get resent every 3 minutes forever without backoff — once
+  /// `retryCount` climbs, [SendRetryQueue.backoffFor] pushes it out past the
+  /// sweep's own cadence.
+  ///
+  /// Deliberately does **not** touch `lastRetryAt`: the field stays at its
+  /// old (>= [olderThan] ago) value, so [SendRetryQueue.isDue] sees a stale
+  /// timestamp against the *new*, higher `retryCount` — a message with a
+  /// low retryCount is still due immediately (same-pass resend, the
+  /// intended fast heal), while one whose retryCount already climbed into
+  /// the backoff tail waits out that window before the pending pass picks
+  /// it up again, same as a normal failed-attempt backoff.
+  ///
+  /// Returns the number of re-queued messages.
+  Future<int> requeueStaleSent({
+    Duration olderThan = const Duration(minutes: 3),
+  }) async {
+    final cutoff = DateTime.now().subtract(olderThan);
+    final stale =
+        await (_db.select(_db.messages)..where(
+              (t) =>
+                  t.status.equals(MessageStatus.sent) &
+                  t.lastRetryAt.isSmallerOrEqualValue(cutoff),
+            ))
+            .get();
+    if (stale.isEmpty) return 0;
+
+    await _db.transaction(() async {
+      for (final msg in stale) {
+        await (_db.update(
+          _db.messages,
+        )..where((t) => t.id.equals(msg.id))).write(
+          MessagesCompanion(
+            status: const drift.Value(MessageStatus.pending),
+            retryCount: drift.Value(msg.retryCount + 1),
+          ),
+        );
+      }
+    });
+    return stale.length;
+  }
+
   /// MS06: marks the outgoing message with network id [messageIdHex] in
   /// [conversationId] as routed (R-ACK received). Only upgrades — a message
   /// already delivered (or failed after the ack raced the last retry) keeps

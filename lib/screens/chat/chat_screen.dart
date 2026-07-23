@@ -147,7 +147,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ? await client.sendGroupMessage(widget.peerUuid, content)
           : await client.sendMessage(widget.peerUuid, content);
       await messages.setNetworkMessageId(rowId, usedId);
-      await messages.updateMessageStatus(rowId, MessageStatus.sent);
+      await messages.markSent(rowId);
     } on GroupSendException catch (e) {
       // MS08: some members were not reached — the retry queue re-fans-out
       // with the SAME message id (receivers deduplicate), so persist the id
