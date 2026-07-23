@@ -180,23 +180,49 @@ class MessageRepository {
   /// restart's [requeueStuckSent] would catch it. [olderThan] must stay well
   /// above the R-ACK timeout so a normally tag-tracked send always gets its
   /// own timeout requeue first — this only catches what falls through that
-  /// net. Reuses the same `lastRetryAt` stamp [markSent] and
-  /// [requeueSentByNetworkId] already maintain, so retryCount/backoff
-  /// bookkeeping stays consistent with a normal ack-timeout requeue.
+  /// net.
+  ///
+  /// Increments `retryCount` like [requeueSentByNetworkId] does, so a
+  /// permanently ack-less send (e.g. a channel whose partner never has an
+  /// OH) does not get resent every 3 minutes forever without backoff — once
+  /// `retryCount` climbs, [SendRetryQueue.backoffFor] pushes it out past the
+  /// sweep's own cadence.
+  ///
+  /// Deliberately does **not** touch `lastRetryAt`: the field stays at its
+  /// old (>= [olderThan] ago) value, so [SendRetryQueue.isDue] sees a stale
+  /// timestamp against the *new*, higher `retryCount` — a message with a
+  /// low retryCount is still due immediately (same-pass resend, the
+  /// intended fast heal), while one whose retryCount already climbed into
+  /// the backoff tail waits out that window before the pending pass picks
+  /// it up again, same as a normal failed-attempt backoff.
   ///
   /// Returns the number of re-queued messages.
   Future<int> requeueStaleSent({
     Duration olderThan = const Duration(minutes: 3),
-  }) {
+  }) async {
     final cutoff = DateTime.now().subtract(olderThan);
-    return (_db.update(_db.messages)..where(
-          (t) =>
-              t.status.equals(MessageStatus.sent) &
-              t.lastRetryAt.isSmallerOrEqualValue(cutoff),
-        ))
-        .write(
-          const MessagesCompanion(status: drift.Value(MessageStatus.pending)),
+    final stale =
+        await (_db.select(_db.messages)..where(
+              (t) =>
+                  t.status.equals(MessageStatus.sent) &
+                  t.lastRetryAt.isSmallerOrEqualValue(cutoff),
+            ))
+            .get();
+    if (stale.isEmpty) return 0;
+
+    await _db.transaction(() async {
+      for (final msg in stale) {
+        await (_db.update(
+          _db.messages,
+        )..where((t) => t.id.equals(msg.id))).write(
+          MessagesCompanion(
+            status: const drift.Value(MessageStatus.pending),
+            retryCount: drift.Value(msg.retryCount + 1),
+          ),
         );
+      }
+    });
+    return stale.length;
   }
 
   /// MS06: marks the outgoing message with network id [messageIdHex] in

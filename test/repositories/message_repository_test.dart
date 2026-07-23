@@ -177,12 +177,9 @@ void main() {
         await repo.markSent(id);
         // Backdate lastRetryAt as if the send happened 5 minutes ago — well
         // past both the R-ACK timeout (90s) and the default 3 min threshold.
+        final backdated = DateTime.now().subtract(const Duration(minutes: 5));
         await (db.update(db.messages)..where((t) => t.id.equals(id))).write(
-          MessagesCompanion(
-            lastRetryAt: drift.Value(
-              DateTime.now().subtract(const Duration(minutes: 5)),
-            ),
-          ),
+          MessagesCompanion(lastRetryAt: drift.Value(backdated)),
         );
 
         final count = await repo.requeueStaleSent();
@@ -190,6 +187,45 @@ void main() {
         expect(count, equals(1));
         final pending = await repo.getPendingMessages();
         expect(pending.map((m) => m.id), contains(id));
+      });
+
+      test('increments retryCount but leaves lastRetryAt untouched, so a '
+          'permanently ack-less send eventually falls into the normal '
+          'backoff tail instead of resending every 3 min forever', () async {
+        final id = await repo.insertOutgoing(
+          conversationId: 'channel-1',
+          senderId: 'me',
+          content: 'stuck without an ack tag',
+        );
+        await repo.markSent(id);
+        // Drift persists DateTime as a whole-second unix timestamp for
+        // sqlite, so round the expectation to seconds too.
+        final backdated = DateTime.fromMillisecondsSinceEpoch(
+          DateTime.now()
+                  .subtract(const Duration(minutes: 5))
+                  .millisecondsSinceEpoch ~/
+              1000 *
+              1000,
+        );
+        await (db.update(db.messages)..where((t) => t.id.equals(id))).write(
+          MessagesCompanion(lastRetryAt: drift.Value(backdated)),
+        );
+
+        await repo.requeueStaleSent();
+
+        final msg = await (db.select(
+          db.messages,
+        )..where((t) => t.id.equals(id))).getSingle();
+        expect(msg.status, equals(MessageStatus.pending));
+        expect(msg.retryCount, equals(1));
+        expect(
+          msg.lastRetryAt,
+          equals(backdated),
+          reason:
+              'lastRetryAt must stay at its old value — SendRetryQueue'
+              '.isDue() reads it against the new retryCount to decide '
+              'whether the backoff window has elapsed',
+        );
       });
 
       test('leaves a recently sent message alone (still within its R-ACK '

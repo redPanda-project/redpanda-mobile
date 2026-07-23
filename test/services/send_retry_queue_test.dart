@@ -270,6 +270,42 @@ void main() {
       expect((await messageById(id)).status, equals(MessageStatus.sent));
     });
 
+    test('TD002/T51: a permanently ack-less send with a high retryCount is '
+        'swept back to pending but respects its backoff — no immediate '
+        'resend in the same pass', () async {
+      // Simulates a message the sweep already requeued and resent several
+      // times without ever getting an ack: retryCount climbed, but
+      // lastRetryAt is deliberately never touched by requeueStaleSent, so
+      // it still reflects the ORIGINAL stale-sent timestamp — 4 minutes
+      // ago clears the 3 min sweep threshold but is nowhere near
+      // backoffFor(6) = 16 min.
+      final id = await insertPending(content: 'endless ack-less send');
+      await (db.update(db.messages)..where((t) => t.id.equals(id))).write(
+        MessagesCompanion(
+          status: const drift.Value(MessageStatus.sent),
+          retryCount: const drift.Value(5),
+          lastRetryAt: drift.Value(
+            DateTime.now().subtract(const Duration(minutes: 4)),
+          ),
+        ),
+      );
+
+      await queue.retryPending();
+
+      expect(
+        client.sentMessages,
+        isEmpty,
+        reason:
+            'the sweep must pull the row back to pending (proven by the '
+            'status below), but the pending-pass in the very same call '
+            'must not resend it — retryCount 5→6 is nowhere near its due '
+            'time yet',
+      );
+      final msg = await messageById(id);
+      expect(msg.status, equals(MessageStatus.pending));
+      expect(msg.retryCount, equals(6));
+    });
+
     test('TD002/T51: a sent message still within the ack-timeout window is '
         'left alone by the stale-sent sweep', () async {
       final id = await insertPending(content: 'freshly sent');
