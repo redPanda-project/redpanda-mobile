@@ -769,6 +769,7 @@ class RedPandaLightClient implements RedPandaClient {
   /// closing already-closed controllers is a no-op.
   @override
   Future<void> disconnect() async {
+    if (_disconnected) return; // idempotent: the teardown runs exactly once
     _disconnected = true;
     _connectionTimer?.cancel();
     _pollingEnabled = false; // stop the self-rescheduling poll loop (T27)

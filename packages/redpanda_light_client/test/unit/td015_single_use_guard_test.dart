@@ -37,7 +37,9 @@ void main() {
       final client = newClient();
       await client.disconnect();
 
-      expect(client.connect, throwsA(isA<StateError>()));
+      // connect() is async, so it never throws synchronously — assert on the
+      // returned Future, not on the tear-off.
+      await expectLater(client.connect(), throwsA(isA<StateError>()));
     });
 
     test(
@@ -47,7 +49,9 @@ void main() {
         await client.connect();
         await client.disconnect();
 
-        expect(client.connect, throwsA(isA<StateError>()));
+        // connect() is async, so it never throws synchronously — assert on the
+        // returned Future, not on the tear-off.
+        await expectLater(client.connect(), throwsA(isA<StateError>()));
       },
     );
 
@@ -62,7 +66,7 @@ void main() {
         'disconnected', () async {
       final dead = newClient();
       await dead.disconnect();
-      expect(dead.connect, throwsA(isA<StateError>()));
+      await expectLater(dead.connect(), throwsA(isA<StateError>()));
 
       // The single-use guard is per-instance: a brand-new client (what the
       // isolate worker builds on respawn) is unaffected.
