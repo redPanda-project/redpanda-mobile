@@ -80,6 +80,11 @@ class RedPandaLightClient implements RedPandaClient {
   Timer? _connectionTimer;
   ConnectionStatus _currentStatus = ConnectionStatus.disconnected;
 
+  /// Set once [disconnect] has run its terminal shutdown. A
+  /// [RedPandaLightClient] is single-use: guards against reusing a
+  /// disconnected instance (see [connect]/[disconnect] for the contract).
+  bool _disconnected = false;
+
   // Configuration
   static const int maxConnections = 5;
   static const int coreSlots = 3;
@@ -396,8 +401,34 @@ class RedPandaLightClient implements RedPandaClient {
     }
   }
 
+  /// Starts (and maintains) the network connection.
+  ///
+  /// **Single-use contract (TD015).** A [RedPandaLightClient] is a one-shot
+  /// object. [disconnect] is a *terminal* full shutdown — it permanently
+  /// closes every broadcast stream controller and clears the OH registry — so
+  /// calling [connect] again on the same instance would restore nothing (no
+  /// mailbox polling, no incoming events) while the status still flips back to
+  /// "connecting"/"connected". That silent half-dead state is the TD015 trap,
+  /// so reusing a disconnected client is treated as a programming error and
+  /// throws [StateError]; construct a fresh instance instead.
+  ///
+  /// A brief-offline / reconnect cycle is NOT this method: transient link loss
+  /// is handled at the peer level ([_forceReconnect], per-[ActivePeer]
+  /// redial) and the app lifecycle uses [onPause]/[onResume], neither of which
+  /// tears the client down. The production isolate worker likewise never
+  /// reuses a client — it builds a new [RedPandaLightClient] on every respawn.
   @override
   Future<void> connect() async {
+    if (_disconnected) {
+      throw StateError(
+        'RedPandaLightClient.connect() called after disconnect(): this object '
+        'is single-use. disconnect() is a terminal shutdown that closes all '
+        'stream controllers and clears the OH registry, so it cannot be '
+        'reconnected. Construct a new RedPandaLightClient instead. For a '
+        'brief-offline cycle, rely on the built-in peer reconnect / '
+        'onPause()/onResume() — do not call disconnect().',
+      );
+    }
     _updateStatus(ConnectionStatus.connecting);
     RpLog.info('RedPandaLightClient: Starting connection routine...');
 
@@ -731,8 +762,15 @@ class RedPandaLightClient implements RedPandaClient {
     _runConnectionCheck();
   }
 
+  /// Terminal full shutdown (see [connect] for the single-use contract):
+  /// stops all timers, disconnects every peer, clears all in-memory state and
+  /// permanently closes every broadcast stream controller. The instance is
+  /// dead afterwards — a subsequent [connect] throws [StateError]. Idempotent:
+  /// closing already-closed controllers is a no-op.
   @override
   Future<void> disconnect() async {
+    if (_disconnected) return; // idempotent: the teardown runs exactly once
+    _disconnected = true;
     _connectionTimer?.cancel();
     _pollingEnabled = false; // stop the self-rescheduling poll loop (T27)
     _nextPollAt = null;
