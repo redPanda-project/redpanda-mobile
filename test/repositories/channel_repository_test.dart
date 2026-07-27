@@ -1,3 +1,4 @@
+import 'package:drift/drift.dart' as drift;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:redpanda/database/database.dart' hide Channel;
 import 'package:redpanda/repositories/channel_repository.dart';
@@ -55,10 +56,92 @@ void main() {
 
     test('addChannel upserts on the same channel id', () async {
       final channel = await Channel.generate('Original');
-      await repo.addChannel(channel);
-      await repo.addChannel(channel);
+      expect(await repo.addChannel(channel), isTrue);
+      expect(await repo.addChannel(channel), isFalse);
 
       expect(await repo.getChannels(), hasLength(1));
+    });
+
+    // H8: re-scanning a QR code for an already-joined channel must not reset
+    // the on-device state the Channel value object does not carry.
+    group('re-adding an existing channel', () {
+      /// Simulates a live channel: ratchet state, a pending reverse-garlic
+      /// block and a discovered peer mailbox set on top of the stored row.
+      Future<void> markAsLive(String channelId) async {
+        await (db.update(
+          db.channels,
+        )..where((t) => t.uuid.equals(channelId))).write(
+          const ChannelsCompanion(
+            ratchetState: drift.Value('{"rootKey":"deadbeef"}'),
+            pendingRgb: drift.Value('cafe'),
+            peerOhSet: drift.Value('[{"ep":"node-1:59558"}]'),
+            peerOhEndpoint: drift.Value('node-1:59558'),
+            peerOhId: drift.Value('aa'),
+            peerOhPublicKey: drift.Value('bb'),
+          ),
+        );
+      }
+
+      test('preserves ratchet state, pending RGB and peer OH set', () async {
+        final created = await Channel.generate('Live');
+        await repo.addChannel(created);
+        await markAsLive(created.id);
+
+        // Exactly what the scanner produces from the channel's own QR code.
+        final rescanned = await Channel.fromJson(created.toJson());
+        expect(rescanned.id, equals(created.id));
+        expect(await repo.addChannel(rescanned), isFalse);
+
+        final row = await (db.select(
+          db.channels,
+        )..where((t) => t.uuid.equals(created.id))).getSingle();
+        expect(row.ratchetState, equals('{"rootKey":"deadbeef"}'));
+        expect(row.pendingRgb, equals('cafe'));
+        expect(row.peerOhSet, equals('[{"ep":"node-1:59558"}]'));
+        expect(row.peerOhEndpoint, equals('node-1:59558'));
+        expect(row.peerOhId, equals('aa'));
+        expect(row.peerOhPublicKey, equals('bb'));
+        expect(await repo.getChannels(), hasLength(1));
+      });
+
+      test('preserves the creator role marker', () async {
+        final created = await Channel.generate('Mine');
+        await repo.addChannel(created);
+        expect(created.isCreator, isTrue);
+
+        // Scanning our own QR yields a joiner-shaped Channel (no private key).
+        final rescanned = await Channel.fromJson(created.toJson());
+        expect(rescanned.isCreator, isFalse);
+        await repo.addChannel(rescanned);
+
+        expect((await repo.getChannels()).single.isCreator, isTrue);
+      });
+
+      test('adopts a peer OH descriptor learned after the first add', () async {
+        final created = await Channel.generate('Late OH');
+        await repo.addChannel(created);
+
+        final descriptor = OHDescriptor(
+          serverEndpoint: 'node-2:59558',
+          handleId: List.generate(20, (i) => i),
+          authPublicKey: List.generate(32, (i) => i),
+        );
+        final rescanned = (await Channel.fromJson(
+          created.toJson(),
+        )).copyWith(peerOhDescriptor: descriptor);
+        expect(await repo.addChannel(rescanned), isFalse);
+
+        final restored = (await repo.getChannels()).single;
+        expect(restored.peerOhDescriptor!.serverEndpoint, 'node-2:59558');
+        expect(restored.peerOhDescriptor!.handleId, descriptor.handleId);
+      });
+
+      test('a fresh channel is still inserted alongside', () async {
+        await repo.addChannel(await Channel.generate('First'));
+        expect(await repo.addChannel(await Channel.generate('Second')), isTrue);
+
+        expect(await repo.getChannels(), hasLength(2));
+      });
     });
 
     test('watchChannels emits the current channel list', () async {

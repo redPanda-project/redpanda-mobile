@@ -46,8 +46,11 @@ class _JoinChannelScreenState extends ConsumerState<JoinChannelScreen> {
       // Decode channel (QR v4: the code carries only the channel secret).
       final channel = await Channel.fromJson(code);
 
-      // Add to repository
-      await ref.read(channelRepositoryProvider).addChannel(channel);
+      // Add to repository. Re-scanning a QR for a channel we already joined
+      // keeps the existing row (and its ratchet state) intact — see H8.
+      final isNewChannel = await ref
+          .read(channelRepositoryProvider)
+          .addChannel(channel);
 
       // Register our own OH for this channel in the background so it's
       // ready when we share our QR code with the peer later.
@@ -59,7 +62,13 @@ class _JoinChannelScreenState extends ConsumerState<JoinChannelScreen> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Joined channel: ${channel.label}')),
+          SnackBar(
+            content: Text(
+              isNewChannel
+                  ? 'Joined channel: ${channel.label}'
+                  : 'Channel already joined: ${channel.label}',
+            ),
+          ),
         );
         context.go('/');
       }
