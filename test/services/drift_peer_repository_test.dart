@@ -95,6 +95,23 @@ void main() {
     expect((await readRow('10.0.0.5:59558'))!.successCount, 1);
   });
 
+  test('load() does not clobber an update that is still in flight', () async {
+    const address = '10.0.0.8:59558';
+    repo.updatePeer(address, isSuccess: true);
+    await repo.save();
+
+    // Rebuild the cache while a second update is queued: its cache write
+    // happens before its DB write, so a naive clear+repopulate would resurrect
+    // the pre-update snapshot and leave the cache permanently behind the DB.
+    repo.updatePeer(address, isSuccess: true);
+    await repo.load();
+
+    expect(repo.getPeer(address)!.successCount, 2);
+    await repo.save();
+    expect((await readRow(address))!.successCount, 2);
+    expect(repo.getPeer(address)!.successCount, 2);
+  });
+
   test('save() drains the queue and leaves no pending work behind', () async {
     repo.addAll(['10.0.0.6:59558', '10.0.0.7:59558']);
     repo.updatePeer('10.0.0.6:59558', isSuccess: true);

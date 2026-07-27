@@ -30,8 +30,10 @@ class DriftPeerRepository implements PeerRepository {
     // per-address updates drain, which also gives tests a way to await them.
     // Each entry is the *tail* of its address chain, so one pass already covers
     // everything queued when save() was called; the second pass picks up work
-    // that a callback enqueued while we waited. Bounded on purpose — a live
-    // client never stops updating peers, and save() must still return.
+    // that a callback enqueued while we waited. Deliberately best-effort rather
+    // than "drain until empty": a live client never stops updating peers, and
+    // `onPause()` calls this fire-and-forget, so it must return. Updates queued
+    // after the second pass still land on their own.
     for (var pass = 0; pass < 2 && _pending.isNotEmpty; pass++) {
       await Future.wait(_pending.values.toList());
     }
@@ -180,6 +182,15 @@ class DriftPeerRepository implements PeerRepository {
   @override
   Future<void> load() async {
     final rows = await db.select(db.peers).get();
+    // An address whose update chain is still in flight holds a cache entry that
+    // is newer than this snapshot (`_applyUpdate` writes the cache before the
+    // DB), so the rebuild must not clobber it. In practice `load()` runs once
+    // before the first connection, but making the rebuild race-free is cheaper
+    // than relying on that.
+    final inFlight = <String, PeerStats>{
+      for (final address in _pending.keys)
+        if (_cache[address] != null) address: _cache[address]!,
+    };
     _cache.clear();
     for (final row in rows) {
       _cache[row.address] = PeerStats(
@@ -192,5 +203,6 @@ class DriftPeerRepository implements PeerRepository {
         lastSeen: row.lastSeen,
       );
     }
+    _cache.addAll(inFlight);
   }
 }

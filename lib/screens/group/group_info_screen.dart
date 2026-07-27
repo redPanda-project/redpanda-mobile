@@ -16,31 +16,10 @@ class GroupInfoScreen extends ConsumerWidget {
   Future<void> _rename(BuildContext context, WidgetRef ref) async {
     final group = await ref.read(groupRepositoryProvider).getGroup(groupId);
     if (group == null || !context.mounted) return;
-    final controller = TextEditingController(text: group.label);
-    final String? newName;
-    try {
-      newName = await showDialog<String>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Rename group'),
-          content: TextField(controller: controller, autofocus: true),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, controller.text.trim()),
-              child: const Text('Rename'),
-            ),
-          ],
-        ),
-      );
-    } finally {
-      // This screen is stateless, so the controller has no dispose() hook to
-      // ride on — release it once the dialog that owns it is gone.
-      controller.dispose();
-    }
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (context) => _RenameGroupDialog(initialName: group.label),
+    );
     if (newName == null || newName.isEmpty || newName == group.label) return;
     try {
       await ref.read(groupServiceProvider).renameGroup(groupId, newName);
@@ -194,6 +173,53 @@ class GroupInfoScreen extends ConsumerWidget {
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(child: Text('Error: $e')),
       ),
+    );
+  }
+}
+
+/// Rename dialog with its own [State], so the [TextEditingController] is
+/// disposed by the framework when the dialog's element unmounts.
+///
+/// Disposing it right after `showDialog` resolves would be too early:
+/// `Navigator.pop` completes the future immediately, but the `TextField`
+/// subtree stays mounted through the exit transition and can still touch the
+/// controller (e.g. `clearComposing()` on focus loss with an active IME
+/// composing region).
+class _RenameGroupDialog extends StatefulWidget {
+  final String initialName;
+
+  const _RenameGroupDialog({required this.initialName});
+
+  @override
+  State<_RenameGroupDialog> createState() => _RenameGroupDialogState();
+}
+
+class _RenameGroupDialogState extends State<_RenameGroupDialog> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.initialName,
+  );
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Rename group'),
+      content: TextField(controller: _controller, autofocus: true),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _controller.text.trim()),
+          child: const Text('Rename'),
+        ),
+      ],
     );
   }
 }
