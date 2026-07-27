@@ -32,13 +32,11 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:drift/drift.dart' as drift;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hex/hex.dart';
 import 'package:integration_test/integration_test.dart';
-import 'package:redpanda/database/database.dart' as appdb;
 import 'package:redpanda/main.dart';
 import 'package:redpanda/repositories/channel_repository.dart';
 import 'package:redpanda/repositories/outbound_handle_repository.dart';
@@ -426,20 +424,16 @@ Future<void> runAlice(WidgetTester tester) async {
     throw StateError('Bob QR is for a different channel');
   }
 
-  // Import just the peer-OH columns (the part rendezvous discovery contributes)
-  // without going through addChannel, which would wipe our role marker.
-  final db = container.read(dbProvider);
-  await (db.update(
-    db.channels,
-  )..where((t) => t.uuid.equals(myChannel.id))).write(
-    appdb.ChannelsCompanion(
-      peerOhEndpoint: drift.Value(desc.serverEndpoint),
-      peerOhId: drift.Value(HEX.encode(desc.handleId)),
-      peerOhPublicKey: drift.Value(HEX.encode(desc.authPublicKey)),
-    ),
-  );
+  // Attach the peer OH that rendezvous discovery contributes. Since #82
+  // addChannel updates an existing row in place instead of INSERT OR REPLACE,
+  // so it preserves the ratchet state and our creator role marker — the normal
+  // repository path, no direct DB write needed.
+  await container
+      .read(channelRepositoryProvider)
+      .addChannel(myChannel.copyWith(peerOhDescriptor: desc));
   // Re-register the channel keys with the peer OH — same call the app makes
   // on startup when restoring persisted state.
+  final db = container.read(dbProvider);
   final row = await (db.select(
     db.channels,
   )..where((t) => t.uuid.equals(myChannel.id))).getSingle();

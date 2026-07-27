@@ -113,6 +113,12 @@ class ChatScreen extends ConsumerStatefulWidget {
 class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _messageController = TextEditingController();
 
+  @override
+  void dispose() {
+    _messageController.dispose();
+    super.dispose();
+  }
+
   void _sendMessage() async {
     final content = _messageController.text.trim();
     if (content.isEmpty) return;

@@ -20,6 +20,12 @@ class _CreateGroupScreenState extends ConsumerState<CreateGroupScreen> {
   final Set<String> _selectedChannelIds = {};
   bool _creating = false;
 
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
+
   Future<void> _createGroup(List<Channel> channels) async {
     final name = _nameController.text.trim();
     if (name.isEmpty || _selectedChannelIds.isEmpty || _creating) return;

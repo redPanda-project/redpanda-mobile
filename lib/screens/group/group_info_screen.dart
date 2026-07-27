@@ -17,23 +17,30 @@ class GroupInfoScreen extends ConsumerWidget {
     final group = await ref.read(groupRepositoryProvider).getGroup(groupId);
     if (group == null || !context.mounted) return;
     final controller = TextEditingController(text: group.label);
-    final newName = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Rename group'),
-        content: TextField(controller: controller, autofocus: true),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text.trim()),
-            child: const Text('Rename'),
-          ),
-        ],
-      ),
-    );
+    final String? newName;
+    try {
+      newName = await showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Rename group'),
+          content: TextField(controller: controller, autofocus: true),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, controller.text.trim()),
+              child: const Text('Rename'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      // This screen is stateless, so the controller has no dispose() hook to
+      // ride on — release it once the dialog that owns it is gone.
+      controller.dispose();
+    }
     if (newName == null || newName.isEmpty || newName == group.label) return;
     try {
       await ref.read(groupServiceProvider).renameGroup(groupId, newName);

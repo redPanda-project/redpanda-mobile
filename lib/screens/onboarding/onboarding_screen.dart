@@ -16,6 +16,12 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   final _nameController = TextEditingController();
   bool _isLoading = false;
 
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
+
   Future<void> _completeOnboarding() async {
     final name = _nameController.text.trim();
     if (name.isEmpty) return;
