@@ -7,9 +7,36 @@ class DriftPeerRepository implements PeerRepository {
 
   DriftPeerRepository(this.db);
 
+  /// Tail of the in-flight update chain per address (M6).
+  ///
+  /// [updatePeer] is `void` on the interface, so every caller in
+  /// `RedPandaLightClient` fires it and forgets it — `onHandshakeComplete`,
+  /// `onLatencyUpdate`, `onDisconnect` and the `onPeersReceived` loop can all
+  /// land for the same address within the same event loop turn. The Drift
+  /// implementation has to read-modify-write across two awaits, so without
+  /// serialization both callbacks read the same snapshot, derive their counters
+  /// from it and the later write silently drops the earlier increment / latency
+  /// sample — degrading exactly the bookkeeping that feeds [getBestPeers] and
+  /// garlic hop selection.
+  ///
+  /// Updates for the same address are therefore chained; different addresses
+  /// still run concurrently. Entries are dropped once the chain drains, so the
+  /// map stays bounded by the number of peers being updated right now.
+  final Map<String, Future<void>> _pending = {};
+
   @override
   Future<void> save() async {
-    // DB is auto-save
+    // The DB writes themselves are immediate; "saving" means letting the queued
+    // per-address updates drain, which also gives tests a way to await them.
+    // Each entry is the *tail* of its address chain, so one pass already covers
+    // everything queued when save() was called; the second pass picks up work
+    // that a callback enqueued while we waited. Deliberately best-effort rather
+    // than "drain until empty": a live client never stops updating peers, and
+    // `onPause()` calls this fire-and-forget, so it must return. Updates queued
+    // after the second pass still land on their own.
+    for (var pass = 0; pass < 2 && _pending.isNotEmpty; pass++) {
+      await Future.wait(_pending.values.toList());
+    }
   }
 
   @override
@@ -20,12 +47,48 @@ class DriftPeerRepository implements PeerRepository {
     int? latencyMs,
     bool? isSuccess,
     bool? isFailure,
-  }) async {
-    // Fetch existing or Create
-    // In Drift we can use insertOnConflictUpdate
+  }) {
+    final previous = _pending[address];
+    // `_applyUpdate` never completes with an error (it swallows failures
+    // internally), so the chain cannot get stuck on a broken link.
+    final next = previous == null
+        ? _applyUpdate(
+            address,
+            nodeId: nodeId,
+            encryptionPublicKey: encryptionPublicKey,
+            latencyMs: latencyMs,
+            isSuccess: isSuccess,
+            isFailure: isFailure,
+          )
+        : previous.then(
+            (_) => _applyUpdate(
+              address,
+              nodeId: nodeId,
+              encryptionPublicKey: encryptionPublicKey,
+              latencyMs: latencyMs,
+              isSuccess: isSuccess,
+              isFailure: isFailure,
+            ),
+          );
+    _pending[address] = next;
+    next.whenComplete(() {
+      // Only the last link clears the slot — an update queued in the meantime
+      // has already replaced it and must stay reachable.
+      if (identical(_pending[address], next)) {
+        _pending.remove(address);
+      }
+    });
+  }
 
-    // We need to read current first to update averages properly or use SQL
-    // Simple approach: Read, Modify, Write
+  Future<void> _applyUpdate(
+    String address, {
+    String? nodeId,
+    String? encryptionPublicKey,
+    int? latencyMs,
+    bool? isSuccess,
+    bool? isFailure,
+  }) async {
+    // Read, modify, write — serialized per address by [updatePeer].
     try {
       final existing = await (db.select(
         db.peers,
@@ -104,9 +167,10 @@ class DriftPeerRepository implements PeerRepository {
   void addAll(Iterable<String> addresses) {
     for (final addr in addresses) {
       if (!_cache.containsKey(addr)) {
-        updatePeer(addr);
-        // Optimistically add to cache
+        // Optimistically add to cache first — `updatePeer` only reaches the
+        // cache once its queued DB read completes.
         _cache[addr] = PeerStats(address: addr);
+        updatePeer(addr);
       }
     }
   }
@@ -118,6 +182,15 @@ class DriftPeerRepository implements PeerRepository {
   @override
   Future<void> load() async {
     final rows = await db.select(db.peers).get();
+    // An address whose update chain is still in flight holds a cache entry that
+    // is newer than this snapshot (`_applyUpdate` writes the cache before the
+    // DB), so the rebuild must not clobber it. In practice `load()` runs once
+    // before the first connection, but making the rebuild race-free is cheaper
+    // than relying on that.
+    final inFlight = <String, PeerStats>{
+      for (final address in _pending.keys)
+        if (_cache[address] != null) address: _cache[address]!,
+    };
     _cache.clear();
     for (final row in rows) {
       _cache[row.address] = PeerStats(
@@ -130,5 +203,6 @@ class DriftPeerRepository implements PeerRepository {
         lastSeen: row.lastSeen,
       );
     }
+    _cache.addAll(inFlight);
   }
 }
