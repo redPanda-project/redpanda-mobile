@@ -28,7 +28,11 @@ class DriftPeerRepository implements PeerRepository {
   Future<void> save() async {
     // The DB writes themselves are immediate; "saving" means letting the queued
     // per-address updates drain, which also gives tests a way to await them.
-    while (_pending.isNotEmpty) {
+    // Each entry is the *tail* of its address chain, so one pass already covers
+    // everything queued when save() was called; the second pass picks up work
+    // that a callback enqueued while we waited. Bounded on purpose — a live
+    // client never stops updating peers, and save() must still return.
+    for (var pass = 0; pass < 2 && _pending.isNotEmpty; pass++) {
       await Future.wait(_pending.values.toList());
     }
   }
