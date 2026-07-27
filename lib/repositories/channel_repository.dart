@@ -103,8 +103,9 @@ class DriftChannelRepository implements ChannelRepository {
   }
 
   /// `Value(v)` for a non-null [v], `Value.absent()` otherwise — an absent
-  /// value leaves the existing column untouched in an UPDATE.
-  static drift.Value<String> _valueOrAbsent(String? value) =>
+  /// value leaves the existing column untouched in an UPDATE. The nullable type
+  /// argument matches the nullable companion fields this feeds.
+  static drift.Value<String?> _valueOrAbsent(String? value) =>
       value == null ? const drift.Value.absent() : drift.Value(value);
 
   @override
