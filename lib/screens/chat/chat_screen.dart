@@ -422,7 +422,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           isChannelCreator: channel.authPrivateKey != null,
           ratchetState: channel.ratchetState,
         );
-        // T42: keep k=2 own mailboxes on disjoint nodes for this channel and
+        // T42: keep k=3 own mailboxes on disjoint nodes for this channel and
         // announce the set to the partner. No-op when only one node is
         // reachable; fire-and-forget.
         unawaited(client.ensureOhRedundancy(channel.uuid));

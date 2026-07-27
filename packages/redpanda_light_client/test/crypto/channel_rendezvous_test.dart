@@ -16,10 +16,12 @@ const _recordPubkeyHex =
     'dd972f08beef48a682d05acf3b080bc357a0e5a19672bdee2d8f037b2e7be246';
 const _ts = 1000000000000;
 const _kademliaIdHex = 'dd83fa6b288e25f3aa52545015316b6fe379ab01';
-// buildRecordContent(sk, [0xAB * 512], ts) → deterministic Ed25519 signature.
+// buildRecordContent(sk, [0xAB * 1024], ts) → deterministic Ed25519 signature.
+// Regenerated for the 1024-byte bucket; the backend pins the same vector in
+// ChannelDhtTest.buildRecordContent_matchesTheClientCrossCheckVector.
 const _contentSignatureHex =
-    'a8332bdfc6239055747cf490d89072f4bc51206d8cb12f80a41f2d5e3341afd2'
-    '0e943ba51f001ec25e17b25347d3d492339e60f3b6b24ed0df1aaacb84a0ec0d';
+    'e649ea68beaedc8e66a11765ec5d4b3fbac2bf58e54815105741fd6007276893'
+    '4838668388001641eac6c21223ec4e195fc590b1c91571ae9c0699932b411600';
 const _ts2 = 1752960000000;
 const _kademliaIdTs2Hex = '3b581f272eb90fc51fce892b881512ae104cce4a';
 
@@ -113,18 +115,73 @@ void main() {
       expect(decoded[1].ohs.single.serverEndpoint, '9.9.9.9:59558');
     });
 
-    test('two participants with k=2 OHs fit the 512-byte bucket', () {
+    test('two participants with k=3 OHs fit the 1024-byte bucket', () {
       final entries = [
         for (var p = 0; p < 2; p++)
           _entry(
             id: CryptoUtils.randomBytes(32),
             name: 'Participant $p',
             ts: 1000 + p,
-            ohs: [_oh('123.123.123.123:59558'), _oh('200.200.200.200:59558')],
+            ohs: [
+              _oh('123.123.123.123:59558'),
+              _oh('200.200.200.200:59558'),
+              _oh('42.42.42.42:59558'),
+            ],
           ),
       ];
       final encoded = ChannelRendezvous.encodeEntries(entries);
       expect(encoded.length, ChannelRendezvous.plaintextLength);
+    });
+
+    test('k=3 with IPv6 endpoints still fits for two participants', () {
+      // The bucket must hold the worst realistic 1:1 case, not just IPv4:
+      // an IPv6 endpoint costs ~96 bytes per descriptor instead of ~74.
+      final entries = [
+        for (var p = 0; p < 2; p++)
+          _entry(
+            id: CryptoUtils.randomBytes(32),
+            name: 'Participant $p',
+            ts: 1000 + p,
+            ohs: [
+              for (var i = 0; i < 3; i++)
+                _oh('[2001:db8:85a3:8d3:1319:8a2e:370:$i]:59558'),
+            ],
+          ),
+      ];
+      final encoded = ChannelRendezvous.encodeEntries(entries);
+      expect(encoded.length, ChannelRendezvous.plaintextLength);
+    });
+
+    test('three participants with k=3 OHs still fit on IPv4', () {
+      // k=3 is the last redundancy that leaves room for a third participant —
+      // the guard behind RedPandaLightClient.ohRedundancy. A k=4 set of three
+      // participants overflows (1055 > 996 bytes), and the overflow would only
+      // ever surface as a swallowed publish error.
+      final entries = [
+        for (var p = 0; p < 3; p++)
+          _entry(
+            id: CryptoUtils.randomBytes(32),
+            name: 'Participant $p',
+            ts: 1000 + p,
+            ohs: [for (var i = 0; i < 3; i++) _oh('123.123.123.12$i:59558')],
+          ),
+      ];
+      final encoded = ChannelRendezvous.encodeEntries(entries);
+      expect(encoded.length, ChannelRendezvous.plaintextLength);
+
+      final withFourth = [
+        for (final e in entries)
+          _entry(
+            id: e.participantId,
+            name: e.name,
+            ts: e.entryTs,
+            ohs: [...e.ohs, _oh('123.123.123.99:59558')],
+          ),
+      ];
+      expect(
+        () => ChannelRendezvous.encodeEntries(withFourth),
+        throwsA(isA<ArgumentError>()),
+      );
     });
 
     test('oversized payload throws', () {
@@ -145,7 +202,7 @@ void main() {
   });
 
   group('record encrypt/decrypt', () {
-    test('round-trips through the fixed 512-byte bucket', () async {
+    test('round-trips through the fixed 1024-byte bucket', () async {
       final sk = CryptoUtils.randomBytes(32);
       final entries = [
         _entry(

@@ -2861,9 +2861,17 @@ class RedPandaLightClient implements RedPandaClient {
     );
   }
 
-  /// Redundancy fixed at k=2 own mailboxes on disjoint nodes (T42). Not a
+  /// Redundancy fixed at k=3 own mailboxes on disjoint nodes (T42). Not a
   /// configuration knob — hard-coded per the plan.
-  static const int ohRedundancy = 2;
+  ///
+  /// Bounded from above by the rendezvous record: the whole own OH set is
+  /// published into the fixed `ChannelRendezvous.recordSizeBytes` bucket (996
+  /// usable bytes), where two participants at k=3 need ~556 bytes on IPv4 and
+  /// ~700 on IPv6. k=3 is the last value that also fits three participants
+  /// (~833 bytes on IPv4); k=4 overflows at three participants. An overflow
+  /// surfaces only as a swallowed publish error, so raise the bucket on BOTH
+  /// sides (backend `ChannelDht.RECORD_SIZE_BYTES`) before raising k.
+  static const int ohRedundancy = 3;
 
   @override
   Future<void> ensureOhRedundancy(String channelId) async {

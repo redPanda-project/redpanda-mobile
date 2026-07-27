@@ -23,7 +23,8 @@ import 'test_helpers.dart';
 /// Topology: three local nodes seeded with each other (isolated from the
 /// public testnet via REDPANDA_KNOWN_NODES). Bob's first mailbox lives on
 /// node A, his redundant one (via [RedPandaLightClient.ensureOhRedundancy]) on
-/// node B; Alice's on node C. Bob announces the whole set to Alice as an
+/// node B; Alice's on node C. Bob reaches two nodes, so the k=3 target degrades
+/// to the two disjoint mailboxes this topology allows. Bob announces the whole set to Alice as an
 /// in-band `oh_update` JSON array. Node A is then stopped:
 ///
 ///  1. Alice already knows BOTH of Bob's mailboxes, so her next send deposits
@@ -144,14 +145,19 @@ void main() async {
         final peerOhSub = alice.peerOhUpdates.listen(peerOhMoves.add);
         addTearDown(peerOhSub.cancel);
 
-        // Bob tops up to k=2 on a disjoint node (B) and announces the set.
+        // Bob tops up on a disjoint node (B) and announces the set. The target
+        // is k=3, but Bob is connected to two nodes only, so the top-up must
+        // degrade gracefully to the reachable node count instead of retrying
+        // or registering a second mailbox on a node it already uses.
         await bob.ensureOhRedundancy(channel.id);
         expect(
           bob.registeredOutboundHandles
               .where((oh) => oh.channelId == channel.id)
               .length,
           2,
-          reason: 'Bob must hold two own mailboxes on disjoint nodes',
+          reason:
+              'Bob must hold one own mailbox per reachable disjoint node — two '
+              'here, capped by the topology rather than by ohRedundancy',
         );
         final bobEndpoints = bob.registeredOutboundHandles
             .where((oh) => oh.channelId == channel.id)

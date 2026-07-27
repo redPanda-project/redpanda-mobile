@@ -251,7 +251,7 @@ class GarlicBuilder {
   /// connected node never sees the query interest. Best-effort, no response.
   ///
   /// [kademliaStore] is the serialized backend `KademliaStore` proto
-  /// (timestamp, 64-byte record pubkey, 512-byte content, 64-byte signature).
+  /// (timestamp, 64-byte record pubkey, 1024-byte content, 64-byte signature).
   static Future<Uint8List> buildRecordStore({
     required List<GarlicHop> hops,
     required List<int> kademliaStore,
