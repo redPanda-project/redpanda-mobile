@@ -382,6 +382,18 @@ echo "bob:   ${bob_result:-<no result>}"
 failures=()
 [[ "$alice_result" == *'"ok":true'* ]] || failures+=("alice did not report ok")
 [[ "$bob_result" == *'"ok":true'* ]] || failures+=("bob did not report ok")
+if has_scenario s1; then
+  # Hard acceptance (T82): pairing + first delivery within the S1 budget. Before
+  # this, S3 was the only scenario that could fail on a number, which let a
+  # 130 s S1 through unnoticed on the dafbb918 gate run.
+  grep -q '"withinBudget": true' "$ART/report.json" \
+    || failures+=("S1 pairing + first delivery missed its budget (see s1.latencyMs/budgetMs)")
+fi
+# A negative latency anywhere means the measurement itself is broken (T72), not
+# that something was fast — never let that read as a pass.
+if grep -qE '"latencyMs": -' "$ART/report.json"; then
+  failures+=("negative latency in the report — marker timestamps are unreliable")
+fi
 if has_scenario s3; then
   # Hard acceptance: catch-up after the app restart within the 60 s budget.
   grep -q '"withinCatchupBudget": true' "$ART/report.json" \
