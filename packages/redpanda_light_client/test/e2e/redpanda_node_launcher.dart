@@ -16,6 +16,25 @@ class RedPandaNodeLauncher {
   StreamSubscription<List<int>>? _stdoutSub;
   StreamSubscription<List<int>>? _stderrSub;
 
+  // T78: forward through the NON-BLOCKING sinks, never through `stdout` /
+  // `stderr` directly. Those are documented blocking IOSinks ("Provides a
+  // *blocking* IOSink", dart:io/stdio.dart) whose consumer writes with
+  // `writeFromSync`. Under `flutter test` the test process' stdout is a pipe
+  // (flutter_tester -> flutter_tools -> CI runner, hence the "Shell: " prefix
+  // on every node line). If that pipe's 64 KiB kernel buffer fills because the
+  // reader stalls, a blocking write freezes the whole isolate *synchronously*:
+  // no timer runs, so the suite's @Timeout can never fire, and since this very
+  // subscription is what drains the node's stdout pipe, the java node blocks on
+  // its next write too. Both sides go dead silent until the CI step's 30 min
+  // ceiling kills the job — which is exactly the signature of the T78 hangs
+  // (15-24 min without a single log line, node and dart stopping in the same
+  // instant, no test failure reported). It never reproduced locally because a
+  // terminal or a redirect to a file applies no backpressure; only a pipe does.
+  // The non-blocking sinks buffer in memory instead, so a stalled reader can
+  // slow the output down but can no longer deadlock the test isolate.
+  static final IOSink _consoleOut = stdout.nonBlocking;
+  static final IOSink _consoleErr = stderr.nonBlocking;
+
   RedPandaNodeLauncher({required this.port, this.seeds = const []})
     : _workingDir = Directory.systemTemp
           .createTempSync('redpanda_node_$port')
@@ -77,9 +96,11 @@ class RedPandaNodeLauncher {
 
     // Stream output to console for debugging. Keep the subscriptions so
     // stop() can cancel them (see the field doc) and drain the pipes so a
-    // chatty node can never block on a full stdout buffer.
-    _stdoutSub = _process!.stdout.listen((event) => stdout.add(event));
-    _stderrSub = _process!.stderr.listen((event) => stderr.add(event));
+    // chatty node can never block on a full stdout buffer. The sinks must stay
+    // the non-blocking ones (T78) — draining the node only helps as long as
+    // forwarding cannot block this isolate in turn.
+    _stdoutSub = _process!.stdout.listen((event) => _consoleOut.add(event));
+    _stderrSub = _process!.stderr.listen((event) => _consoleErr.add(event));
 
     // Wait for the port to be open (up to 60 seconds)
     print('Waiting for port $port to open...');
