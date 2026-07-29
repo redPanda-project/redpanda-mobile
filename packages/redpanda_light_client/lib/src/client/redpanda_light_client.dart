@@ -77,6 +77,24 @@ class RedPandaLightClient implements RedPandaClient {
   // final Set<String> _knownAddresses = {}; // Replaced by PeerRepository
   final PeerRepository _peerRepository;
   final Map<String, ActivePeer> _peers = {};
+
+  /// Addresses picked for a dial by a [_runConnectionCheck] that has not put
+  /// its [ActivePeer] into [_peers] yet.
+  ///
+  /// [_runConnectionCheck] awaits DNS lookups (`_resolveConnectedIps`,
+  /// `_isAliasOfConnected`) between choosing candidates and registering the
+  /// peer, and it runs from three places at once: the constructor's
+  /// `load().then(...)`, [connect], and the 3 s timer. Without this set a
+  /// second check re-picks an address whose dial is still inside that await
+  /// window — `_peers.containsKey` is still false — and the client opens two
+  /// parallel connections with the same node identity. The node then hits its
+  /// TD020 branch (redpandaj#276, `ConnectionHandler.setupConnection`),
+  /// disconnects the duplicate, and `_peers[address]` may be left holding
+  /// exactly the ActivePeer that was dropped: `isEncryptionActive` was true a
+  /// moment earlier, yet `sendMessage` throws "no active peer available"
+  /// (T78 — reproduced by pinning the e2e suite to two cores).
+  final Set<String> _dialsInFlight = {};
+
   Timer? _connectionTimer;
   ConnectionStatus _currentStatus = ConnectionStatus.disconnected;
 
@@ -543,7 +561,8 @@ class RedPandaLightClient implements RedPandaClient {
         break;
       }
 
-      if (!_peers.containsKey(candidate.address)) {
+      if (!_peers.containsKey(candidate.address) &&
+          !_dialsInFlight.contains(candidate.address)) {
         // Check backoff
         if (_nextRetryTime.containsKey(candidate.address)) {
           if (DateTime.now().isBefore(_nextRetryTime[candidate.address]!)) {
@@ -561,7 +580,9 @@ class RedPandaLightClient implements RedPandaClient {
       final all = _peerRepository.knownAddresses.toList()..shuffle();
       for (final addr in all) {
         if (connectedCount >= maxConnections) break;
-        if (!_peers.containsKey(addr) && !toConnect.contains(addr)) {
+        if (!_peers.containsKey(addr) &&
+            !_dialsInFlight.contains(addr) &&
+            !toConnect.contains(addr)) {
           // Check backoff
           if (_waitInBackoff(addr)) {
             backoffSkipped++;
@@ -584,85 +605,105 @@ class RedPandaLightClient implements RedPandaClient {
     }
 
     // 4. Connect
-    // Resolve Deduplication done in ActivePeer or before connect?
-    // We do simplified resolve check here
-    final connectedIps = await _resolveConnectedIps();
+    // Claim the slots BEFORE the first await: everything below suspends, and a
+    // concurrent check must not pick the same address again (see
+    // [_dialsInFlight]).
+    final claimed = toConnect.toSet();
+    _dialsInFlight.addAll(claimed);
 
-    for (final address in toConnect) {
-      try {
-        if (await _isAliasOfConnected(address, connectedIps)) {
-          continue;
-        }
+    try {
+      // Resolve Deduplication done in ActivePeer or before connect?
+      // We do simplified resolve check here
+      final connectedIps = await _resolveConnectedIps();
 
-        final peer = ActivePeer(
-          address: address,
-          selfNodeId: selfNodeId,
-          selfKeys: selfKeys,
-          socketFactory: _socketFactory,
-          onStatusChange: _updateStatus,
-          onNodeIdDiscovered: (nodeId, encryptionPublicKey) {
-            _peerRepository.updatePeer(
-              address,
-              nodeId: nodeId,
-              encryptionPublicKey: encryptionPublicKey,
-            );
-          },
-          onDisconnect: () {
-            if (_intentionalDisconnects.contains(address)) {
-              RpLog.debug(
-                'RedPandaLightClient: Peer $address disconnected intentionally (Rotation). No failure recorded.',
-              );
-              _intentionalDisconnects.remove(address);
-              _handleBackoff(address); // Still backoff to ensure we rotate
-            } else {
-              _peerRepository.updatePeer(address, isFailure: true);
-              _handleBackoff(address);
-            }
-          },
-          onPeersReceived: (peers) {
-            RpLog.debug(
-              'RedPandaLightClient: Received ${peers.length} peers from $address',
-            );
-            for (final peer in peers) {
-              // Stores identity (node id + X25519 key, MS04) when included.
+      for (final address in toConnect) {
+        try {
+          if (await _isAliasOfConnected(address, connectedIps)) {
+            continue;
+          }
+
+          final peer = ActivePeer(
+            address: address,
+            selfNodeId: selfNodeId,
+            selfKeys: selfKeys,
+            socketFactory: _socketFactory,
+            onStatusChange: _updateStatus,
+            onNodeIdDiscovered: (nodeId, encryptionPublicKey) {
               _peerRepository.updatePeer(
-                peer.address,
-                nodeId: peer.nodeId,
-                encryptionPublicKey: peer.encryptionPublicKey,
+                address,
+                nodeId: nodeId,
+                encryptionPublicKey: encryptionPublicKey,
               );
-            }
-            // Trigger check to potentially fill slots immediately?
-            // _runConnectionCheck();
-          },
-          onPeerListRequested: () {
-            // Return top 20 best peers to share
-            return _peerRepository
-                .getBestPeers(20)
-                .map((p) => p.address)
-                .toList();
-          },
-          onHandshakeComplete: () {
-            _peerRepository.updatePeer(address, isSuccess: true);
-            // Clear backoff
-            _nextRetryTime.remove(address);
-          },
-          onLatencyUpdate: (latency) {
-            _peerRepository.updatePeer(
-              address,
-              latencyMs: latency,
-              isSuccess: true,
-            );
-          },
-        );
-        peer.onCommandResponse = _handleCommandResponse;
-        _peers[address] = peer;
-        peer.connect(); // Fire and forget (it is async inside)
-      } catch (e) {
-        RpLog.debug(
-          'RedPandaLightClient: Failed to initiate peer $address: $e',
-        );
-        _peerRepository.updatePeer(address, isFailure: true);
+            },
+            onDisconnect: () {
+              if (_intentionalDisconnects.contains(address)) {
+                RpLog.debug(
+                  'RedPandaLightClient: Peer $address disconnected intentionally (Rotation). No failure recorded.',
+                );
+                _intentionalDisconnects.remove(address);
+                _handleBackoff(address); // Still backoff to ensure we rotate
+              } else {
+                _peerRepository.updatePeer(address, isFailure: true);
+                _handleBackoff(address);
+              }
+            },
+            onPeersReceived: (peers) {
+              RpLog.debug(
+                'RedPandaLightClient: Received ${peers.length} peers from $address',
+              );
+              for (final peer in peers) {
+                // Stores identity (node id + X25519 key, MS04) when included.
+                _peerRepository.updatePeer(
+                  peer.address,
+                  nodeId: peer.nodeId,
+                  encryptionPublicKey: peer.encryptionPublicKey,
+                );
+              }
+              // Trigger check to potentially fill slots immediately?
+              // _runConnectionCheck();
+            },
+            onPeerListRequested: () {
+              // Return top 20 best peers to share
+              return _peerRepository
+                  .getBestPeers(20)
+                  .map((p) => p.address)
+                  .toList();
+            },
+            onHandshakeComplete: () {
+              _peerRepository.updatePeer(address, isSuccess: true);
+              // Clear backoff
+              _nextRetryTime.remove(address);
+            },
+            onLatencyUpdate: (latency) {
+              _peerRepository.updatePeer(
+                address,
+                latencyMs: latency,
+                isSuccess: true,
+              );
+            },
+          );
+          peer.onCommandResponse = _handleCommandResponse;
+          _peers[address] = peer;
+          peer.connect(); // Fire and forget (it is async inside)
+        } catch (e) {
+          RpLog.debug(
+            'RedPandaLightClient: Failed to initiate peer $address: $e',
+          );
+          _peerRepository.updatePeer(address, isFailure: true);
+        } finally {
+          // Released in the same synchronous step that inserted into [_peers]
+          // (and on the alias-skip / error paths), so there is never a moment
+          // where neither map nor set holds the address.
+          claimed.remove(address);
+          _dialsInFlight.remove(address);
+        }
       }
+    } finally {
+      // Safety net for an unexpected throw before the loop released a claim: a
+      // leaked entry would block that address from ever being dialled again.
+      // Only what we still hold is released — an address a later check has
+      // re-claimed in the meantime is no longer in [claimed].
+      _dialsInFlight.removeAll(claimed);
     }
   }
 
@@ -782,6 +823,7 @@ class RedPandaLightClient implements RedPandaClient {
       await peer.disconnect();
     }
     _peers.clear();
+    _dialsInFlight.clear();
     _registeredOHs.clear();
     _pendingResponses.clear();
     _putResponses.clear();
