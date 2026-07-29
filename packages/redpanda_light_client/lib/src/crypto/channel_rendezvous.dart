@@ -72,10 +72,15 @@ class ChannelRendezvous {
   /// Fixed serialized size of every rendezvous record content — one bucket for
   /// all channels so record size leaks nothing (backend
   /// `ChannelDht.RECORD_SIZE_BYTES`). Layout: `[12 nonce][ciphertext+tag]`.
-  static const int recordSizeBytes = 512;
+  /// Sized for the k=3 OH redundancy: two participants with three OH
+  /// descriptors each (~74 bytes per descriptor at IPv4) need ~556 of the 996
+  /// usable bytes, which no longer fit the previous 512-byte bucket. Must stay
+  /// in lockstep with the backend — nodes reject every record of a different
+  /// size.
+  static const int recordSizeBytes = 1024;
 
   /// Length of the padded plaintext that lives inside the AEAD:
-  /// `512 - 12 nonce - 16 GCM tag`. All length/padding metadata is structural
+  /// `1024 - 12 nonce - 16 GCM tag`. All length/padding metadata is structural
   /// and lives inside this plaintext — no cleartext length field ever reveals
   /// the real payload size.
   static const int plaintextLength =
@@ -330,7 +335,7 @@ class ChannelRendezvous {
 
   /// Builds the signed rendezvous record for [entries] at [timestampMs],
   /// returning the four `KademliaStore` fields the backend `record_store` needs:
-  /// timestamp, 64-byte record public key, 512-byte content and 64-byte
+  /// timestamp, 64-byte record public key, 1024-byte content and 64-byte
   /// signature. The signature is `Ed25519(recordSeed, SHA256(int64_be(ts) ||
   /// content))` — matches `KadContent.signWith`.
   static Future<SignedRendezvousRecord> buildSignedRecord(

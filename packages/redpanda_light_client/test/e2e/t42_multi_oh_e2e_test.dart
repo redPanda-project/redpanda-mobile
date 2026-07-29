@@ -23,7 +23,7 @@ import 'test_helpers.dart';
 /// Topology: three local nodes seeded with each other (isolated from the
 /// public testnet via REDPANDA_KNOWN_NODES). Bob's first mailbox lives on
 /// node A, his redundant one (via [RedPandaLightClient.ensureOhRedundancy]) on
-/// node B; Alice's on node C. Bob announces the whole set to Alice as an
+/// node B, the third of the k=3 set on node C; Alice's mailbox is on node C. Bob announces the whole set to Alice as an
 /// in-band `oh_update` JSON array. Node A is then stopped:
 ///
 ///  1. Alice already knows BOTH of Bob's mailboxes, so her next send deposits
@@ -144,19 +144,26 @@ void main() async {
         final peerOhSub = alice.peerOhUpdates.listen(peerOhMoves.add);
         addTearDown(peerOhSub.cancel);
 
-        // Bob tops up to k=2 on a disjoint node (B) and announces the set.
+        // Bob tops up to the full k=3 target and announces the set. All three
+        // nodes are seeded with each other, so Bob reaches every one of them
+        // and the top-up finds a disjoint host for each mailbox.
         await bob.ensureOhRedundancy(channel.id);
-        expect(
-          bob.registeredOutboundHandles
-              .where((oh) => oh.channelId == channel.id)
-              .length,
-          2,
-          reason: 'Bob must hold two own mailboxes on disjoint nodes',
-        );
-        final bobEndpoints = bob.registeredOutboundHandles
+        final bobOwnOhs = bob.registeredOutboundHandles
             .where((oh) => oh.channelId == channel.id)
-            .map((oh) => oh.serverEndpoint)
-            .toSet();
+            .toList();
+        expect(
+          bobOwnOhs.length,
+          RedPandaLightClient.ohRedundancy,
+          reason: 'Bob must hold the full k=3 set of own mailboxes',
+        );
+        final bobEndpoints = bobOwnOhs.map((oh) => oh.serverEndpoint).toSet();
+        expect(
+          bobEndpoints.length,
+          bobOwnOhs.length,
+          reason: 'no two of Bob\'s mailboxes may share a host node',
+        );
+        // The scenario below kills node A, so the set must span A and B — the
+        // third mailbox lands on C and is incidental to the failover check.
         expect(bobEndpoints, containsAll(<String>{nodeA, nodeB}));
 
         final announceDeadline = DateTime.now().add(
