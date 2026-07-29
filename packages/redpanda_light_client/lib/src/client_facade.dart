@@ -121,7 +121,7 @@ abstract class RedPandaClient {
   Stream<PeerOhUpdate> get peerOhUpdates;
 
   /// Ensures this channel has the target redundancy of own mailboxes (T42:
-  /// k=2 on disjoint Full Nodes). Registers additional OHs when fewer than the
+  /// k=3 on disjoint Full Nodes). Registers additional OHs when fewer than the
   /// target exist and a disjoint node is reachable, publishes the enlarged set
   /// via [ohRegistrationUpdates] and announces it to the partner in-band.
   /// A graceful no-op when only one node is reachable. Never throws.

@@ -150,7 +150,7 @@ class CmdAddChannelKeys extends IsolateCommand {
   });
 }
 
-/// Tops a channel up to the target OH redundancy (T42, k=2). Fire-and-forget:
+/// Tops a channel up to the target OH redundancy (T42, k=3). Fire-and-forget:
 /// the resulting set is published via [EventOhRegistrationUpdate].
 class CmdEnsureOhRedundancy extends IsolateCommand {
   final String channelId;
