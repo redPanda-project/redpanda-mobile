@@ -153,7 +153,7 @@ Map<String, dynamic> buildReport() {
   // budget, so the 130 s S1 of the `dafbb918` gate run passed silently even
   // though it was a ~100x regression against every other run that day (T80
   // later traced it to a wedged handshake). 30 s is deliberately loose: healthy
-  // runs land at 0,5-2,1 s locally and 5,4 s against the testnet, and the
+  // runs land at 0.5-2.1 s locally and 5.4 s against the testnet, and the
   // MS-MH ceiling for a delivery is 60 s — so this fails on a real regression
   // while leaving pairing plenty of room on a slow emulator.
   const s1BudgetMs = 30000;
