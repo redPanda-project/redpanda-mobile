@@ -38,6 +38,7 @@ import 'package:redpanda_light_client/src/garlic/hop_selector.dart';
 import 'package:redpanda_light_client/src/garlic/node_scorer.dart';
 import 'package:redpanda_light_client/src/garlic/return_path.dart';
 import 'package:redpanda_light_client/src/garlic/rgb_builder.dart';
+import 'package:redpanda_light_client/src/streams/seeded_stream.dart';
 import 'package:redpanda_light_client/src/garlic/session_tag_store.dart';
 import 'package:redpanda_light_client/src/generated/commands.pb.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
@@ -273,46 +274,32 @@ class RedPandaLightClient implements RedPandaClient {
   }
 
   @override
-  Stream<ConnectionStatus> get connectionStatus async* {
-    yield _currentStatus;
-    yield* _connectionStatusController.stream;
-  }
+  Stream<ConnectionStatus> get connectionStatus =>
+      seededStream(() => [_currentStatus], _connectionStatusController.stream);
 
   @override
-  Stream<int> get peerCountStream async* {
-    yield _peers.values.where((p) => p.isHandshakeVerified).length;
-    yield* _peerCountController.stream;
-  }
+  Stream<int> get peerCountStream => seededStream(
+    () => [_peers.values.where((p) => p.isHandshakeVerified).length],
+    _peerCountController.stream,
+  );
 
   /// PROVISIONAL: Stream of currently connected peer addresses.
-  Stream<List<String>> get activePeersStream async* {
-    yield _peers.values
-        .where((p) => p.isHandshakeVerified)
-        .map((p) => p.address)
-        .toList();
-    // We reuse the peerCount controller to signal updates for now?
-    // Or we need a new controller.
-    // Let's create a new controller or just reuse peerCount logic as a trigger.
-    await for (final _ in _peerCountController.stream) {
-      yield _peers.values
-          .where((p) => p.isHandshakeVerified)
-          .map((p) => p.address)
-          .toList();
-    }
-  }
+  Stream<List<String>> get activePeersStream => seededStream(
+    () => [_verifiedAddresses(true)],
+    // The peer-count controller is the change trigger; the addresses are read
+    // fresh on every tick.
+    _peerCountController.stream.map((_) => _verifiedAddresses(true)),
+  );
 
-  Stream<List<String>> get connectingPeersStream async* {
-    yield _peers.values
-        .where((p) => !p.isHandshakeVerified)
-        .map((p) => p.address)
-        .toList();
-    await for (final _ in _peerCountController.stream) {
-      yield _peers.values
-          .where((p) => !p.isHandshakeVerified)
-          .map((p) => p.address)
-          .toList();
-    }
-  }
+  Stream<List<String>> get connectingPeersStream => seededStream(
+    () => [_verifiedAddresses(false)],
+    _peerCountController.stream.map((_) => _verifiedAddresses(false)),
+  );
+
+  List<String> _verifiedAddresses(bool verified) => _peers.values
+      .where((p) => p.isHandshakeVerified == verified)
+      .map((p) => p.address)
+      .toList();
 
   /// Currently active (handshake-verified) peer addresses.
   Set<String> get activePeerAddresses => _peers.values

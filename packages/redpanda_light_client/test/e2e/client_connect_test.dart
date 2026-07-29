@@ -35,9 +35,15 @@ void main() async {
     test(
       'Client connects to local node and transitions to connected state',
       () async {
+        // The first event is the state at subscribe time, and we subscribe
+        // before connect() — so `disconnected` is correct and is now actually
+        // delivered. It used to be swallowed: the old `yield _currentStatus`
+        // generator did not run its body until the first pull, by which time
+        // connect() had already moved the status on (T81).
         final statusExpectation = expectLater(
           client.connectionStatus,
           emitsInOrder([
+            ConnectionStatus.disconnected,
             ConnectionStatus.connecting,
             ConnectionStatus.connected,
           ]),
