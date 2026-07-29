@@ -29,6 +29,7 @@ import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
 import 'package:redpanda_light_client/src/models/peer_stats_snapshot.dart';
 import 'package:redpanda_light_client/src/logging/logger.dart';
+import 'package:redpanda_light_client/src/streams/seeded_stream.dart';
 
 /// A facade that implements [RedPandaClient] but proxies all operations
 /// to a background [Isolate] to prevent UI jank.
@@ -619,24 +620,18 @@ class RedPandaIsolateClient implements RedPandaClient {
   }
 
   @override
-  Stream<ConnectionStatus> get connectionStatus async* {
-    yield _currentStatus;
-    yield* _connectionStatusController.stream;
-  }
+  Stream<ConnectionStatus> get connectionStatus =>
+      seededStream(() => [_currentStatus], _connectionStatusController.stream);
 
   @override
-  Stream<int> get peerCountStream async* {
-    yield _currentPeerCount;
-    yield* _peerCountController.stream;
-  }
+  Stream<int> get peerCountStream =>
+      seededStream(() => [_currentPeerCount], _peerCountController.stream);
 
   @override
-  Stream<PeerStatsSnapshot> get peerStatsStream async* {
-    if (_lastSnapshot != null) {
-      yield _lastSnapshot!;
-    }
-    yield* _peerStatsController.stream;
-  }
+  Stream<PeerStatsSnapshot> get peerStatsStream => seededStream(
+    () => _lastSnapshot == null ? const [] : [_lastSnapshot!],
+    _peerStatsController.stream,
+  );
 
   @override
   Stream<DecryptedMessage> get incomingMessages =>
