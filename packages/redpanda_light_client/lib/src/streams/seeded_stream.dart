@@ -42,6 +42,11 @@ Stream<T> seededStream<T>(Iterable<T> Function() seed, Stream<T> source) {
         onDone: controller.close,
       );
     },
+    // Backpressure must reach the upstream subscription: without this the
+    // controller would buffer without bound while a listener is paused, where
+    // the `yield*` it replaces propagated the pause (Copilot review).
+    onPause: () => subscription?.pause(),
+    onResume: () => subscription?.resume(),
     onCancel: () async {
       final sub = subscription;
       subscription = null;

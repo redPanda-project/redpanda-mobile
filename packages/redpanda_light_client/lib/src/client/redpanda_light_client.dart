@@ -332,20 +332,16 @@ class RedPandaLightClient implements RedPandaClient {
       .toSet();
 
   @override
-  Stream<PeerStatsSnapshot> get peerStatsStream async* {
-    yield PeerStatsSnapshot(
-      allPeers: getDebugPeerStats(),
-      activePeerAddresses: activePeerAddresses,
-      connectingPeerAddresses: connectingPeerAddresses,
-    );
-    await for (final _ in _peerCountController.stream) {
-      yield PeerStatsSnapshot(
-        allPeers: getDebugPeerStats(),
-        activePeerAddresses: activePeerAddresses,
-        connectingPeerAddresses: connectingPeerAddresses,
-      );
-    }
-  }
+  Stream<PeerStatsSnapshot> get peerStatsStream => seededStream(
+    () => [_peerStatsSnapshot()],
+    _peerCountController.stream.map((_) => _peerStatsSnapshot()),
+  );
+
+  PeerStatsSnapshot _peerStatsSnapshot() => PeerStatsSnapshot(
+    allPeers: getDebugPeerStats(),
+    activePeerAddresses: activePeerAddresses,
+    connectingPeerAddresses: connectingPeerAddresses,
+  );
 
   void _updateStatus(ConnectionStatus status) {
     // Recalculate connected peers

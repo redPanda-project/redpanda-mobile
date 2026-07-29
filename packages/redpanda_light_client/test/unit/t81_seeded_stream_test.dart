@@ -43,6 +43,32 @@ void main() {
       expect(seen, [7]);
     });
 
+    test('pause and resume reach the upstream subscription', () async {
+      // Without this the controller would buffer without bound while the
+      // listener is paused; the `yield*` this replaces propagated the pause.
+      var paused = false;
+      final source = StreamController<int>.broadcast(
+        onListen: () => paused = false,
+      );
+      addTearDown(source.close);
+
+      final seen = <int>[];
+      final sub = seededStream(() => [0], source.stream).listen(seen.add);
+      addTearDown(sub.cancel);
+      await Future<void>.delayed(Duration.zero);
+
+      sub.pause();
+      await Future<void>.delayed(Duration.zero);
+      source.add(1);
+      await Future<void>.delayed(Duration.zero);
+      expect(seen, [0], reason: 'nothing may be delivered while paused');
+      expect(paused, isFalse);
+
+      sub.resume();
+      await Future<void>.delayed(Duration.zero);
+      expect(seen, [0, 1], reason: 'the buffered event arrives on resume');
+    });
+
     test('cancelling the subscription releases the upstream one', () async {
       final source = StreamController<int>.broadcast();
       addTearDown(source.close);
