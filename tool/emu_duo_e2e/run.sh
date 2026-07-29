@@ -382,6 +382,24 @@ echo "bob:   ${bob_result:-<no result>}"
 failures=()
 [[ "$alice_result" == *'"ok":true'* ]] || failures+=("alice did not report ok")
 [[ "$bob_result" == *'"ok":true'* ]] || failures+=("bob did not report ok")
+if has_scenario s1; then
+  # Hard acceptance (T82): pairing + first delivery within the S1 budget. Before
+  # this, S3 was the only scenario that could fail on a number, which let a
+  # 130 s S1 through unnoticed on the dafbb918 gate run.
+  # `withinBudget` is null when a marker never arrived — that is "not measured",
+  # not "too slow", and reporting it as a missed budget sends whoever reads the
+  # log looking for a latency problem that is not there.
+  if grep -q '"withinBudget": null' "$ART/report.json"; then
+    failures+=("S1 was never measured — a sent-/recv-e2e-s1 marker is missing (see s1 in report.json)")
+  elif ! grep -q '"withinBudget": true' "$ART/report.json"; then
+    failures+=("S1 pairing + first delivery missed its budget (see s1.latencyMs/budgetMs)")
+  fi
+fi
+# A negative latency anywhere means the measurement itself is broken (T72), not
+# that something was fast — never let that read as a pass.
+if grep -qE '"latencyMs": -' "$ART/report.json"; then
+  failures+=("negative latency in the report — marker timestamps are unreliable")
+fi
 if has_scenario s3; then
   # Hard acceptance: catch-up after the app restart within the 60 s budget.
   grep -q '"withinCatchupBudget": true' "$ART/report.json" \

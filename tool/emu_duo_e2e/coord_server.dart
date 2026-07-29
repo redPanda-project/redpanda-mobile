@@ -48,10 +48,18 @@ Future<void> handle(HttpRequest req) async {
   final res = req.response;
 
   if (req.method == 'PUT' && path.startsWith('/kv/')) {
+    // T72: stamp on ARRIVAL, before the body is read. Reading the body is an
+    // await, so two PUTs in flight at the same time can interleave there and be
+    // stamped in the opposite order to their arrival — which is how the gate run
+    // of 2026-07-27 reported `latencyMs: -52` for `e2e-s2-08`: Bob's `recv-`
+    // marker won the body read against Alice's `sent-` marker. The arrival time
+    // is also the honest measurement point; how long a body takes to stream in
+    // has nothing to do with message latency.
+    final arrivedMs = clock.elapsedMilliseconds;
     final name = path.substring('/kv/'.length);
     final body = await utf8.decoder.bind(req).join();
     store[name] = body;
-    firstSeenMs.putIfAbsent(name, () => clock.elapsedMilliseconds);
+    firstSeenMs.putIfAbsent(name, () => arrivedMs);
     stdout.writeln(
       '[${clock.elapsedMilliseconds} ms] PUT $name (${body.length} bytes)',
     );
@@ -141,13 +149,29 @@ Map<String, dynamic> buildReport() {
   const s3CatchupBudgetMs = 60000;
   final s3Catchup = span('s3-bob-restart', 'recv-e2e-s3');
 
+  // S1 acceptance (T82): pairing + first delivery. Until now only S3 had a hard
+  // budget, so the 130 s S1 of the `dafbb918` gate run passed silently even
+  // though it was a ~100x regression against every other run that day (T80
+  // later traced it to a wedged handshake). 30 s is deliberately loose: healthy
+  // runs land at 0.5-2.1 s locally and 5.4 s against the testnet, and the
+  // MS-MH ceiling for a delivery is 60 s — so this fails on a real regression
+  // while leaving pairing plenty of room on a slow emulator.
+  const s1BudgetMs = 30000;
+  final s1Latency = latencyMs('e2e-s1');
+
   return {
     'generatedAt': DateTime.now().toIso8601String(),
     'scenarios': store['scenarios'],
     's1': {
       'sentAtMs': firstSeenMs['sent-e2e-s1'],
       'recvAtMs': firstSeenMs['recv-e2e-s1'],
-      'latencyMs': latencyMs('e2e-s1'),
+      'latencyMs': s1Latency,
+      'budgetMs': s1BudgetMs,
+      // A negative latency is not "fast", it is a broken measurement (T72), so
+      // it must not satisfy the budget either.
+      'withinBudget': s1Latency == null
+          ? null
+          : s1Latency >= 0 && s1Latency <= s1BudgetMs,
     },
     's2': {
       'messages': s2,
