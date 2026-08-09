@@ -2843,7 +2843,10 @@ class RedPandaLightClient implements RedPandaClient {
       if (payload.isEmpty) return;
       final status = payload[0];
       if (status == 0 || payload.length < 2) {
-        RpLog.debug(
+        // Info, not debug: a visible found=false streak lets a CI timeout log
+        // name its cause (e.g. a lost first store waiting out the 3-minute
+        // republish window) instead of timing out silently (T91/TD023).
+        RpLog.info(
           'RedPandaLightClient: rendezvous lookup for $channelId — no record',
         );
         return;

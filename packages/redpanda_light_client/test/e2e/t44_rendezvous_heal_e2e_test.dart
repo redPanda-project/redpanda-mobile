@@ -1,6 +1,10 @@
 @Tags(['e2e'])
-@Retry(1)
-@Timeout(Duration(minutes: 14))
+// No @Retry: the 7-minute in-test recovery deadline already absorbs the known
+// slow-but-successful path (a dropped first record_store is only healed by the
+// 3-minute periodic republish, see _rendezvousRepublishInterval), so a genuine
+// failure would just burn another full loop. Budget: setUp ~1 min + 7-min
+// recovery loop + delivery ~2 min.
+@Timeout(Duration(minutes: 10))
 library;
 
 import 'dart:async';
