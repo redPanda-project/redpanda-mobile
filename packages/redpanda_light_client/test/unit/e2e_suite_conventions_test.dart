@@ -34,7 +34,15 @@ void main() {
 
     expect(suites, isNotEmpty, reason: 'no e2e suites found in test/e2e');
 
-    final tagPattern = RegExp(r"@Tags\(\s*\[[^\]]*'e2e'");
+    // Both patterns are deliberately lenient about spelling that Dart treats
+    // as equivalent (`const` list, either quote style, whitespace before the
+    // argument list): the guard-rail is here to catch a suite that forgot the
+    // convention, not to police formatting.
+    final tagPattern = RegExp(
+      '''@Tags\\(\\s*(?:const\\s*)?\\[[^\\]]*['"]e2e['"]''',
+    );
+    final guardPattern = RegExp(r'\be2eJarAvailable\s*\(');
+
     for (final suite in suites) {
       final name = suite.uri.pathSegments.last;
       final source = suite.readAsStringSync();
@@ -47,7 +55,7 @@ void main() {
             'the unit step instead of the serial e2e step',
       );
       expect(
-        source.contains('e2eJarAvailable()'),
+        guardPattern.hasMatch(source),
         isTrue,
         reason:
             '$name does not use e2eJarAvailable() — a suite that checks for '

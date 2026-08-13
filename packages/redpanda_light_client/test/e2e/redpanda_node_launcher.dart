@@ -119,10 +119,13 @@ class RedPandaNodeLauncher {
       // surfacing 60 s later as "Node failed to start on port ...".
       if (!jar.existsSync() || jar.lengthSync() == 0) return null;
       return path;
-    } catch (e) {
+    } catch (e, stack) {
       // Never swallow silently: a permissions error or a broken checkout would
-      // otherwise be reported as "the release download failed".
-      print('Could not locate redpanda.jar: $e');
+      // otherwise be reported as "the release download failed". Goes to stderr
+      // (through the non-blocking sink, see the T78 note on the field) so it
+      // stays separate from the node log stream on stdout, with the stack
+      // trace attached — a CI-only path is expensive to reproduce locally.
+      _consoleErr.writeln('Could not locate redpanda.jar: $e\n$stack');
       return null;
     }
   }
