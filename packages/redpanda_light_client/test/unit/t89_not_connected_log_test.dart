@@ -57,18 +57,15 @@ void main() {
     expect(reports.first, isNot(contains('127.0.0.1')));
   });
 
-  test(
-    'the report is throttled to one line per 15 s',
-    () async {
-      final client = await deadClient();
-      addTearDown(client.disconnect);
-      await client.addPeer('127.0.0.1:5302');
-      await client.connect();
-      // Four connection-check ticks (every 3 s) inside one throttle window.
-      await Future<void>.delayed(const Duration(seconds: 13));
+  test('the report is throttled to one line per 15 s', () async {
+    final client = await deadClient();
+    addTearDown(client.disconnect);
+    await client.addPeer('127.0.0.1:5302');
+    await client.connect();
+    // Four connection-check ticks (every 3 s) inside one throttle window, well
+    // inside the 30 s default test timeout.
+    await Future<void>.delayed(const Duration(seconds: 13));
 
-      expect(lines.where((l) => l.contains('still ')), hasLength(1));
-    },
-    timeout: const Timeout(Duration(seconds: 60)),
-  );
+    expect(lines.where((l) => l.contains('still ')), hasLength(1));
+  });
 }

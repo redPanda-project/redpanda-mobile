@@ -30,8 +30,15 @@ void main() {
       final accepted = <Socket>[];
       // Accept and stay silent — no handshake header, and crucially no close
       // either, which is what a node with a wedged selector (or a link that ate
-      // the FIN) looks like from here.
+      // the FIN) looks like from here. The sockets are destroyed in the
+      // teardown, not on accept: the point of the test is that they stay open
+      // (Copilot review).
       server.listen(accepted.add);
+      addTearDown(() {
+        for (final socket in accepted) {
+          socket.destroy();
+        }
+      });
 
       final keys = await KeyPair.generate();
       final client = RedPandaLightClient(
