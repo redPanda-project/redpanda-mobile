@@ -28,7 +28,7 @@ import 'test_helpers.dart';
 /// to it at boot and inter-connect through the periodic peer list exchange.
 /// No suite shares ports anymore, so there is no topology lock.
 void main() async {
-  final jarAvailable = await RedPandaNodeLauncher.isJarAvailable();
+  final jarAvailable = e2eJarAvailable();
 
   const entryPort = 50570;
   const relayPorts = [50571, 50572, 50573];
@@ -119,73 +119,69 @@ void main() async {
       }
     }
 
-    test(
-      'Alice sends over 3 garlic hops; Bob receives the message',
-      () async {
-        await alice.connect();
-        expect(await waitForEncryption(alice), isTrue);
-        await bob.connect();
-        expect(await waitForEncryption(bob), isTrue);
+    test('Alice sends over 3 garlic hops; Bob receives the message', () async {
+      await alice.connect();
+      expect(await waitForEncryption(alice), isTrue);
+      await bob.connect();
+      expect(await waitForEncryption(bob), isTrue);
 
-        final channel = await Channel.generate('MS04 Garlic');
-        final bobOH = await bob.registerOutboundHandle(channelId: channel.id);
-        alice.addChannelKeys(
+      final channel = await Channel.generate('MS04 Garlic');
+      final bobOH = await bob.registerOutboundHandle(channelId: channel.id);
+      alice.addChannelKeys(
+        channel.id,
+        channel.encryptionKey,
+        peerOhId: bobOH.ohId,
+        peerOhEndpoint: entryAddress,
+        isChannelCreator: true,
+      );
+      bob.addChannelKeys(
+        channel.id,
+        channel.encryptionKey,
+        isChannelCreator: false,
+      );
+
+      await waitForRelayCandidates();
+      // Give the OH announce and the relay interconnections a moment —
+      // the relays exchange peer lists on a 30-second cycle.
+      await Future.delayed(const Duration(seconds: 5));
+
+      // Garlic delivery is fire-and-forget (no R-ACK before MS06), so the
+      // test mirrors the MS02 retry queue: re-send the SAME logical
+      // message id until Bob's poll (Connection-Notify auto-fetch) sees it.
+      // Every attempt picks fresh hops, so a single struggling relay cannot
+      // fail the test.
+      const content = 'Multi-hop garlic hello!';
+      String? messageId;
+      final received = DeliveryCollector(bob);
+      addTearDown(received.cancel);
+
+      for (var attempt = 0; attempt < 6; attempt++) {
+        messageId = await alice.sendMessage(
           channel.id,
-          channel.encryptionKey,
-          peerOhId: bobOH.ohId,
-          peerOhEndpoint: entryAddress,
-          isChannelCreator: true,
-        );
-        bob.addChannelKeys(
-          channel.id,
-          channel.encryptionKey,
-          isChannelCreator: false,
-        );
-
-        await waitForRelayCandidates();
-        // Give the OH announce and the relay interconnections a moment —
-        // the relays exchange peer lists on a 30-second cycle.
-        await Future.delayed(const Duration(seconds: 5));
-
-        // Garlic delivery is fire-and-forget (no R-ACK before MS06), so the
-        // test mirrors the MS02 retry queue: re-send the SAME logical
-        // message id until Bob's poll (Connection-Notify auto-fetch) sees it.
-        // Every attempt picks fresh hops, so a single struggling relay cannot
-        // fail the test.
-        const content = 'Multi-hop garlic hello!';
-        String? messageId;
-        final received = DeliveryCollector(bob);
-        addTearDown(received.cancel);
-
-        for (var attempt = 0; attempt < 6; attempt++) {
-          messageId = await alice.sendMessage(
-            channel.id,
-            content,
-            messageId: messageId,
-          );
-          expect(
-            alice.lastSendHopCount,
-            equals(3),
-            reason: 'the message must travel the full 3-hop garlic path',
-          );
-          await received.waitUntil(
-            (m) => m.any((x) => x.content == content),
-            timeout: const Duration(seconds: 12),
-          );
-          if (received.messages.any((x) => x.content == content)) break;
-        }
-
-        expect(
-          received.messages.map((m) => m.content),
-          contains(content),
-          reason: 'the garlic-routed message must reach Bob\'s OH mailbox',
+          content,
+          messageId: messageId,
         );
         expect(
-          received.messages.firstWhere((m) => m.content == content).id,
-          equals(messageId),
+          alice.lastSendHopCount,
+          equals(3),
+          reason: 'the message must travel the full 3-hop garlic path',
         );
-      },
-      skip: jarAvailable ? null : 'RedPanda JAR not found',
-    );
+        await received.waitUntil(
+          (m) => m.any((x) => x.content == content),
+          timeout: const Duration(seconds: 12),
+        );
+        if (received.messages.any((x) => x.content == content)) break;
+      }
+
+      expect(
+        received.messages.map((m) => m.content),
+        contains(content),
+        reason: 'the garlic-routed message must reach Bob\'s OH mailbox',
+      );
+      expect(
+        received.messages.firstWhere((m) => m.content == content).id,
+        equals(messageId),
+      );
+    }, skip: jarAvailable ? null : 'RedPanda JAR not found');
   });
 }

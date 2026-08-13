@@ -2,6 +2,72 @@ import 'dart:io';
 import 'dart:async';
 import 'package:path/path.dart' as p;
 
+/// Environment variable that lets a CI run continue without the backend JAR.
+/// Deliberate exceptions only — see [e2eJarAvailable].
+const String kAllowMissingJarEnv = 'E2E_ALLOW_MISSING_JAR';
+
+/// Whether the backend JAR the e2e suites need is present.
+///
+/// Every e2e suite asks this exactly once and passes the result to the
+/// `skip:` argument of its tests — a missing JAR skips the suite instead of
+/// failing it, which is what a developer without a built backend wants.
+///
+/// In CI that same skip is a trap (TD033): the workflow downloads the JAR
+/// from redpandaj's `latest` release in a `continue-on-error` step, so a gap
+/// in that release — or any download hiccup — leaves no JAR behind, every
+/// e2e test skips, and the run goes green with ZERO e2e coverage. That
+/// happened for real on 2026-08-09 (PR #90: ~3 min instead of ~17). A green
+/// run that tested nothing is worse than a red one, so in CI this fails
+/// closed and throws instead of returning `false`.
+///
+/// CI is detected via `CI` / `GITHUB_ACTIONS`, both of which GitHub Actions
+/// always sets. Set [kAllowMissingJarEnv] to `1`/`true` to opt out and get
+/// the local skip behaviour back.
+bool e2eJarAvailable() {
+  if (RedPandaNodeLauncher.locateJar() != null) return true;
+
+  final ciSignal = _ciSignal();
+  if (ciSignal == null || _missingJarAllowed) return false;
+
+  throw StateError(
+    'E2E backend JAR is missing in CI — refusing to skip the e2e suites.\n'
+    'Expected: <repo>/references/redPandaj/target/redpanda.jar '
+    '(or <repo>/redpandaj/target/redpanda.jar), non-empty.\n'
+    'In CI the JAR comes from the "Download RedPanda JAR (Backend)" step '
+    '(gh release download latest --repo redPanda-project/redpandaj). That '
+    'step is continue-on-error, so a missing/incomplete redpandaj `latest` '
+    'release leaves the JAR absent. Skipping here would produce a green run '
+    'with zero e2e coverage (TD033), so the suite fails instead.\n'
+    'Fix the release/download; set $kAllowMissingJarEnv=1 only to allow the '
+    'skip on purpose.\n'
+    'CI was detected via $ciSignal — if that is wrong, this is a local shell '
+    'exporting a CI variable, and the same opt-out applies.',
+  );
+}
+
+/// The environment variable that identifies this run as CI, or `null` when it
+/// is not one.
+///
+/// GitHub Actions sets CI=true and GITHUB_ACTIONS=true on every runner;
+/// GITHUB_RUN_ID is a presence-only backstop in case a runner image or an
+/// `env:` override drops the boolean ones. The name is reported in the failure
+/// message so a false positive (a dev shell that exports `CI`) is obvious
+/// rather than mysterious.
+String? _ciSignal() {
+  for (final name in const ['CI', 'GITHUB_ACTIONS']) {
+    if (_envFlag(name)) return '$name=${Platform.environment[name]}';
+  }
+  if (Platform.environment.containsKey('GITHUB_RUN_ID')) return 'GITHUB_RUN_ID';
+  return null;
+}
+
+bool get _missingJarAllowed => _envFlag(kAllowMissingJarEnv);
+
+bool _envFlag(String name) {
+  final value = Platform.environment[name]?.trim().toLowerCase();
+  return value == 'true' || value == '1';
+}
+
 class RedPandaNodeLauncher {
   Process? _process;
   final int port;
@@ -40,12 +106,27 @@ class RedPandaNodeLauncher {
           .createTempSync('redpanda_node_$port')
           .path;
 
-  static Future<bool> isJarAvailable() async {
+  /// Absolute path of the backend JAR, or `null` when it cannot be located.
+  ///
+  /// Callers in tests should go through [e2eJarAvailable], which additionally
+  /// enforces the fail-closed rule for CI (TD033).
+  static String? locateJar() {
     try {
-      final launcher = RedPandaNodeLauncher(port: 0);
-      return File(launcher._findJarPath()).existsSync();
-    } catch (e) {
-      return false;
+      final path = _findJarPath();
+      final jar = File(path);
+      // Zero bytes means a failed or half-written download, not a usable JAR.
+      // Treating it as missing keeps the diagnosis at the guard instead of
+      // surfacing 60 s later as "Node failed to start on port ...".
+      if (!jar.existsSync() || jar.lengthSync() == 0) return null;
+      return path;
+    } catch (e, stack) {
+      // Never swallow silently: a permissions error or a broken checkout would
+      // otherwise be reported as "the release download failed". Goes to stderr
+      // (through the non-blocking sink, see the T78 note on the field) so it
+      // stays separate from the node log stream on stdout, with the stack
+      // trace attached — a CI-only path is expensive to reproduce locally.
+      _consoleErr.writeln('Could not locate redpanda.jar: $e\n$stack');
+      return null;
     }
   }
 
@@ -175,7 +256,7 @@ class RedPandaNodeLauncher {
     }
   }
 
-  String _findJarPath() {
+  static String _findJarPath() {
     final projectRoot = _findProjectRoot();
 
     // Try references/redpandaj first (case-insensitive)
@@ -199,7 +280,7 @@ class RedPandaNodeLauncher {
     return directJar;
   }
 
-  String _findProjectRoot() {
+  static String _findProjectRoot() {
     var dir = Directory.current;
     print('Searching for project root starting from: ${dir.path}');
 

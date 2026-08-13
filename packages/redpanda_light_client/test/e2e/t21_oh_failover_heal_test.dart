@@ -35,7 +35,7 @@ import 'test_helpers.dart';
 /// Ports are private to this suite (no 59558 dependency), so no topology
 /// lock is needed.
 void main() async {
-  final jarAvailable = await RedPandaNodeLauncher.isJarAvailable();
+  final jarAvailable = e2eJarAvailable();
 
   const portA = 50611; // Bob's mailbox host — stopped mid-test
   const portB = 50612; // stays alive; the channel heals over it
@@ -83,142 +83,134 @@ void main() async {
       await launcherB.stop();
     });
 
-    test(
-      'channel heals itself when the mailbox host node dies',
-      () async {
-        await bob.connect();
-        expect(await waitForEncryption(bob), isTrue);
-        await alice.connect();
-        expect(await waitForEncryption(alice), isTrue);
+    test('channel heals itself when the mailbox host node dies', () async {
+      await bob.connect();
+      expect(await waitForEncryption(bob), isTrue);
+      await alice.connect();
+      expect(await waitForEncryption(alice), isTrue);
 
-        // Bob registers while node A is his only verified peer, Alice while
-        // node B is hers — this pins the mailbox hosts deterministically.
-        final channel = await Channel.generate('T21 Failover');
-        final bobOH = await bob.registerOutboundHandle(channelId: channel.id);
-        expect(bobOH.serverEndpoint, nodeA);
-        final aliceOH = await alice.registerOutboundHandle(
-          channelId: channel.id,
-        );
-        expect(aliceOH.serverEndpoint, nodeB);
+      // Bob registers while node A is his only verified peer, Alice while
+      // node B is hers — this pins the mailbox hosts deterministically.
+      final channel = await Channel.generate('T21 Failover');
+      final bobOH = await bob.registerOutboundHandle(channelId: channel.id);
+      expect(bobOH.serverEndpoint, nodeA);
+      final aliceOH = await alice.registerOutboundHandle(channelId: channel.id);
+      expect(aliceOH.serverEndpoint, nodeB);
 
-        alice.addChannelKeys(
+      alice.addChannelKeys(
+        channel.id,
+        channel.encryptionKey,
+        peerOhId: bobOH.ohId,
+        peerOhEndpoint: nodeA,
+        isChannelCreator: true,
+      );
+      bob.addChannelKeys(
+        channel.id,
+        channel.encryptionKey,
+        peerOhId: aliceOH.ohId,
+        peerOhEndpoint: nodeB,
+        isChannelCreator: false,
+      );
+
+      // Bob additionally connects to node B — the reachable alternative his
+      // failover will use.
+      await bob.addPeer(nodeB);
+      final altDeadline = DateTime.now().add(const Duration(seconds: 60));
+      while (!bob.activePeerAddresses.contains(nodeB)) {
+        if (DateTime.now().isAfter(altDeadline)) {
+          fail('Bob never connected to the alternative node $nodeB');
+        }
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
+
+      final bobInbox = DeliveryCollector(bob);
+      addTearDown(bobInbox.cancel);
+
+      // Sanity: the channel works while node A is alive.
+      const before = 'before failover';
+      String? beforeId;
+      for (var attempt = 0; attempt < 6; attempt++) {
+        beforeId = await alice.sendMessage(
           channel.id,
-          channel.encryptionKey,
-          peerOhId: bobOH.ohId,
-          peerOhEndpoint: nodeA,
-          isChannelCreator: true,
+          before,
+          messageId: beforeId,
         );
-        bob.addChannelKeys(
+        await bobInbox.waitUntil(
+          (m) => m.any((x) => x.content == before),
+          timeout: const Duration(seconds: 12),
+        );
+        if (bobInbox.messages.any((x) => x.content == before)) break;
+      }
+      expect(bobInbox.messages.map((m) => m.content), contains(before));
+
+      // ── Node A dies. ─────────────────────────────────────────────────
+      final replacements = <OHRegistration>[];
+      final replacementSub = bob.ohRegistrationUpdates.listen(
+        replacements.addAll,
+      );
+      addTearDown(replacementSub.cancel);
+      final peerOhMoves = <PeerOhUpdate>[];
+      final peerOhSub = alice.peerOhUpdates.listen(peerOhMoves.add);
+      addTearDown(peerOhSub.cancel);
+
+      await launcherA.stop();
+      // Let Bob's connection to A actually die so fetches fail fast
+      // (host-not-connected) instead of first riding a 10 s timeout each.
+      await Future.delayed(const Duration(seconds: 3));
+
+      // Drive fetch cycles explicitly (the production poll does the same,
+      // just on its 5–30 s cadence — the E2E should not wait minutes).
+      final failoverDeadline = DateTime.now().add(const Duration(seconds: 90));
+      while (replacements.isEmpty) {
+        if (DateTime.now().isAfter(failoverDeadline)) {
+          fail('Bob never failed over to the alternative node');
+        }
+        await bob.fetchMessages(bobOH);
+        await Future.delayed(const Duration(seconds: 1));
+      }
+
+      final replacement = replacements.first;
+      expect(
+        replacement.serverEndpoint,
+        nodeB,
+        reason: 'the replacement mailbox must live on the surviving node',
+      );
+      expect(replacement.channelId, channel.id);
+
+      // Alice learns the new mailbox in-band over her healthy mailbox.
+      final moveDeadline = DateTime.now().add(const Duration(seconds: 90));
+      while (peerOhMoves.isEmpty) {
+        if (DateTime.now().isAfter(moveDeadline)) {
+          fail('Alice never received the in-band oh_update');
+        }
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
+      expect(peerOhMoves.first.channelId, channel.id);
+      expect(
+        peerOhMoves.first.descriptors.any((d) => d.serverEndpoint == nodeB),
+        isTrue,
+      );
+
+      // Alice's next send reaches Bob via his NEW mailbox on node B.
+      const after = 'after failover';
+      String? afterId;
+      for (var attempt = 0; attempt < 6; attempt++) {
+        afterId = await alice.sendMessage(
           channel.id,
-          channel.encryptionKey,
-          peerOhId: aliceOH.ohId,
-          peerOhEndpoint: nodeB,
-          isChannelCreator: false,
+          after,
+          messageId: afterId,
         );
-
-        // Bob additionally connects to node B — the reachable alternative his
-        // failover will use.
-        await bob.addPeer(nodeB);
-        final altDeadline = DateTime.now().add(const Duration(seconds: 60));
-        while (!bob.activePeerAddresses.contains(nodeB)) {
-          if (DateTime.now().isAfter(altDeadline)) {
-            fail('Bob never connected to the alternative node $nodeB');
-          }
-          await Future.delayed(const Duration(milliseconds: 500));
-        }
-
-        final bobInbox = DeliveryCollector(bob);
-        addTearDown(bobInbox.cancel);
-
-        // Sanity: the channel works while node A is alive.
-        const before = 'before failover';
-        String? beforeId;
-        for (var attempt = 0; attempt < 6; attempt++) {
-          beforeId = await alice.sendMessage(
-            channel.id,
-            before,
-            messageId: beforeId,
-          );
-          await bobInbox.waitUntil(
-            (m) => m.any((x) => x.content == before),
-            timeout: const Duration(seconds: 12),
-          );
-          if (bobInbox.messages.any((x) => x.content == before)) break;
-        }
-        expect(bobInbox.messages.map((m) => m.content), contains(before));
-
-        // ── Node A dies. ─────────────────────────────────────────────────
-        final replacements = <OHRegistration>[];
-        final replacementSub = bob.ohRegistrationUpdates.listen(
-          replacements.addAll,
+        await bobInbox.waitUntil(
+          (m) => m.any((x) => x.content == after),
+          timeout: const Duration(seconds: 15),
         );
-        addTearDown(replacementSub.cancel);
-        final peerOhMoves = <PeerOhUpdate>[];
-        final peerOhSub = alice.peerOhUpdates.listen(peerOhMoves.add);
-        addTearDown(peerOhSub.cancel);
-
-        await launcherA.stop();
-        // Let Bob's connection to A actually die so fetches fail fast
-        // (host-not-connected) instead of first riding a 10 s timeout each.
-        await Future.delayed(const Duration(seconds: 3));
-
-        // Drive fetch cycles explicitly (the production poll does the same,
-        // just on its 5–30 s cadence — the E2E should not wait minutes).
-        final failoverDeadline = DateTime.now().add(
-          const Duration(seconds: 90),
-        );
-        while (replacements.isEmpty) {
-          if (DateTime.now().isAfter(failoverDeadline)) {
-            fail('Bob never failed over to the alternative node');
-          }
-          await bob.fetchMessages(bobOH);
-          await Future.delayed(const Duration(seconds: 1));
-        }
-
-        final replacement = replacements.first;
-        expect(
-          replacement.serverEndpoint,
-          nodeB,
-          reason: 'the replacement mailbox must live on the surviving node',
-        );
-        expect(replacement.channelId, channel.id);
-
-        // Alice learns the new mailbox in-band over her healthy mailbox.
-        final moveDeadline = DateTime.now().add(const Duration(seconds: 90));
-        while (peerOhMoves.isEmpty) {
-          if (DateTime.now().isAfter(moveDeadline)) {
-            fail('Alice never received the in-band oh_update');
-          }
-          await Future.delayed(const Duration(milliseconds: 500));
-        }
-        expect(peerOhMoves.first.channelId, channel.id);
-        expect(
-          peerOhMoves.first.descriptors.any((d) => d.serverEndpoint == nodeB),
-          isTrue,
-        );
-
-        // Alice's next send reaches Bob via his NEW mailbox on node B.
-        const after = 'after failover';
-        String? afterId;
-        for (var attempt = 0; attempt < 6; attempt++) {
-          afterId = await alice.sendMessage(
-            channel.id,
-            after,
-            messageId: afterId,
-          );
-          await bobInbox.waitUntil(
-            (m) => m.any((x) => x.content == after),
-            timeout: const Duration(seconds: 15),
-          );
-          if (bobInbox.messages.any((x) => x.content == after)) break;
-        }
-        expect(
-          bobInbox.messages.map((m) => m.content),
-          contains(after),
-          reason: 'the channel must heal over the surviving node',
-        );
-      },
-      skip: jarAvailable ? null : 'RedPanda JAR not found',
-    );
+        if (bobInbox.messages.any((x) => x.content == after)) break;
+      }
+      expect(
+        bobInbox.messages.map((m) => m.content),
+        contains(after),
+        reason: 'the channel must heal over the surviving node',
+      );
+    }, skip: jarAvailable ? null : 'RedPanda JAR not found');
   });
 }

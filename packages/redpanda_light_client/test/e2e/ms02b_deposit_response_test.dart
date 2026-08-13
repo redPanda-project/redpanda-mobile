@@ -15,7 +15,7 @@ import 'redpanda_node_launcher.dart';
 import 'test_helpers.dart';
 
 void main() async {
-  final jarAvailable = await RedPandaNodeLauncher.isJarAvailable();
+  final jarAvailable = e2eJarAvailable();
 
   group('E2E MS02b: deposit responses (want_response) against a real node', () {
     late RedPandaNodeLauncher launcher;
@@ -102,28 +102,24 @@ void main() async {
       skip: jarAvailable ? null : 'RedPanda JAR not found',
     );
 
-    test(
-      'an oversize item (> 64 KiB) is rejected with BAD_REQUEST',
-      () async {
-        final sharedChannel = await Channel.generate('MS02b Oversize');
-        await setupExchange(sharedChannel);
+    test('an oversize item (> 64 KiB) is rejected with BAD_REQUEST', () async {
+      final sharedChannel = await Channel.generate('MS02b Oversize');
+      await setupExchange(sharedChannel);
 
-        // 70_000 ASCII chars encrypt to > 64 KiB ciphertext.
-        final oversize = 'x' * 70000;
+      // 70_000 ASCII chars encrypt to > 64 KiB ciphertext.
+      final oversize = 'x' * 70000;
 
-        await expectLater(
-          alice.sendMessage(sharedChannel.id, oversize),
-          throwsA(
-            isA<DepositException>().having(
-              (e) => e.isBadRequest,
-              'isBadRequest',
-              isTrue,
-            ),
+      await expectLater(
+        alice.sendMessage(sharedChannel.id, oversize),
+        throwsA(
+          isA<DepositException>().having(
+            (e) => e.isBadRequest,
+            'isBadRequest',
+            isTrue,
           ),
-        );
-      },
-      skip: jarAvailable ? null : 'RedPanda JAR not found',
-    );
+        ),
+      );
+    }, skip: jarAvailable ? null : 'RedPanda JAR not found');
 
     test(
       'a deposit to a non-local oh_id is accepted best-effort (OK)',
@@ -152,30 +148,26 @@ void main() async {
       skip: jarAvailable ? null : 'RedPanda JAR not found',
     );
 
-    test(
-      'excessive registrations on one connection hit RATE_LIMIT',
-      () async {
-        await bob.connect();
-        expect(await waitForEncryption(bob), isTrue);
+    test('excessive registrations on one connection hit RATE_LIMIT', () async {
+      await bob.connect();
+      expect(await waitForEncryption(bob), isTrue);
 
-        // The node allows 5 RegisterOhRequest per minute per connection.
-        Object? rateLimit;
-        for (var i = 0; i < 8; i++) {
-          try {
-            await bob.registerOutboundHandle(channelId: 'spam-$i');
-          } on RateLimitException catch (e) {
-            rateLimit = e;
-            break;
-          }
+      // The node allows 5 RegisterOhRequest per minute per connection.
+      Object? rateLimit;
+      for (var i = 0; i < 8; i++) {
+        try {
+          await bob.registerOutboundHandle(channelId: 'spam-$i');
+        } on RateLimitException catch (e) {
+          rateLimit = e;
+          break;
         }
+      }
 
-        expect(
-          rateLimit,
-          isA<RateLimitException>(),
-          reason: 'the 6th registration within a minute must be rate-limited',
-        );
-      },
-      skip: jarAvailable ? null : 'RedPanda JAR not found',
-    );
+      expect(
+        rateLimit,
+        isA<RateLimitException>(),
+        reason: 'the 6th registration within a minute must be rate-limited',
+      );
+    }, skip: jarAvailable ? null : 'RedPanda JAR not found');
   });
 }
