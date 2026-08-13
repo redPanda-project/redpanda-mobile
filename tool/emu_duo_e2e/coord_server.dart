@@ -208,5 +208,13 @@ Map<String, dynamic> buildReport() {
       'alice': decodeResult('alice_result'),
       'bob': decodeResult('bob_result'),
     },
+    // T89(c): node- and client-side counters run.sh greps out of node.log and
+    // the two logcats and PUTs here before every report fetch. They are what
+    // makes "the gate flaked" distinguishable from "the gate found something"
+    // without opening a 3 MB logcat: `node.undialableEvictions.duringS4` says
+    // whether S4 actually exercised the reconnect path, `duplicateConnections`
+    // is the T88 signature, `handshakes.wedged` the T80 one, and the per-role
+    // `workerRespawns`/`commandsDropped` show a network worker that kept dying.
+    'counters': decodeResult('harness_counters'),
   };
 }
