@@ -33,7 +33,7 @@ import 'test_helpers.dart';
 /// No failover, no oh_update round-trip, no multi-cycle wait is needed for the
 /// message to get through.
 void main() async {
-  final jarAvailable = await RedPandaNodeLauncher.isJarAvailable();
+  final jarAvailable = e2eJarAvailable();
 
   const portA = 50621; // Bob's first mailbox host — stopped mid-test
   const portB = 50622; // Bob's redundant mailbox host — stays alive

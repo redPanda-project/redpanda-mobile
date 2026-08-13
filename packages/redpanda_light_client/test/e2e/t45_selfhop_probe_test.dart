@@ -21,7 +21,7 @@ import 'test_helpers.dart';
 /// probes whether the degenerate self-hop path actually delivers against the
 /// reference JAR (gate S1 failed with an OhForwarder NOT_FOUND drop).
 void main() async {
-  final jarAvailable = await RedPandaNodeLauncher.isJarAvailable();
+  final jarAvailable = e2eJarAvailable();
 
   const port = 50600;
   const address = '127.0.0.1:$port';

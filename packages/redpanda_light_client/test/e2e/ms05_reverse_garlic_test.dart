@@ -33,7 +33,7 @@ import 'test_helpers.dart';
 /// entry node + three relays explicitly seeded with the entry address. No
 /// shared ports between suites, hence no topology lock.
 void main() async {
-  final jarAvailable = await RedPandaNodeLauncher.isJarAvailable();
+  final jarAvailable = e2eJarAvailable();
 
   const entryPort = 50580;
   const relayPorts = [50581, 50582, 50583];

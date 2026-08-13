@@ -36,7 +36,7 @@ import 'test_helpers.dart';
 /// mailbox). Bob adopts Alice's OH from the decrypted record and his next send
 /// is delivered — the channel bootstrapped itself over the DHT alone.
 void main() async {
-  final jarAvailable = await RedPandaNodeLauncher.isJarAvailable();
+  final jarAvailable = e2eJarAvailable();
 
   const portA = 50651; // Alice's mailbox host
   const portB = 50652; // relay / DHT replica

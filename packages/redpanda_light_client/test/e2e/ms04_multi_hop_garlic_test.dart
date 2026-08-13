@@ -28,7 +28,7 @@ import 'test_helpers.dart';
 /// to it at boot and inter-connect through the periodic peer list exchange.
 /// No suite shares ports anymore, so there is no topology lock.
 void main() async {
-  final jarAvailable = await RedPandaNodeLauncher.isJarAvailable();
+  final jarAvailable = e2eJarAvailable();
 
   const entryPort = 50570;
   const relayPorts = [50571, 50572, 50573];

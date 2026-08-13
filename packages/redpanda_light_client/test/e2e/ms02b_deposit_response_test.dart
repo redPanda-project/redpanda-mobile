@@ -15,7 +15,7 @@ import 'redpanda_node_launcher.dart';
 import 'test_helpers.dart';
 
 void main() async {
-  final jarAvailable = await RedPandaNodeLauncher.isJarAvailable();
+  final jarAvailable = e2eJarAvailable();
 
   group('E2E MS02b: deposit responses (want_response) against a real node', () {
     late RedPandaNodeLauncher launcher;

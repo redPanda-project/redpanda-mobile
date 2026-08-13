@@ -32,7 +32,7 @@ import 'test_helpers.dart';
 /// picks three live relays and Bob receives the message. Bob's OH lives on the
 /// entry node; the final live relay forwards the deposit to it (MS02b).
 void main() async {
-  final jarAvailable = await RedPandaNodeLauncher.isJarAvailable();
+  final jarAvailable = e2eJarAvailable();
 
   const entryPort = 50590;
   const liveRelayPorts = [50591, 50592, 50593];

@@ -3,7 +3,7 @@ import 'redpanda_node_launcher.dart';
 import 'dart:io';
 
 void main() async {
-  final jarAvailable = await RedPandaNodeLauncher.isJarAvailable();
+  final jarAvailable = e2eJarAvailable();
 
   group('E2E Node Launcher', () {
     late RedPandaNodeLauncher launcher;

@@ -35,7 +35,7 @@ import 'test_helpers.dart';
 /// Ports are private to this suite (no 59558 dependency), so no topology
 /// lock is needed.
 void main() async {
-  final jarAvailable = await RedPandaNodeLauncher.isJarAvailable();
+  final jarAvailable = e2eJarAvailable();
 
   const portA = 50611; // Bob's mailbox host — stopped mid-test
   const portB = 50612; // stays alive; the channel heals over it
