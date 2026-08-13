@@ -24,31 +24,42 @@ const String kAllowMissingJarEnv = 'E2E_ALLOW_MISSING_JAR';
 /// always sets. Set [kAllowMissingJarEnv] to `1`/`true` to opt out and get
 /// the local skip behaviour back.
 bool e2eJarAvailable() {
-  final jarPath = RedPandaNodeLauncher.locateJar();
-  if (jarPath != null) return true;
-  if (!_isCi || _missingJarAllowed) return false;
+  if (RedPandaNodeLauncher.locateJar() != null) return true;
+
+  final ciSignal = _ciSignal();
+  if (ciSignal == null || _missingJarAllowed) return false;
 
   throw StateError(
     'E2E backend JAR is missing in CI — refusing to skip the e2e suites.\n'
     'Expected: <repo>/references/redPandaj/target/redpanda.jar '
-    '(or <repo>/redpandaj/target/redpanda.jar).\n'
+    '(or <repo>/redpandaj/target/redpanda.jar), non-empty.\n'
     'In CI the JAR comes from the "Download RedPanda JAR (Backend)" step '
     '(gh release download latest --repo redPanda-project/redpandaj). That '
     'step is continue-on-error, so a missing/incomplete redpandaj `latest` '
     'release leaves the JAR absent. Skipping here would produce a green run '
     'with zero e2e coverage (TD033), so the suite fails instead.\n'
     'Fix the release/download; set $kAllowMissingJarEnv=1 only to allow the '
-    'skip on purpose.',
+    'skip on purpose.\n'
+    'CI was detected via $ciSignal — if that is wrong, this is a local shell '
+    'exporting a CI variable, and the same opt-out applies.',
   );
 }
 
-// GitHub Actions sets CI=true and GITHUB_ACTIONS=true on every runner;
-// GITHUB_RUN_ID is a presence-only backstop in case a future runner image or
-// a `env:` override drops the boolean ones.
-bool get _isCi =>
-    _envFlag('CI') ||
-    _envFlag('GITHUB_ACTIONS') ||
-    Platform.environment.containsKey('GITHUB_RUN_ID');
+/// The environment variable that identifies this run as CI, or `null` when it
+/// is not one.
+///
+/// GitHub Actions sets CI=true and GITHUB_ACTIONS=true on every runner;
+/// GITHUB_RUN_ID is a presence-only backstop in case a runner image or an
+/// `env:` override drops the boolean ones. The name is reported in the failure
+/// message so a false positive (a dev shell that exports `CI`) is obvious
+/// rather than mysterious.
+String? _ciSignal() {
+  for (final name in const ['CI', 'GITHUB_ACTIONS']) {
+    if (_envFlag(name)) return '$name=${Platform.environment[name]}';
+  }
+  if (Platform.environment.containsKey('GITHUB_RUN_ID')) return 'GITHUB_RUN_ID';
+  return null;
+}
 
 bool get _missingJarAllowed => _envFlag(kAllowMissingJarEnv);
 
@@ -102,8 +113,16 @@ class RedPandaNodeLauncher {
   static String? locateJar() {
     try {
       final path = _findJarPath();
-      return File(path).existsSync() ? path : null;
+      final jar = File(path);
+      // Zero bytes means a failed or half-written download, not a usable JAR.
+      // Treating it as missing keeps the diagnosis at the guard instead of
+      // surfacing 60 s later as "Node failed to start on port ...".
+      if (!jar.existsSync() || jar.lengthSync() == 0) return null;
+      return path;
     } catch (e) {
+      // Never swallow silently: a permissions error or a broken checkout would
+      // otherwise be reported as "the release download failed".
+      print('Could not locate redpanda.jar: $e');
       return null;
     }
   }

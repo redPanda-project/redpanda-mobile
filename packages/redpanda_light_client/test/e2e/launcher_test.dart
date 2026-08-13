@@ -1,3 +1,6 @@
+@Tags(['e2e'])
+library;
+
 import 'package:test/test.dart';
 import 'redpanda_node_launcher.dart';
 import 'dart:io';
