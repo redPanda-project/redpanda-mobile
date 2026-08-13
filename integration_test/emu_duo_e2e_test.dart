@@ -161,8 +161,13 @@ Future<bool> pumpUntil(
   bool Function() condition, {
   required Duration timeout,
   String? what,
+  // Optional one-line state dump, logged every 15 s while the wait runs. A
+  // wait that ends in a timeout is the one place where "what did it look like
+  // on the way there" is worth having (T89b).
+  String Function()? progress,
 }) async {
   final deadline = DateTime.now().add(timeout);
+  var nextProgress = DateTime.now().add(const Duration(seconds: 15));
   while (DateTime.now().isBefore(deadline)) {
     await tester.pump();
     try {
@@ -170,11 +175,97 @@ Future<bool> pumpUntil(
     } catch (_) {
       // Finder evaluation during transient states — keep waiting.
     }
+    if (progress != null && DateTime.now().isAfter(nextProgress)) {
+      nextProgress = DateTime.now().add(const Duration(seconds: 15));
+      try {
+        log('waiting for ${what ?? 'condition'}: ${progress()}');
+      } catch (e) {
+        log('waiting for ${what ?? 'condition'}: progress dump failed: $e');
+      }
+    }
     await Future<void>.delayed(const Duration(milliseconds: 250));
   }
   log('TIMEOUT waiting for: ${what ?? 'condition'}');
   dumpVisibleTexts(tester);
   return false;
+}
+
+/// How long a role waits for its first `ConnectionStatus.connected`.
+///
+/// The dial itself is cheap — `ActivePeer` reports `connected` as soon as the
+/// node's 30-byte handshake header is in, one RTT after the TCP connect — so
+/// this budget covers app start, the isolate spawn and a handful of retries
+/// (`Socket.connect` timeout 10 s, peer backoff capped at 30 s), not the
+/// network.
+const connectWaitTimeout = Duration(minutes: 3);
+
+/// One-line dump of what the client thinks the network looks like.
+///
+/// `<loading>` for a provider means no value has arrived yet, which is a very
+/// different failure from `status=connecting` with a peer in flight.
+String networkDiagnostics(ProviderContainer container) {
+  String describe(AsyncValue<Object?> v) => v.when(
+    data: (value) => value is ConnectionStatus ? value.name : '$value',
+    loading: () => '<loading>',
+    error: (e, _) => '<error: $e>',
+  );
+
+  final status = describe(container.read(connectionStatusProvider));
+  final peers = describe(container.read(peerCountProvider));
+  final stats = container.read(peerStatsSnapshotProvider).value;
+  final active = stats?.activePeerAddresses.join(',') ?? '?';
+  final connecting = stats?.connectingPeerAddresses.join(',') ?? '?';
+  final known = stats?.allPeers.length ?? -1;
+  return 'status=$status peerCount=$peers known=$known '
+      'active=[$active] connecting=[$connecting] seeds=$seedsRaw';
+}
+
+/// Records every connection-status event instead of only the ones a poll
+/// happens to land on.
+///
+/// `pumpUntil(() => ...connectionStatusProvider).value == connected)` samples
+/// a snapshot every ~250 ms, so a connection that comes up and is torn down
+/// again between two samples leaves no trace, and the verdict for a client
+/// that connected twenty times is still `client never connected to the node`.
+/// A node that keeps dropping the connection right after the handshake looks
+/// exactly like that — which is what the node log of the 2026-07-29 run2
+/// carried (the T88 duplicate loop) while the test reported the T81 signature
+/// and sent everyone looking at the app's provider replay instead.
+///
+/// The wait itself still requires the client to be connected *now* (going on
+/// while it is down would only burn OH-registration rate-limit budget). This
+/// is about the verdict: `connectedCount` separates "never got a connection"
+/// from "kept getting one and losing it again".
+class ConnectionWatcher {
+  ConnectionWatcher(ProviderContainer container) {
+    _subscription = container.listen<AsyncValue<ConnectionStatus>>(
+      connectionStatusProvider,
+      (previous, next) => _record(next),
+      fireImmediately: true,
+    );
+  }
+
+  late final ProviderSubscription<AsyncValue<ConnectionStatus>> _subscription;
+  final Map<ConnectionStatus, int> _seen = {};
+  int _events = 0;
+
+  void _record(AsyncValue<ConnectionStatus> value) {
+    final status = value.value;
+    if (status == null) return;
+    _events++;
+    _seen.update(status, (n) => n + 1, ifAbsent: () => 1);
+  }
+
+  /// How often the client reported a usable connection (0 is the real
+  /// "never connected"; >0 with a failed wait means it kept losing it).
+  int get connectedCount => _seen[ConnectionStatus.connected] ?? 0;
+
+  String get summary {
+    final parts = _seen.entries.map((e) => '${e.key.name}=${e.value}');
+    return 'statusEvents=$_events [${parts.join(' ')}]';
+  }
+
+  void close() => _subscription.close();
 }
 
 Future<void> pumpFor(WidgetTester tester, Duration duration) async {
@@ -566,15 +657,35 @@ Future<void> runBob(WidgetTester tester) async {
   // Wait until the client is actually connected — attempting an OH
   // registration earlier just burns node-side rate-limit budget
   // (max 5 registrations/min per connection, MS02b).
-  if (!await pumpUntil(
+  //
+  // T89(b): the wait logs the client's view of the network every 15 s and puts
+  // the last one into the failure message. `client never connected to the
+  // node` used to be the whole report, which is why the 2026-07-29 gate run
+  // could not be told apart from the T81 provider race it looked like — the
+  // interesting question ("did it never dial, dial and get nowhere, or connect
+  // without the app noticing?") was only answerable from 3 MB of logcat.
+  final watcher = ConnectionWatcher(container);
+  final connected = await pumpUntil(
     tester,
     () =>
         container.read(connectionStatusProvider).value ==
         ConnectionStatus.connected,
-    timeout: const Duration(minutes: 3),
+    timeout: connectWaitTimeout,
     what: 'network connected',
-  )) {
-    throw StateError('client never connected to the node');
+    progress: () => '${networkDiagnostics(container)} ${watcher.summary}',
+  );
+  watcher.close();
+  if (!connected) {
+    throw StateError(
+      watcher.connectedCount > 0
+          ? 'client connected ${watcher.connectedCount}x but never stayed '
+                'connected within ${connectWaitTimeout.inSeconds}s — the node '
+                'keeps dropping us, check node.log (duplicate connections?) — '
+                '${networkDiagnostics(container)} ${watcher.summary}'
+          : 'client never connected to the node within '
+                '${connectWaitTimeout.inSeconds}s — '
+                '${networkDiagnostics(container)} ${watcher.summary}',
+    );
   }
   log('connected, peers=${container.read(peerCountProvider).value}');
 
