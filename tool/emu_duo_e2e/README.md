@@ -150,7 +150,14 @@ triaged as "the gate flaked" or "the gate found something" without opening a
 
 - RAM: two emulators à 1.5 GB + JVM node need roughly 4 GB free; the apk is
   built before the emulators boot and the gradle daemon is stopped to make
-  room. Do not run RAM-heavy jobs in parallel.
+  room. Do not run RAM-heavy jobs in parallel. The number that actually
+  decides is the qemu *resident* size, which grows to ~2.9 GB per emulator
+  towards the end of a full s1-s4 run — on a host that cannot hold that, the
+  OOM killer takes one emulator out mid-scenario (`Getötet` in the run log,
+  `Out of memory: Killed process … qemu-system-x86` in `dmesg`) and the gate
+  fails with whatever the surviving side happened to be waiting for. Lower
+  the guest RAM with `RP_AVD_RAM_MB=1280` on such a host rather than reading
+  the resulting verdict as a finding.
 - The QR *scan* is bypassed (headless emulators have no camera); everything
   else drives the real UI. On the creator side the peer-OH import writes only
   the peer-OH columns instead of re-scanning — a real scan would go through
