@@ -129,9 +129,9 @@ kv_put() { # name value — first PUT wins the host-side timestamp
 # them too (that is the run you actually want them for).
 # ---------------------------------------------------------------------------
 
-# node.log line count at the moment S4 cut Bob's radio — the S4 slice is
-# everything after it. Counting lines instead of matching timestamps keeps this
-# independent of the node's clock and log format.
+# node.log line count taken immediately before S4 cuts Bob's radio — the S4
+# slice is everything after it. Counting lines instead of matching timestamps
+# keeps this independent of the node's clock and log format.
 S4_NODE_MARK=""
 # Filled by collect_counters(), read by the acceptance checks at the end.
 S4_EVICTIONS=""
@@ -284,6 +284,8 @@ for s in ${SCENARIOS//,/ }; do
 done
 has_scenario s1 || SCENARIOS="s1,$SCENARIOS"  # s1 is the pairing foundation
 [[ "$S4_SILENCE_SEC" =~ ^[0-9]+$ ]] || die "RP_S4_SILENCE_SEC must be a number of seconds"
+[[ "$NODE_PING_TIMEOUT_SEC" =~ ^[0-9]+$ ]] \
+  || die "RP_NODE_PING_TIMEOUT_SEC must be a number of seconds"
 if has_scenario s4 && [[ "$START_NODE" == 1 ]] \
    && [[ "$S4_SILENCE_SEC" -le "$NODE_PING_TIMEOUT_SEC" ]]; then
   # Refused rather than warned: with a shorter silence the node keeps Bob's peer
@@ -459,8 +461,9 @@ fi
 if has_scenario s4; then
   log "S4: waiting for Bob to be ready"
   wait_kv bob_ready_s4 900
-  # Everything the node logs from here on belongs to the S4 window — the
-  # counters slice node.log at this line (T89c).
+  # Taken just before the cut, so the S4 slice starts one moment early rather
+  # than one moment late: the counters must not miss an eviction because the
+  # node logged it while `bob_net down` was still returning (T89c).
   S4_NODE_MARK="$(node_log_lines)"
   bob_net down
   sleep 3   # let the disconnect propagate before Alice sends

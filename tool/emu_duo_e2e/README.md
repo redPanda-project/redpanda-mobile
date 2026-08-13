@@ -129,7 +129,9 @@ node actually evicted the stale peer during the silence.
 
 `report.json` → `counters` (and `counters.json`) is a grep-derived summary of
 node.log and the two logcats, refreshed on every report save — including the
-failure paths, which is where it earns its keep. It exists so a red run can be
+failure paths, which is where it earns its keep. Node counters come with a
+`duringS4` slice (node.log is cut at the line it had reached when the radio
+went down); the per-role client counters are whole-run totals. It exists so a red run can be
 triaged as "the gate flaked" or "the gate found something" without opening a
 3 MB logcat:
 
@@ -140,7 +142,7 @@ triaged as "the gate flaked" or "the gate found something" without opening a
 | `node.handshakes.wedged` | `parsed ACTIVATE_ENCRYPTION` − `received first encrypted command`, the T80 metric; 3–4 before redpandaj#288, 0 after — anything >0 means that class is back |
 | `node.exceptionLines` | lines containing `Exception` in node.log |
 | `clients.<role>.workerDied` / `workerRespawns` / `commandsDropped` | a network worker isolate that kept dying (the app recovers by replaying state, but every respawn costs a full reconnect) |
-| `clients.<role>.hostNodeNotConnected` / `noActivePeer` | mailbox polls that found no usable connection; a healthy run has a handful during the S4 silence (~20 at a 90 s silence), the T88 run had 171 |
+| `clients.<role>.hostNodeNotConnected` / `noActivePeer` | mailbox polls that found no usable connection. Whole-run totals — only the node counters are sliced per scenario — and in a healthy run nearly all of them fall in the S4 silence (~20 at 90 s); the T88 run had 171 |
 | `clients.<role>.clientInitialized` / `connectRoutineStarts` | 1 per app process (Bob has 2: S3 restarts him) — higher means the worker was recreated |
 | `clients.<role>.pollCycles` / `testTimeouts` | poll activity, and how often the in-app test gave up on a `pumpUntil` |
 
