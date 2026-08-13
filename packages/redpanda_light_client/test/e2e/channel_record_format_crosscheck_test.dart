@@ -1,9 +1,11 @@
 @Tags(['e2e'])
-// Seconds, not minutes: one short-lived java process, no node topology. The
-// generous budget only covers a cold JIT/compile on a loaded CI runner.
+// Seconds, not minutes: one short-lived java process, no node topology. Note
+// that the `e2e` tag timeout in dart_test.yaml (10 min) overrides this — the
+// annotation documents the intent, `_probeTimeout` is the guard that bites.
 @Timeout(Duration(minutes: 3))
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -190,6 +192,15 @@ final Uint8List _secret = Uint8List.fromList(List<int>.generate(32, (i) => i));
 const int _timestampMs = 1000000000000;
 const int _contentFillByte = 0xAB;
 
+/// Hard ceiling for the probe process. Generous next to its ~2 s runtime, but
+/// it must actually fire: the `e2e` tag timeout in `dart_test.yaml` (10 min)
+/// overrides this file's `@Timeout`, and even that only fails the test — it
+/// does not reap a wedged child. This is what does.
+const Duration _probeTimeout = Duration(minutes: 2);
+
+String _hex(List<int> bytes) =>
+    bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
 /// Assembles a failure message that names the skew, both sides, the effect and
 /// the deployment rule — the whole point of TD022 (c) is that this failure
 /// explains itself without anyone having to reconstruct it from an e2e
@@ -263,22 +274,59 @@ Future<_BackendFormat> _runProbe() async {
   final workDir = await Directory.systemTemp.createTemp('rp_channel_dht_vec');
   try {
     final source = File(p.join(workDir.path, 'ChannelDhtVector.java'));
-    await source.writeAsString(_probeSource);
+    await source.writeAsString(_probeSource());
 
-    final result = await Process.run('java', [
+    final args = <String>[
       '-cp',
       jar,
       source.path,
-    ], workingDirectory: workDir.path);
+      _hex(_secret),
+      '$_timestampMs',
+      '$_contentFillByte',
+    ];
+    final process = await Process.start(
+      'java',
+      args,
+      workingDirectory: workDir.path,
+    );
 
-    final stdoutText = result.stdout.toString();
-    if (result.exitCode != 0) {
+    // Drained concurrently and started BEFORE the exit is awaited: a child that
+    // fills its 64 KiB stdout pipe while nobody reads blocks forever, and the
+    // JVM is chatty when a class fails to load. Malformed bytes are tolerated
+    // because a locale-dependent JVM warning must not turn into a decode crash
+    // that hides the real output.
+    const decoder = Utf8Decoder(allowMalformed: true);
+    final stdoutFuture = process.stdout.transform(decoder).join();
+    final stderrFuture = process.stderr.transform(decoder).join();
+
+    final int exitCode;
+    try {
+      exitCode = await process.exitCode.timeout(_probeTimeout);
+    } on TimeoutException {
+      // Kill, then reap: leaving the child alive would keep its pipes attached
+      // to this isolate and hold the whole test runner open long after the
+      // suite failed — the T78 "flutter test never exits" signature.
+      process.kill(ProcessSignal.sigkill);
+      await process.exitCode;
+      throw StateError(
+        'The backend format probe did not finish within $_probeTimeout and was '
+        'killed.\n'
+        'Command: java ${args.join(' ')}\n'
+        'This is NOT a format skew — the JVM hung (class-init deadlock, a '
+        'stalled filesystem, a wedged CI runner). Re-run; if it persists, run '
+        'the command above by hand.',
+      );
+    }
+
+    final stdoutText = await stdoutFuture;
+    final stderrText = await stderrFuture;
+    if (exitCode != 0) {
       throw StateError(
         'Could not read the rendezvous record format out of the backend JAR.\n'
-        'Command: java -cp $jar ${source.path}\n'
-        'Exit code: ${result.exitCode}\n'
+        'Command: java ${args.join(' ')}\n'
+        'Exit code: $exitCode\n'
         'stdout:\n$stdoutText\n'
-        'stderr:\n${result.stderr}\n'
+        'stderr:\n$stderrText\n'
         'This is NOT a format skew: either the JDK is missing/too old for the '
         'single-file source launcher (Java 11+ required; the e2e node launcher '
         'needs a JVM anyway), or the JAR no longer exposes '
@@ -302,8 +350,11 @@ Future<_BackendFormat> _runProbe() async {
       final value = values[key];
       if (value == null || value.isEmpty) {
         throw StateError(
-          'The backend probe did not report "$key". Full output:\n$stdoutText\n'
-          'stderr:\n${result.stderr}',
+          'The backend probe did not report "$key" — it exited successfully '
+          'but printed no "$_probeMarker$key" line, so the format could not be '
+          'read at all. This is NOT a format skew.\n'
+          'stdout:\n$stdoutText\n'
+          'stderr:\n$stderrText',
         );
       }
       return value;
@@ -323,23 +374,28 @@ Future<_BackendFormat> _runProbe() async {
 }
 
 /// Prefixed so the values survive a JAR that logs to stdout on class init.
-/// Duplicated as a literal in [_probeSource] — that source is a raw string on
-/// purpose (it must stay valid Java that can be pasted into a scratch file), so
-/// the two are kept in sync by hand.
 const String _probeMarker = 'RPVEC:';
 
-/// The probe, kept in one place with the Dart side that consumes it. It is
-/// written to a temp file and thrown away again — nothing is compiled into the
-/// repository, and the values it prints are produced by the release JAR, not by
-/// this file.
-const String _probeSource = r'''
+/// The probe. Written to a temp file, executed, thrown away again — nothing is
+/// compiled into the repository, and every value it prints is produced by the
+/// release JAR, not by this file.
+///
+/// It deliberately carries **no vector constants of its own**: the secret, the
+/// timestamp and the content fill byte all arrive as command-line arguments
+/// from [_secret] / [_timestampMs] / [_contentFillByte]. A probe with its own
+/// copy of those would report a "format skew" the moment one copy was updated
+/// and the other missed — a false red that points at the wrong repo.
+String _probeSource() =>
+    '''
 import im.redpanda.crypt.Utils;
 import im.redpanda.kademlia.KadContent;
 import im.redpanda.outbound.ChannelDht;
 import java.util.Arrays;
 
 /**
- * Prints the channel-rendezvous record format of the surrounding redpanda.jar.
+ * Prints the channel-rendezvous record format of the surrounding redpanda.jar
+ * for the vector given as args: [0] channel secret (hex), [1] timestamp in ms,
+ * [2] content fill byte. The caller owns the vector; this file owns nothing.
  *
  * Generated at test time by channel_record_format_crosscheck_test.dart in
  * redpanda-mobile (TD022). Not part of redpandaj — do not commit it there.
@@ -347,14 +403,12 @@ import java.util.Arrays;
 public class ChannelDhtVector {
 
   public static void main(String[] args) {
-    byte[] secret = new byte[32];
-    for (int i = 0; i < secret.length; i++) {
-      secret[i] = (byte) i;
-    }
-    long timestampMs = 1000000000000L;
+    byte[] secret = parseHex(args[0]);
+    long timestampMs = Long.parseLong(args[1]);
+    byte fill = (byte) Integer.parseInt(args[2]);
 
     byte[] content = new byte[ChannelDht.RECORD_SIZE_BYTES];
-    Arrays.fill(content, (byte) 0xAB);
+    Arrays.fill(content, fill);
     KadContent record = ChannelDht.buildRecordContent(secret, content, timestampMs);
 
     emit("RECORD_SIZE_BYTES", Integer.toString(ChannelDht.RECORD_SIZE_BYTES));
@@ -366,8 +420,16 @@ public class ChannelDhtVector {
     emit("SIGNATURE", Utils.bytesToHexString(record.getSignature()));
   }
 
+  private static byte[] parseHex(String hex) {
+    byte[] out = new byte[hex.length() / 2];
+    for (int i = 0; i < out.length; i++) {
+      out[i] = (byte) Integer.parseInt(hex.substring(2 * i, 2 * i + 2), 16);
+    }
+    return out;
+  }
+
   private static void emit(String key, String value) {
-    System.out.println("RPVEC:" + key + "=" + value);
+    System.out.println("$_probeMarker" + key + "=" + value);
   }
 }
 ''';
