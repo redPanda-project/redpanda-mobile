@@ -27,11 +27,27 @@ pairing foundation and always runs, even when omitted from the list.
   harness enables airplane mode on Bob (`cmd connectivity airplane-mode
   enable` — verified on the API 35 image to drop guest→host TCP, i.e.
   10.0.2.2 becomes unreachable), Alice sends into the silence
-  (`RP_S4_SILENCE_SEC`, default 45 s), then airplane mode goes off again.
+  (`RP_S4_SILENCE_SEC`, default 90 s), then airplane mode goes off again.
   Bob must reconnect and receive; `s4.reconnectDeliveryMs` = `recv` −
   `s4-net-up`. run.sh fails the scenario if the message arrived *before*
   the network was restored (that would mean the disconnect never happened).
   Proves the T15 isolate resilience + the #55 host-node fix.
+
+  **The silence must outlast the node's `Settings.pingTimeout` (65 s)**
+  — that is what makes S4 deterministic (T89a). Below the timeout the node
+  keeps Bob's peer entry alive across the outage and the returning client
+  slots straight back into it; above it `PeerJobs` disconnects the silent
+  peer and the next pass evicts the entry (light clients announce port 0, so
+  the entry is undialable), and the client has to run a full fresh
+  handshake. Both are real paths, but only the second exercises the
+  stale-peer reconnect — and at the old 45 s which one a run took was
+  decided by a few seconds, which is exactly how T88 produced three
+  different verdicts in four runs. run.sh therefore *verifies* the eviction
+  (`counters.node.undialableEvictions.duringS4`) and fails the run if it did
+  not happen, with a message that names it as a harness precondition rather
+  than a product defect. `RP_S4_SILENCE_SEC` ≤ `RP_NODE_PING_TIMEOUT_SEC`
+  (default 65) is refused up front. Cost: ~45 s more per run than the old
+  budget.
 - **S5 (OH expiry / re-announce) is NOT covered**: the node clamps every OH
   registration to `MIN_TTL_MS` = 10 min … `MAX_TTL_MS` = 7 d in
   `OutboundService.java` (`private static final`, no env/property override),
@@ -95,17 +111,40 @@ The script:
    sends → silence → airplane mode off), and
 6. waits for both verdicts, then writes the artifacts.
 
-Exit code 0 iff both roles report `ok:true` AND (with s3 enabled) the
-catch-up stayed within the 60 s budget AND (with s4 enabled) delivery
-happened only after the network came back.
+Exit code 0 iff both roles report `ok:true` AND S1 stayed within its 30 s
+budget AND (with s3 enabled) the catch-up stayed within the 60 s budget AND
+(with s4 enabled) delivery happened only after the network came back and the
+node actually evicted the stale peer during the silence.
 
 ## Artifacts (`build/e2e-artifacts/`, git-ignored)
 
 | File | Content |
 | --- | --- |
-| `report.json` | S1 latency, S2 per-message latencies with p50/p95/max, S3 `catchupMs`/`withinCatchupBudget`, S4 `silenceMs`/`reconnectDeliveryMs` |
+| `report.json` | S1 latency, S2 per-message latencies with p50/p95/max, S3 `catchupMs`/`withinCatchupBudget`, S4 `silenceMs`/`reconnectDeliveryMs`, plus `counters` (see below) |
+| `counters.json` | the same counter block, written straight to disk so it survives a run that dies before the report can be fetched |
 | `alice.logcat`, `bob.logcat` | full logcat per emulator (`flutter: [emu-duo]` lines are the test's own log) |
 | `node.log`, `coord.log`, `emulator-*.log` | host-side process logs |
+
+### Run counters (T89c)
+
+`report.json` → `counters` (and `counters.json`) is a grep-derived summary of
+node.log and the two logcats, refreshed on every report save — including the
+failure paths, which is where it earns its keep. Node counters come with a
+`duringS4` slice (node.log is cut at the line it had reached when the radio
+went down); the per-role client counters are whole-run totals. It exists so a red run can be
+triaged as "the gate flaked" or "the gate found something" without opening a
+3 MB logcat:
+
+| Field | Reads as |
+| --- | --- |
+| `node.undialableEvictions.duringS4` | 0 ⇒ S4 never exercised the reconnect-after-eviction path (harness precondition, run fails) |
+| `node.duplicateConnections.{total,duringS4}` | the T88 signature (`duplicate parallel connection from the same identity`); >0 during S4 means peer bookkeeping went out of sync again |
+| `node.handshakes.wedged` | `parsed ACTIVATE_ENCRYPTION` − `received first encrypted command`, the T80 metric; 3–4 before redpandaj#288, 0 after — anything >0 means that class is back |
+| `node.exceptionLines` | lines containing `Exception` in node.log |
+| `clients.<role>.workerDied` / `workerRespawns` / `commandsDropped` | a network worker isolate that kept dying (the app recovers by replaying state, but every respawn costs a full reconnect) |
+| `clients.<role>.hostNodeNotConnected` / `noActivePeer` | mailbox polls that found no usable connection. Whole-run totals — only the node counters are sliced per scenario — and in a healthy run nearly all of them fall in the S4 silence (~20 at 90 s); the T88 run had 171 |
+| `clients.<role>.clientInitialized` / `connectRoutineStarts` | 1 per app process (Bob has 2: S3 restarts him) — higher means the worker was recreated |
+| `clients.<role>.pollCycles` / `testTimeouts` | poll activity, and how often the in-app test gave up on a `pumpUntil` |
 
 ## Known limits
 

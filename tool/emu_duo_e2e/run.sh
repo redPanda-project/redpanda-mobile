@@ -38,7 +38,22 @@ APK="$REPO/build/app/outputs/flutter-apk/app-profile.apk"
 ART="$REPO/build/e2e-artifacts"
 RESULT_TIMEOUT_MIN="${RP_TIMEOUT_MIN:-45}"
 SCENARIOS="${RP_SCENARIOS:-s1,s2,s3,s4}"
-S4_SILENCE_SEC="${RP_S4_SILENCE_SEC:-45}"
+# T89(a): the S4 radio silence must outlast the node's `Settings.pingTimeout`
+# (65 s), otherwise the run is a coin flip. Below that timeout the node keeps
+# Bob's peer entry alive across the outage and the returning client slots back
+# into it; above it `PeerJobs` disconnects the silent peer and the next pass
+# evicts the (undialable, port-0) entry, so the client has to run the full
+# fresh-handshake reconnect. Both paths are real, but only the second one
+# exercises the T88/#297 stale-peer path — and with 45 s of silence which one a
+# run took was decided by seconds (see T88: run1's first post-outage handshake
+# landed ~8 s after the timeout had fired). 90 s puts the eviction beyond doubt:
+# `getLastAnswered()` is at least the silence itself, so it always crosses 65 s,
+# and there is room for one more `PeerJobs` pass (1-5 s) to do the eviction.
+# The harness verifies the eviction actually happened (node.log counter) and
+# fails the run if it did not — a silent fallback to the easy path would be the
+# very non-determinism this budget exists to remove.
+NODE_PING_TIMEOUT_SEC="${RP_NODE_PING_TIMEOUT_SEC:-65}"
+S4_SILENCE_SEC="${RP_S4_SILENCE_SEC:-90}"
 
 SEEDS="10.0.2.2:$NODE_PORT"
 START_NODE=1
@@ -103,7 +118,109 @@ kv_put() { # name value — first PUT wins the host-side timestamp
     || die "kv_put $1 failed — coord server down?"
 }
 
+# ---------------------------------------------------------------------------
+# T89(c): per-run counters, so "the gate flaked" can be told from "the gate
+# found something" without reading 3 MB of logcat.
+#
+# Everything here is a grep over artifacts the harness writes anyway (node.log,
+# {alice,bob}.logcat) — no backend change and no extra instrumentation. The
+# numbers are PUT to the coord server, which folds them into report.json under
+# `counters`; the collection runs inside save_report(), so an aborted run keeps
+# them too (that is the run you actually want them for).
+# ---------------------------------------------------------------------------
+
+# node.log line count taken immediately before S4 cuts Bob's radio — the S4
+# slice is everything after it. Counting lines instead of matching timestamps
+# keeps this independent of the node's clock and log format.
+S4_NODE_MARK=""
+# Filled by collect_counters(), read by the acceptance checks at the end.
+S4_EVICTIONS=""
+S4_DUPLICATES=""
+
+count_pat() { # file pattern -> count (0 when the file is missing)
+  [[ -f "$1" ]] || { echo 0; return; }
+  # grep -c prints "0" and exits 1 when nothing matches; -a keeps it happy on
+  # the logcats, which do contain the odd non-UTF8 byte.
+  grep -acF -- "$2" "$1" 2>/dev/null || true
+}
+
+count_pat_since() { # file pattern startline -> count in the tail after startline
+  [[ -f "$1" && -n "$3" ]] || { echo 0; return; }
+  tail -n "+$(( $3 + 1 ))" "$1" 2>/dev/null | grep -acF -- "$2" 2>/dev/null || true
+}
+
+node_log_lines() { [[ -f "$ART/node.log" ]] && wc -l <"$ART/node.log" || echo 0; }
+
+# Per-role client counters from a logcat. The markers are the ones that
+# distinguish a healthy run from the two failure modes the gate has actually
+# produced: the T88 duplicate loop (host node never connected, mailbox polls
+# spinning) and a worker isolate that keeps dying and respawning.
+client_counters_json() { # logcat file
+  local f="$1"
+  printf '{"available": %s, "clientInitialized": %s, "connectRoutineStarts": %s, ' \
+    "$([[ -f "$f" ]] && echo true || echo false)" \
+    "$(count_pat "$f" 'RedPandaWorker: Client initialized.')" \
+    "$(count_pat "$f" 'RedPandaLightClient: Starting connection routine...')"
+  printf '"workerDied": %s, "workerRespawns": %s, "commandsDropped": %s, ' \
+    "$(count_pat "$f" 'RedPandaIsolateClient: worker isolate died.')" \
+    "$(count_pat "$f" 'RedPandaIsolateClient: respawning worker')" \
+    "$(count_pat "$f" 'Isolate not ready. Dropping command')"
+  printf '"hostNodeNotConnected": %s, "noActivePeer": %s, "pollCycles": %s, "testTimeouts": %s}' \
+    "$(count_pat "$f" 'not connected — requesting a connection')" \
+    "$(count_pat "$f" 'fetchMessages() no active peer available')" \
+    "$(count_pat "$f" 'poll cycle fetched')" \
+    "$(count_pat "$f" 'TIMEOUT waiting for')"
+}
+
+collect_counters() {
+  local log="$ART/node.log"
+  local dup_total dup_s4 evict_total evict_s4 act enc conn exc s4slice
+  dup_total="$(count_pat "$log" 'duplicate parallel connection from the same identity')"
+  evict_total="$(count_pat "$log" 'removed undialable disconnected peer from peerList')"
+  act="$(count_pat "$log" 'parsed ACTIVATE_ENCRYPTION')"
+  enc="$(count_pat "$log" 'received first encrypted command')"
+  conn="$(count_pat "$log" 'Connected successfully to')"
+  exc="$(count_pat "$log" 'Exception')"
+  if [[ -n "$S4_NODE_MARK" ]]; then
+    dup_s4="$(count_pat_since "$log" 'duplicate parallel connection from the same identity' "$S4_NODE_MARK")"
+    evict_s4="$(count_pat_since "$log" 'removed undialable disconnected peer from peerList' "$S4_NODE_MARK")"
+    s4slice="$S4_NODE_MARK"
+  else
+    dup_s4=null; evict_s4=null; s4slice=null
+  fi
+  S4_EVICTIONS="$evict_s4"
+  S4_DUPLICATES="$dup_s4"
+
+  # `wedged` is the T80 metric: a handshake that reached ACTIVATE_ENCRYPTION but
+  # never produced a first encrypted command is a connection the client believes
+  # in and the node cannot use. It was 3-4 per run before redpandaj#288 and 0
+  # after; anything above 0 here means that class of defect is back.
+  local wedged=$(( act - enc ))
+  [[ $wedged -lt 0 ]] && wedged=0
+
+  {
+    printf '{"collectedAt": "%s", ' "$(date -Iseconds)"
+    printf '"node": {"available": %s, "pingTimeoutSec": %s, "s4SilenceSec": %s, "s4LogMark": %s, ' \
+      "$([[ -f "$log" ]] && echo true || echo false)" \
+      "$NODE_PING_TIMEOUT_SEC" "$S4_SILENCE_SEC" "$s4slice"
+    printf '"duplicateConnections": {"total": %s, "duringS4": %s}, ' "$dup_total" "$dup_s4"
+    printf '"undialableEvictions": {"total": %s, "duringS4": %s}, ' "$evict_total" "$evict_s4"
+    printf '"handshakes": {"activateEncryption": %s, "firstEncryptedCommand": %s, "wedged": %s}, ' \
+      "$act" "$enc" "$wedged"
+    printf '"connectedSuccessfully": %s, "exceptionLines": %s}, ' "$conn" "$exc"
+    printf '"clients": {"alice": %s, "bob": %s}}' \
+      "$(client_counters_json "$ART/alice.logcat")" \
+      "$(client_counters_json "$ART/bob.logcat")"
+  } >"$ART/counters.json"
+
+  # Non-fatal on purpose: this runs on the failure path too, where the coord
+  # server may already be gone — counters.json on disk is still the artifact.
+  "${CURL[@]}" -X PUT --data-binary "@$ART/counters.json" \
+    "http://127.0.0.1:$COORD_PORT/kv/harness_counters" >/dev/null 2>&1 || true
+}
+
 save_report() {
+  collect_counters
   # Fetch into a temp file — a failing curl must not truncate a previously
   # saved report.json (it is the primary debugging artifact).
   if "${CURL[@]}" "http://127.0.0.1:$COORD_PORT/report" >"$ART/report.json.tmp" 2>/dev/null; then
@@ -166,10 +283,21 @@ for s in ${SCENARIOS//,/ }; do
   [[ "$s" =~ ^s[1-4]$ ]] || die "unknown scenario '$s' in RP_SCENARIOS (allowed: s1,s2,s3,s4)"
 done
 has_scenario s1 || SCENARIOS="s1,$SCENARIOS"  # s1 is the pairing foundation
+[[ "$S4_SILENCE_SEC" =~ ^[0-9]+$ ]] || die "RP_S4_SILENCE_SEC must be a number of seconds"
+[[ "$NODE_PING_TIMEOUT_SEC" =~ ^[0-9]+$ ]] \
+  || die "RP_NODE_PING_TIMEOUT_SEC must be a number of seconds"
+if has_scenario s4 && [[ "$START_NODE" == 1 ]] \
+   && [[ "$S4_SILENCE_SEC" -le "$NODE_PING_TIMEOUT_SEC" ]]; then
+  # Refused rather than warned: with a shorter silence the node keeps Bob's peer
+  # entry across the outage, S4 no longer exercises the eviction+reconnect path
+  # it exists for, and the acceptance check below would fail the run anyway.
+  die "RP_S4_SILENCE_SEC=$S4_SILENCE_SEC is not longer than the node's ping timeout (${NODE_PING_TIMEOUT_SEC}s) — S4 would not exercise the stale-peer eviction"
+fi
 log "scenarios: $SCENARIOS"
 
 mkdir -p "$ART"
-rm -f "$ART"/report.json "$ART"/alice.logcat "$ART"/bob.logcat "$ART"/node.log "$ART"/coord.log
+rm -f "$ART"/report.json "$ART"/counters.json "$ART"/alice.logcat "$ART"/bob.logcat \
+      "$ART"/node.log "$ART"/coord.log
 
 # ---------------------------------------------------------------------------
 # AVDs (created once, reused afterwards)
@@ -333,11 +461,17 @@ fi
 if has_scenario s4; then
   log "S4: waiting for Bob to be ready"
   wait_kv bob_ready_s4 900
+  # Taken just before the cut, so the S4 slice starts one moment early rather
+  # than one moment late: the counters must not miss an eviction because the
+  # node logged it while `bob_net down` was still returning (T89c).
+  S4_NODE_MARK="$(node_log_lines)"
   bob_net down
   sleep 3   # let the disconnect propagate before Alice sends
   kv_put s4-net-down host
   wait_kv "sent-e2e-s4" 300
-  log "S4: radio silence for ${S4_SILENCE_SEC}s"
+  # The silence has to outlast the node's ping timeout — see the
+  # S4_SILENCE_SEC comment at the top for why this is the whole point of S4.
+  log "S4: radio silence for ${S4_SILENCE_SEC}s (node ping timeout ${NODE_PING_TIMEOUT_SEC}s)"
   sleep "$S4_SILENCE_SEC"
   bob_net up
   kv_put s4-net-up host
@@ -375,6 +509,9 @@ log "report written to $ART/report.json"
 echo "----- latency summary -----"
 grep -E '"(latencyMs|p50Ms|p95Ms|maxMs|measured|catchupMs|withinCatchupBudget|silenceMs|reconnectDeliveryMs)"' \
   "$ART/report.json" || true
+echo "----- run counters (T89c) -----"
+cat "$ART/counters.json" 2>/dev/null || echo "<none>"
+echo
 echo "---------------------------"
 echo "alice: ${alice_result:-<no result>}"
 echo "bob:   ${bob_result:-<no result>}"
@@ -410,6 +547,25 @@ if has_scenario s4; then
   # the connection — the scenario would not have tested a reconnect.
   if grep -qE '"reconnectDeliveryMs": -' "$ART/report.json"; then
     failures+=("S4 message arrived BEFORE the network was restored — no real disconnect")
+  fi
+  # T89(a): S4 exists to exercise the reconnect *after* the node has thrown the
+  # stale peer away. If no undialable peer was evicted during the silence, the
+  # client slotted back into a peer entry that was still alive and the run
+  # proved nothing about that path — which is how the 45 s silence used to turn
+  # the T88 defect into a once-in-a-while red. This is a harness precondition,
+  # not a product defect: the message says so, so nobody goes hunting in the
+  # client for it.
+  if [[ "$START_NODE" == 1 ]]; then
+    if [[ "$S4_EVICTIONS" =~ ^[0-9]+$ && "$S4_EVICTIONS" -gt 0 ]]; then
+      log "S4: node evicted $S4_EVICTIONS stale peer(s) during the silence — reconnect path exercised"
+    else
+      failures+=("S4 precondition (harness): the node evicted no stale peer during the ${S4_SILENCE_SEC}s silence, so the reconnect ran against a still-live peer entry — raise RP_S4_SILENCE_SEC above the node's ping timeout (${NODE_PING_TIMEOUT_SEC}s)")
+    fi
+  fi
+  # Not a failure by itself (the delivery checks above decide that), but the
+  # T88 signature is worth spelling out instead of leaving it in node.log.
+  if [[ "$S4_DUPLICATES" =~ ^[0-9]+$ && "$S4_DUPLICATES" -gt 0 ]]; then
+    log "NOTE: node logged $S4_DUPLICATES duplicate-connection rejection(s) during S4 (T88 signature — see counters.json)"
   fi
 fi
 
