@@ -28,7 +28,15 @@ export PATH="$JAVA_HOME/bin:$TOOLS/flutter/bin:$ANDROID_HOME/platform-tools:$AND
 COORD_PORT="${RP_COORD_PORT:-8123}"
 NODE_PORT="${RP_NODE_PORT:-59558}"
 SYSIMG="system-images;android-35;google_apis;x86_64"
-AVD_RAM_MB=1536
+# Guest RAM per AVD. Overridable because the real cost is not this number but
+# the qemu RSS around it: two emulators reach ~2.9 GB resident each towards the
+# end of a full s1-s4 run, which is more than a 8 GB laptop with a warm swap
+# file has left, and the OOM killer then takes an emulator out mid-scenario
+# ("Getötet" in the run log, `Out of memory: Killed process ... qemu-system-x86`
+# in dmesg) — a failure mode that looks nothing like a gate finding. 1280 still
+# boots API 35 and runs the profile apk; go lower only if you enjoy watching
+# Android's lowmemorykiller take the app instead.
+AVD_RAM_MB="${RP_AVD_RAM_MB:-1536}"
 JAR="$REPO/references/redPandaj/target/redpanda.jar"
 # Profile build (T27): AOT-compiled like a release apk, so crypto costs
 # (Ed25519 signing, ratchet decrypt) match production. A debug/JIT build
