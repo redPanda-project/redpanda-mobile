@@ -59,51 +59,47 @@ void main() async {
       await launcher.stop();
     });
 
-    test(
-      'Both clients connect and register outbound handles',
-      () async {
-        // Connect sequentially to avoid race on single-node
-        await alice.connect();
-        expect(
-          await waitForEncryption(alice),
-          isTrue,
-          reason: 'Alice should have encryption active',
-        );
+    test('Both clients connect and register outbound handles', () async {
+      // Connect sequentially to avoid race on single-node
+      await alice.connect();
+      expect(
+        await waitForEncryption(alice),
+        isTrue,
+        reason: 'Alice should have encryption active',
+      );
 
-        await bob.connect();
-        expect(
-          await waitForEncryption(bob),
-          isTrue,
-          reason: 'Bob should have encryption active',
-        );
+      await bob.connect();
+      expect(
+        await waitForEncryption(bob),
+        isTrue,
+        reason: 'Bob should have encryption active',
+      );
 
-        // Register OH for both
-        final aliceOH = await alice.registerOutboundHandle();
-        final bobOH = await bob.registerOutboundHandle();
+      // Register OH for both
+      final aliceOH = await alice.registerOutboundHandle();
+      final bobOH = await bob.registerOutboundHandle();
 
-        expect(aliceOH.ohId.length, 20);
-        expect(bobOH.ohId.length, 20);
-        expect(aliceOH.ohId, isNot(equals(bobOH.ohId)));
+      expect(aliceOH.ohId.length, 20);
+      expect(bobOH.ohId.length, 20);
+      expect(aliceOH.ohId, isNot(equals(bobOH.ohId)));
 
-        // Both should have valid keypairs
-        final testData = Uint8List.fromList([1, 2, 3]);
-        expect(
-          await aliceOH.keypair.verify(
-            testData,
-            await aliceOH.keypair.sign(testData),
-          ),
-          isTrue,
-        );
-        expect(
-          await bobOH.keypair.verify(
-            testData,
-            await bobOH.keypair.sign(testData),
-          ),
-          isTrue,
-        );
-      },
-      skip: jarAvailable ? null : 'RedPanda JAR not found',
-    );
+      // Both should have valid keypairs
+      final testData = Uint8List.fromList([1, 2, 3]);
+      expect(
+        await aliceOH.keypair.verify(
+          testData,
+          await aliceOH.keypair.sign(testData),
+        ),
+        isTrue,
+      );
+      expect(
+        await bobOH.keypair.verify(
+          testData,
+          await bobOH.keypair.sign(testData),
+        ),
+        isTrue,
+      );
+    }, skip: jarAvailable ? null : 'RedPanda JAR not found');
 
     test(
       'Alice creates channel v3 with Bobs OH descriptor and sends message',
@@ -155,71 +151,67 @@ void main() async {
       skip: jarAvailable ? null : 'RedPanda JAR not found',
     );
 
-    test(
-      'Simulated full flow: encrypt, QR exchange, decrypt',
-      () async {
-        // Connect sequentially to avoid race on single-node
-        await alice.connect();
-        expect(await waitForEncryption(alice), isTrue);
+    test('Simulated full flow: encrypt, QR exchange, decrypt', () async {
+      // Connect sequentially to avoid race on single-node
+      await alice.connect();
+      expect(await waitForEncryption(alice), isTrue);
 
-        await bob.connect();
-        expect(await waitForEncryption(bob), isTrue);
+      await bob.connect();
+      expect(await waitForEncryption(bob), isTrue);
 
-        // 1. Bob registers OH
-        final bobOH = await bob.registerOutboundHandle();
+      // 1. Bob registers OH
+      final bobOH = await bob.registerOutboundHandle();
 
-        // 2. Bob creates channel + shares via QR v4 (secret only)
-        final sharedChannel = await Channel.generate('Shared Channel');
-        final bobDescriptor = OHDescriptor(
-          serverEndpoint: '127.0.0.1:$nodePort',
-          handleId: bobOH.ohId,
-          authPublicKey: bobOH.keypair.publicKeyBytes.toList(),
-        );
-        final qrPayload = sharedChannel.toJson();
+      // 2. Bob creates channel + shares via QR v4 (secret only)
+      final sharedChannel = await Channel.generate('Shared Channel');
+      final bobDescriptor = OHDescriptor(
+        serverEndpoint: '127.0.0.1:$nodePort',
+        handleId: bobOH.ohId,
+        authPublicKey: bobOH.keypair.publicKeyBytes.toList(),
+      );
+      final qrPayload = sharedChannel.toJson();
 
-        // 3. Alice scans QR (async in v4)
-        final aliceChannel = await Channel.fromJson(qrPayload);
-        expect(aliceChannel.id, sharedChannel.id);
+      // 3. Alice scans QR (async in v4)
+      final aliceChannel = await Channel.fromJson(qrPayload);
+      expect(aliceChannel.id, sharedChannel.id);
 
-        // 4. Alice registers keys. Bob's OH is discovered out of band
-        //    (rendezvous DHT) — here passed directly.
-        alice.addChannelKeys(
-          aliceChannel.id,
-          aliceChannel.encryptionKey,
-          channelSecret: aliceChannel.channelSecret,
-          peerOhId: bobDescriptor.handleId,
-          peerOhEndpoint: bobDescriptor.serverEndpoint,
-          isChannelCreator: false,
-        );
+      // 4. Alice registers keys. Bob's OH is discovered out of band
+      //    (rendezvous DHT) — here passed directly.
+      alice.addChannelKeys(
+        aliceChannel.id,
+        aliceChannel.encryptionKey,
+        channelSecret: aliceChannel.channelSecret,
+        peerOhId: bobDescriptor.handleId,
+        peerOhEndpoint: bobDescriptor.serverEndpoint,
+        isChannelCreator: false,
+      );
 
-        // 5. Alice sends encrypted message
-        final messageId = await alice.sendMessage(
-          aliceChannel.id,
-          'Secret message from Alice!',
-        );
-        expect(messageId, isNotEmpty);
+      // 5. Alice sends encrypted message
+      final messageId = await alice.sendMessage(
+        aliceChannel.id,
+        'Secret message from Alice!',
+      );
+      expect(messageId, isNotEmpty);
 
-        // 6. Simulate Bob receiving and decrypting via the v3 envelope
-        //    (AES-256-GCM, AAD = channel id — both sides derive the same id).
-        const plaintext = 'Secret message from Alice!';
-        final inner = ChannelMessage(
-          messageId: Uint8List.fromList(List<int>.generate(16, (i) => i)),
-          timestampMs: DateTime.now().millisecondsSinceEpoch,
-          content: plaintext,
-        );
-        final payload = await MessageCryptoV3.encrypt(
-          inner,
-          aliceChannel.encryptionKey,
-          aliceChannel.id,
-        );
-        final decoded = await MessageCryptoV3.decrypt(
-          payload,
-          sharedChannel.encryptionKey,
-          sharedChannel.id,
-        );
-        expect(decoded.content, equals(plaintext));
-      },
-      skip: jarAvailable ? null : 'RedPanda JAR not found',
-    );
+      // 6. Simulate Bob receiving and decrypting via the v3 envelope
+      //    (AES-256-GCM, AAD = channel id — both sides derive the same id).
+      const plaintext = 'Secret message from Alice!';
+      final inner = ChannelMessage(
+        messageId: Uint8List.fromList(List<int>.generate(16, (i) => i)),
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        content: plaintext,
+      );
+      final payload = await MessageCryptoV3.encrypt(
+        inner,
+        aliceChannel.encryptionKey,
+        aliceChannel.id,
+      );
+      final decoded = await MessageCryptoV3.decrypt(
+        payload,
+        sharedChannel.encryptionKey,
+        sharedChannel.id,
+      );
+      expect(decoded.content, equals(plaintext));
+    }, skip: jarAvailable ? null : 'RedPanda JAR not found');
   });
 }

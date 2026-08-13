@@ -96,139 +96,131 @@ void main() async {
       }
     }
 
-    test(
-      'delivery over the second OH when the first OH host dies',
-      () async {
-        await bob.connect();
-        expect(await waitForEncryption(bob), isTrue);
-        await alice.connect();
-        expect(await waitForEncryption(alice), isTrue);
+    test('delivery over the second OH when the first OH host dies', () async {
+      await bob.connect();
+      expect(await waitForEncryption(bob), isTrue);
+      await alice.connect();
+      expect(await waitForEncryption(alice), isTrue);
 
-        // Bob's FIRST mailbox pins to node A (his only verified peer here).
-        final channel = await Channel.generate('T42 Multi-OH');
-        final bobOH1 = await bob.registerOutboundHandle(channelId: channel.id);
-        expect(bobOH1.serverEndpoint, nodeA);
-        // Alice's mailbox pins to node C.
-        final aliceOH = await alice.registerOutboundHandle(
-          channelId: channel.id,
-        );
-        expect(aliceOH.serverEndpoint, nodeC);
+      // Bob's FIRST mailbox pins to node A (his only verified peer here).
+      final channel = await Channel.generate('T42 Multi-OH');
+      final bobOH1 = await bob.registerOutboundHandle(channelId: channel.id);
+      expect(bobOH1.serverEndpoint, nodeA);
+      // Alice's mailbox pins to node C.
+      final aliceOH = await alice.registerOutboundHandle(channelId: channel.id);
+      expect(aliceOH.serverEndpoint, nodeC);
 
-        alice.addChannelKeys(
+      alice.addChannelKeys(
+        channel.id,
+        channel.encryptionKey,
+        peerOhId: bobOH1.ohId,
+        peerOhEndpoint: nodeA,
+        isChannelCreator: true,
+      );
+      bob.addChannelKeys(
+        channel.id,
+        channel.encryptionKey,
+        peerOhId: aliceOH.ohId,
+        peerOhEndpoint: nodeC,
+        isChannelCreator: false,
+      );
+
+      // Bob connects to node B — where his redundant mailbox will live — and
+      // Alice connects to A and B so her fan-out can reach both of Bob's
+      // mailboxes (through the node hosting each).
+      await bob.addPeer(nodeB);
+      await waitConnected(bob, nodeB);
+      await alice.addPeer(nodeA);
+      await alice.addPeer(nodeB);
+      await waitConnected(alice, nodeA);
+      await waitConnected(alice, nodeB);
+
+      // Alice learns Bob's full mailbox set in-band.
+      final peerOhMoves = <PeerOhUpdate>[];
+      final peerOhSub = alice.peerOhUpdates.listen(peerOhMoves.add);
+      addTearDown(peerOhSub.cancel);
+
+      // Bob tops up to the full k=3 target and announces the set. All three
+      // nodes are seeded with each other, so Bob reaches every one of them
+      // and the top-up finds a disjoint host for each mailbox.
+      await bob.ensureOhRedundancy(channel.id);
+      final bobOwnOhs = bob.registeredOutboundHandles
+          .where((oh) => oh.channelId == channel.id)
+          .toList();
+      expect(
+        bobOwnOhs.length,
+        RedPandaLightClient.ohRedundancy,
+        reason: 'Bob must hold the full k=3 set of own mailboxes',
+      );
+      final bobEndpoints = bobOwnOhs.map((oh) => oh.serverEndpoint).toSet();
+      expect(
+        bobEndpoints.length,
+        bobOwnOhs.length,
+        reason: 'no two of Bob\'s mailboxes may share a host node',
+      );
+      // The scenario below kills node A, so the set must span A and B — the
+      // third mailbox lands on C and is incidental to the failover check.
+      expect(bobEndpoints, containsAll(<String>{nodeA, nodeB}));
+
+      final announceDeadline = DateTime.now().add(const Duration(seconds: 90));
+      while (peerOhMoves.isEmpty || peerOhMoves.last.descriptors.length < 2) {
+        if (DateTime.now().isAfter(announceDeadline)) {
+          fail('Alice never received the two-mailbox oh_update');
+        }
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
+      expect(
+        peerOhMoves.last.descriptors.map((d) => d.serverEndpoint).toSet(),
+        containsAll(<String>{nodeA, nodeB}),
+      );
+
+      final bobInbox = DeliveryCollector(bob);
+      addTearDown(bobInbox.cancel);
+
+      // Sanity: the channel works while all nodes are alive.
+      const before = 'before the node dies';
+      String? beforeId;
+      for (var attempt = 0; attempt < 6; attempt++) {
+        beforeId = await alice.sendMessage(
           channel.id,
-          channel.encryptionKey,
-          peerOhId: bobOH1.ohId,
-          peerOhEndpoint: nodeA,
-          isChannelCreator: true,
+          before,
+          messageId: beforeId,
         );
-        bob.addChannelKeys(
+        await bobInbox.waitUntil(
+          (m) => m.any((x) => x.content == before),
+          timeout: const Duration(seconds: 12),
+        );
+        if (bobInbox.messages.any((x) => x.content == before)) break;
+      }
+      expect(bobInbox.messages.map((m) => m.content), contains(before));
+
+      // ── Node A dies (Bob's FIRST mailbox host). ──────────────────────
+      await launcherA.stop();
+      await Future.delayed(const Duration(seconds: 3));
+
+      // Alice's next send fans out to BOTH of Bob's mailboxes. The copy for
+      // node A is lost, the copy for node B lands immediately — Bob receives
+      // it over his poll loop from the node-B mailbox. This must succeed
+      // WITHOUT a failover: Bob still holds exactly the two original OHs.
+      const after = 'after the node dies';
+      String? afterId;
+      for (var attempt = 0; attempt < 6; attempt++) {
+        afterId = await alice.sendMessage(
           channel.id,
-          channel.encryptionKey,
-          peerOhId: aliceOH.ohId,
-          peerOhEndpoint: nodeC,
-          isChannelCreator: false,
+          after,
+          messageId: afterId,
         );
-
-        // Bob connects to node B — where his redundant mailbox will live — and
-        // Alice connects to A and B so her fan-out can reach both of Bob's
-        // mailboxes (through the node hosting each).
-        await bob.addPeer(nodeB);
-        await waitConnected(bob, nodeB);
-        await alice.addPeer(nodeA);
-        await alice.addPeer(nodeB);
-        await waitConnected(alice, nodeA);
-        await waitConnected(alice, nodeB);
-
-        // Alice learns Bob's full mailbox set in-band.
-        final peerOhMoves = <PeerOhUpdate>[];
-        final peerOhSub = alice.peerOhUpdates.listen(peerOhMoves.add);
-        addTearDown(peerOhSub.cancel);
-
-        // Bob tops up to the full k=3 target and announces the set. All three
-        // nodes are seeded with each other, so Bob reaches every one of them
-        // and the top-up finds a disjoint host for each mailbox.
-        await bob.ensureOhRedundancy(channel.id);
-        final bobOwnOhs = bob.registeredOutboundHandles
-            .where((oh) => oh.channelId == channel.id)
-            .toList();
-        expect(
-          bobOwnOhs.length,
-          RedPandaLightClient.ohRedundancy,
-          reason: 'Bob must hold the full k=3 set of own mailboxes',
+        await bobInbox.waitUntil(
+          (m) => m.any((x) => x.content == after),
+          timeout: const Duration(seconds: 10),
         );
-        final bobEndpoints = bobOwnOhs.map((oh) => oh.serverEndpoint).toSet();
-        expect(
-          bobEndpoints.length,
-          bobOwnOhs.length,
-          reason: 'no two of Bob\'s mailboxes may share a host node',
-        );
-        // The scenario below kills node A, so the set must span A and B — the
-        // third mailbox lands on C and is incidental to the failover check.
-        expect(bobEndpoints, containsAll(<String>{nodeA, nodeB}));
-
-        final announceDeadline = DateTime.now().add(
-          const Duration(seconds: 90),
-        );
-        while (peerOhMoves.isEmpty || peerOhMoves.last.descriptors.length < 2) {
-          if (DateTime.now().isAfter(announceDeadline)) {
-            fail('Alice never received the two-mailbox oh_update');
-          }
-          await Future.delayed(const Duration(milliseconds: 500));
-        }
-        expect(
-          peerOhMoves.last.descriptors.map((d) => d.serverEndpoint).toSet(),
-          containsAll(<String>{nodeA, nodeB}),
-        );
-
-        final bobInbox = DeliveryCollector(bob);
-        addTearDown(bobInbox.cancel);
-
-        // Sanity: the channel works while all nodes are alive.
-        const before = 'before the node dies';
-        String? beforeId;
-        for (var attempt = 0; attempt < 6; attempt++) {
-          beforeId = await alice.sendMessage(
-            channel.id,
-            before,
-            messageId: beforeId,
-          );
-          await bobInbox.waitUntil(
-            (m) => m.any((x) => x.content == before),
-            timeout: const Duration(seconds: 12),
-          );
-          if (bobInbox.messages.any((x) => x.content == before)) break;
-        }
-        expect(bobInbox.messages.map((m) => m.content), contains(before));
-
-        // ── Node A dies (Bob's FIRST mailbox host). ──────────────────────
-        await launcherA.stop();
-        await Future.delayed(const Duration(seconds: 3));
-
-        // Alice's next send fans out to BOTH of Bob's mailboxes. The copy for
-        // node A is lost, the copy for node B lands immediately — Bob receives
-        // it over his poll loop from the node-B mailbox. This must succeed
-        // WITHOUT a failover: Bob still holds exactly the two original OHs.
-        const after = 'after the node dies';
-        String? afterId;
-        for (var attempt = 0; attempt < 6; attempt++) {
-          afterId = await alice.sendMessage(
-            channel.id,
-            after,
-            messageId: afterId,
-          );
-          await bobInbox.waitUntil(
-            (m) => m.any((x) => x.content == after),
-            timeout: const Duration(seconds: 10),
-          );
-          if (bobInbox.messages.any((x) => x.content == after)) break;
-        }
-        expect(
-          bobInbox.messages.map((m) => m.content),
-          contains(after),
-          reason: 'the message must arrive over the surviving second OH',
-        );
-      },
-      skip: jarAvailable ? null : 'RedPanda JAR not found',
-    );
+        if (bobInbox.messages.any((x) => x.content == after)) break;
+      }
+      expect(
+        bobInbox.messages.map((m) => m.content),
+        contains(after),
+        reason: 'the message must arrive over the surviving second OH',
+      );
+    }, skip: jarAvailable ? null : 'RedPanda JAR not found');
   });
 }

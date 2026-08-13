@@ -6,49 +6,41 @@ import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 
 void main() {
   group('RedPandaIsolateClient MS02', () {
-    test(
-      'sendMessage surfaces failures from the isolate',
-      () async {
-        // No seeds → no peers and no channel keys: the inner client throws
-        // and the error must propagate through the isolate to the caller.
-        final client = RedPandaIsolateClient(seeds: const []);
+    test('sendMessage surfaces failures from the isolate', () async {
+      // No seeds → no peers and no channel keys: the inner client throws
+      // and the error must propagate through the isolate to the caller.
+      final client = RedPandaIsolateClient(seeds: const []);
 
-        await expectLater(
-          client.sendMessage('unknown-channel', 'hello'),
-          throwsA(
-            isA<StateError>().having(
-              (e) => e.message,
-              'message',
-              contains('no encryption keys'),
-            ),
+      await expectLater(
+        client.sendMessage('unknown-channel', 'hello'),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('no encryption keys'),
           ),
-        );
+        ),
+      );
 
-        await client.disconnect();
-      },
-      timeout: const Timeout(Duration(seconds: 30)),
-    );
+      await client.disconnect();
+    }, timeout: const Timeout(Duration(seconds: 30)));
 
-    test(
-      'sendMessage requests resolve independently per requestId',
-      () async {
-        final client = RedPandaIsolateClient(seeds: const []);
+    test('sendMessage requests resolve independently per requestId', () async {
+      final client = RedPandaIsolateClient(seeds: const []);
 
-        final results = await Future.wait([
-          client
-              .sendMessage('channel-a', 'one')
-              .then((_) => 'ok', onError: (Object e) => 'error-a'),
-          client
-              .sendMessage('channel-b', 'two')
-              .then((_) => 'ok', onError: (Object e) => 'error-b'),
-        ]);
+      final results = await Future.wait([
+        client
+            .sendMessage('channel-a', 'one')
+            .then((_) => 'ok', onError: (Object e) => 'error-a'),
+        client
+            .sendMessage('channel-b', 'two')
+            .then((_) => 'ok', onError: (Object e) => 'error-b'),
+      ]);
 
-        expect(results, equals(['error-a', 'error-b']));
+      expect(results, equals(['error-a', 'error-b']));
 
-        await client.disconnect();
-      },
-      timeout: const Timeout(Duration(seconds: 30)),
-    );
+      await client.disconnect();
+    }, timeout: const Timeout(Duration(seconds: 30)));
 
     test(
       'restoreOutboundHandle is accepted by the isolate without errors',

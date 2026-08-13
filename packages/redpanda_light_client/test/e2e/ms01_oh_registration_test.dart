@@ -41,33 +41,29 @@ void main() async {
       await launcher.stop();
     });
 
-    test(
-      'Client connects, registers OH, and fetches messages',
-      () async {
-        await client.connect();
+    test('Client connects, registers OH, and fetches messages', () async {
+      await client.connect();
 
-        // Wait for encryption to be established
-        bool encryptionActive = false;
-        for (int i = 0; i < 20; i++) {
-          await Future.delayed(const Duration(milliseconds: 500));
-          if (client.isEncryptionActive) {
-            encryptionActive = true;
-            break;
-          }
+      // Wait for encryption to be established
+      bool encryptionActive = false;
+      for (int i = 0; i < 20; i++) {
+        await Future.delayed(const Duration(milliseconds: 500));
+        if (client.isEncryptionActive) {
+          encryptionActive = true;
+          break;
         }
-        expect(encryptionActive, isTrue, reason: 'Encryption should be active');
+      }
+      expect(encryptionActive, isTrue, reason: 'Encryption should be active');
 
-        // Register outbound handle
-        final oh = await client.registerOutboundHandle();
-        expect(oh.ohId.length, 20);
-        expect(oh.keypair.publicKeyBytes.length, 32); // Ed25519 verify key
+      // Register outbound handle
+      final oh = await client.registerOutboundHandle();
+      expect(oh.ohId.length, 20);
+      expect(oh.keypair.publicKeyBytes.length, 32); // Ed25519 verify key
 
-        // Fetch messages (empty since no backend OH support yet)
-        final messages = await client.fetchMessages(oh);
-        expect(messages, isEmpty);
-      },
-      skip: jarAvailable ? null : 'RedPanda JAR not found',
-    );
+      // Fetch messages (empty since no backend OH support yet)
+      final messages = await client.fetchMessages(oh);
+      expect(messages, isEmpty);
+    }, skip: jarAvailable ? null : 'RedPanda JAR not found');
 
     test(
       'Client creates v2 channel with OH descriptor after registration',
@@ -116,25 +112,21 @@ void main() async {
       skip: jarAvailable ? null : 'RedPanda JAR not found',
     );
 
-    test(
-      'Client registers OH and keypair can sign and verify',
-      () async {
-        await client.connect();
-        await Future.delayed(const Duration(seconds: 4));
+    test('Client registers OH and keypair can sign and verify', () async {
+      await client.connect();
+      await Future.delayed(const Duration(seconds: 4));
 
-        final oh = await client.registerOutboundHandle();
+      final oh = await client.registerOutboundHandle();
 
-        // Test signing
-        final data = Uint8List.fromList(List.generate(64, (i) => i));
-        final sig = await oh.keypair.sign(data);
-        expect(sig.length, 64);
-        expect(await oh.keypair.verify(data, sig), isTrue);
+      // Test signing
+      final data = Uint8List.fromList(List.generate(64, (i) => i));
+      final sig = await oh.keypair.sign(data);
+      expect(sig.length, 64);
+      expect(await oh.keypair.verify(data, sig), isTrue);
 
-        // Tamper check
-        final tampered = Uint8List.fromList(List.generate(64, (i) => 255 - i));
-        expect(await oh.keypair.verify(tampered, sig), isFalse);
-      },
-      skip: jarAvailable ? null : 'RedPanda JAR not found',
-    );
+      // Tamper check
+      final tampered = Uint8List.fromList(List.generate(64, (i) => 255 - i));
+      expect(await oh.keypair.verify(tampered, sig), isFalse);
+    }, skip: jarAvailable ? null : 'RedPanda JAR not found');
   });
 }
