@@ -25,6 +25,29 @@ class ActivePeer {
   static const int _protocolVersion = 23;
   static const int _handshakeLength = 30;
 
+  /// How long a TCP-connected peer may stay unverified before it is dropped.
+  ///
+  /// A node sends its 30-byte handshake header the moment it accepts the
+  /// socket, so on a healthy connection this is a matter of milliseconds. When
+  /// it does not arrive there was nothing to time it out before (T89b): the
+  /// dial has a timeout, the handshake had none, and a connected-but-unverified
+  /// peer is not `isDisconnected` (that needs `_socket == null` *and*
+  /// `_isDisconnecting`), so `RedPandaLightClient._runConnectionCheck` neither
+  /// reaped it nor re-dialled its address — the address already had an entry in
+  /// `_peers`. With a single known peer, which is what the emulator gate runs
+  /// with, that is a permanent wedge at `connecting`: the client sat on one
+  /// silent socket forever and the gate reported `client never connected to the
+  /// node` three minutes later. The node's own reaper (`PeerJobs`,
+  /// `HANDSHAKE_TIMEOUT_MS` = 10 s) normally closes such a socket and the close
+  /// unwedges us, so this only bites when that close never arrives: a node
+  /// whose selector is wedged still completes the TCP handshake in the kernel
+  /// backlog, and a link that dies mid-handshake swallows the FIN.
+  ///
+  /// 20 s is deliberately looser than the node's 10 s: the node should be the
+  /// one to end a handshake it cannot finish, and this is the backstop for when
+  /// it does not.
+  static const Duration handshakeTimeout = Duration(seconds: 20);
+
   // Commands
   static const int _cmdRequestPublicKey = 1;
   static const int _cmdSendPublicKey = 2;
@@ -118,6 +141,10 @@ class ActivePeer {
   bool _pongSent = false;
   bool _isProcessingBuffer = false;
 
+  /// Armed on a successful dial, cancelled by [_processHandshake] and
+  /// [_shutdown]. See [handshakeTimeout].
+  Timer? _handshakeTimer;
+
   ActivePeer({
     required this.address,
     required this.selfNodeId,
@@ -142,6 +169,17 @@ class ActivePeer {
       final socket = await socketFactory(host, port);
       socket.setOption(SocketOption.tcpNoDelay, true);
       _socket = socket;
+      // Armed before the handshake goes out: from here on the peer occupies a
+      // slot in RedPandaLightClient._peers, and nothing else would ever give it
+      // back if the node stays silent (see [handshakeTimeout]).
+      _handshakeTimer = Timer(handshakeTimeout, () {
+        if (_handshakeVerified || _isDisconnecting) return;
+        RpLog.info(
+          'ActivePeer: no handshake from the node within '
+          '${handshakeTimeout.inSeconds}s — dropping the connection',
+        );
+        _shutdown();
+      });
 
       // Write failures (e.g. "connection reset by peer" during a send)
       // surface on socket.done, not on the read stream's onError handler.
@@ -177,6 +215,8 @@ class ActivePeer {
   void _shutdown() {
     if (_isDisconnecting) return;
     _isDisconnecting = true;
+    _handshakeTimer?.cancel();
+    _handshakeTimer = null;
     _socket?.destroy(); // or close
     _socket = null;
     _handshakeVerified = false;
@@ -399,6 +439,8 @@ class ActivePeer {
     }
 
     RpLog.debug('ActivePeer($address): Handshake Verified.');
+    _handshakeTimer?.cancel();
+    _handshakeTimer = null;
     _handshakeVerified = true;
     onStatusChange(ConnectionStatus.connected); // Notify manager
     onHandshakeComplete?.call();

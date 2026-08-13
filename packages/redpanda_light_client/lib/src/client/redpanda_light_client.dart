@@ -444,7 +444,50 @@ class RedPandaLightClient implements RedPandaClient {
     });
   }
 
+  /// Timestamp of the last [_logNotConnected] line, for its 15 s throttle.
+  DateTime? _lastNotConnectedLog;
+
+  /// Emits one aggregate line every 15 s for as long as the client is not
+  /// connected, and nothing at all once it is.
+  ///
+  /// Called first thing in [_runConnectionCheck], so the numbers are the state
+  /// the *previous* cycle left behind — before this one reaps disconnected
+  /// peers and fills slots. That is deliberate: it runs on every tick, including
+  /// the ones the bad-internet throttle cuts short, and a peer still counted
+  /// here that is gone in the next line is itself the interesting detail.
+  ///
+  /// Counts only, never addresses — that is what keeps it on the info side of
+  /// the privacy boundary. Everything the connection routine says about *which*
+  /// peer it is dialling goes through [RpLog.debug], which is suppressed by
+  /// default and which the isolate worker deliberately does not forward, so a
+  /// client that fails to connect produced exactly no evidence: the emulator
+  /// gate's `client never connected to the node` (T81/T89b) could not be told
+  /// apart from "never dialled", "dialled and got nowhere" and "connected
+  /// without the app noticing". These five numbers separate those cases.
+  void _logNotConnected() {
+    if (_currentStatus == ConnectionStatus.connected) {
+      _lastNotConnectedLog = null;
+      return;
+    }
+    final now = DateTime.now();
+    final last = _lastNotConnectedLog;
+    if (last != null && now.difference(last) < const Duration(seconds: 15)) {
+      return;
+    }
+    _lastNotConnectedLog = now;
+    final verified = _peers.values.where((p) => p.isHandshakeVerified).length;
+    final inBackoff = _nextRetryTime.values.where(now.isBefore).length;
+    RpLog.info(
+      'RedPandaLightClient: still ${_currentStatus.name} — '
+      'known=${_peerRepository.knownAddresses.length} '
+      'peers=${_peers.length} verified=$verified '
+      'dialsInFlight=${_dialsInFlight.length} inBackoff=$inBackoff',
+    );
+  }
+
   Future<void> _runConnectionCheck() async {
+    _logNotConnected();
+
     // 0. If bad internet detected, throttle
     if (_isBadInternetDetected) {
       if (DateTime.now().difference(_lastGlobalConnectionAttempt).inSeconds <
