@@ -1,590 +1,0 @@
-Resolving dependencies...
-Downloading packages...
-Got dependencies!
-00:00 +0: loading /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/peer_deduplication_test.dart                                                                          00:00 +0: /Users/rbb/Documents/AI ... Peer Deduplication Does not connect to same peer twice via alias (localhost/127.0.0.1)                                                                           00:00 +0: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/peer_deduplication_test.dart: Peer Deduplication Does not connect to same peer twice via alias (localhost/127.0.0.1)
-RedPandaLightClient: Starting connection routine...
-RedPandaLightClient: Running connection check. Known peers: 0
-RedPandaLightClient: Running connection check. Known peers: 1
-ActivePeer(localhost:5000): Connecting...
-ActivePeer(localhost:5000): TCP Connected. Sending Handshake...
-ActivePeer(localhost:5000): Handshake sent (30 bytes)
-00:00 +1: /Users/rbb/Documents/AI ... Peer Deduplication Does not connect to same peer twice via alias (localhost/127.0.0.1)                                                                           00:00 +1: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/multi_peer_test.dart: Multi-Peer Connection Routine Connects to all seeds initially                           
-RedPandaLightClient: Running connection check. Known peers: 2
-RedPandaLightClient: Starting connection routine...
-RedPandaLightClient: Running connection check. Known peers: 2
-ActivePeer(localhost:1001): Connecting...
-ActivePeer(localhost:1001): TCP Connected. Sending Handshake...
-ActivePeer(localhost:1001): Handshake sent (30 bytes)
-ActivePeer(localhost:1001): Connecting...
-ActivePeer(localhost:1001): TCP Connected. Sending Handshake...
-ActivePeer(localhost:1001): Handshake sent (30 bytes)
-ActivePeer(localhost:1002): Connecting...
-ActivePeer(localhost:1002): TCP Connected. Sending Handshake...
-ActivePeer(localhost:1002): Handshake sent (30 bytes)
-ActivePeer(localhost:1002): Connecting...
-ActivePeer(localhost:1002): TCP Connected. Sending Handshake...
-ActivePeer(localhost:1002): Handshake sent (30 bytes)
-00:00 +2: /Users/rbb/Documents/AI ... Peer Deduplication Does not connect to same peer twice via alias (localhost/127.0.0.1)                                                                           00:00 +2: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/connection_logic_test.dart: Connection Logic Unit Tests Fast Boot: Connects to top peers immediately on start 
-RedPandaLightClient: Running connection check. Known peers: 6
-ActivePeer(127.0.0.1:1001): Connecting...
-ActivePeer(127.0.0.1:1001): TCP Connected. Sending Handshake...
-ActivePeer(127.0.0.1:1001): Handshake sent (30 bytes)
-ActivePeer(127.0.0.1:1002): Connecting...
-ActivePeer(127.0.0.1:1002): TCP Connected. Sending Handshake...
-ActivePeer(127.0.0.1:1002): Handshake sent (30 bytes)
-ActivePeer(127.0.0.1:1003): Connecting...
-ActivePeer(127.0.0.1:1003): TCP Connected. Sending Handshake...
-ActivePeer(127.0.0.1:1003): Handshake sent (30 bytes)
-ActivePeer(127.0.0.1:1004): Connecting...
-ActivePeer(127.0.0.1:1004): TCP Connected. Sending Handshake...
-ActivePeer(127.0.0.1:1004): Handshake sent (30 bytes)
-ActivePeer(127.0.0.1:1005): Connecting...
-ActivePeer(127.0.0.1:1005): TCP Connected. Sending Handshake...
-ActivePeer(127.0.0.1:1005): Handshake sent (30 bytes)
-00:00 +2: /Users/rbb/Documents/AI ... Peer Deduplication Does not connect to same peer twice via alias (localhost/127.0.0.1)                                                                           00:00 +2: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/backoff_test.dart: RedPandaLightClient Backoff should apply exponential backoff on repeated failures          
-RedPandaLightClient: Starting connection routine...
-RedPandaLightClient: Running connection check. Known peers: 0
-RedPandaLightClient: Running connection check. Known peers: 1
-ActivePeer(127.0.0.1:9000): Connecting...
-ActivePeer(127.0.0.1:9000) connection failed: SocketException: Connection rejected
-00:00 +2: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/connection_logic_test.dart: Connection Logic Unit Tests Fast Boot: Connects to top peers immediately on start 
-ActivePeer(127.0.0.1:1001) socket closed
-ActivePeer(127.0.0.1:1002) socket closed
-ActivePeer(127.0.0.1:1003) socket closed
-00:00 +3: /Users/rbb/Documents/AI ... Peer Deduplication Does not connect to same peer twice via alias (localhost/127.0.0.1)                                                                           00:00 +3: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/connection_logic_test.dart: Connection Logic Unit Tests Fast Boot: Connects to top peers immediately on start 
-ActivePeer(127.0.0.1:1004) socket closed
-ActivePeer(127.0.0.1:1005) socket closed
-00:00 +3: /Users/rbb/Documents/AI ... Peer Deduplication Does not connect to same peer twice via alias (localhost/127.0.0.1)                                                                           00:00 +3: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/connection_logic_test.dart: Connection Logic Unit Tests Max Connections: Does not exceed limit (5)            
-RedPandaLightClient: Running connection check. Known peers: 6
-ActivePeer(127.0.0.1:1001): Connecting...
-ActivePeer(127.0.0.1:1001): TCP Connected. Sending Handshake...
-ActivePeer(127.0.0.1:1001): Handshake sent (30 bytes)
-ActivePeer(127.0.0.1:1002): Connecting...
-ActivePeer(127.0.0.1:1002): TCP Connected. Sending Handshake...
-ActivePeer(127.0.0.1:1002): Handshake sent (30 bytes)
-ActivePeer(127.0.0.1:1003): Connecting...
-ActivePeer(127.0.0.1:1003): TCP Connected. Sending Handshake...
-ActivePeer(127.0.0.1:1003): Handshake sent (30 bytes)
-ActivePeer(127.0.0.1:1004): Connecting...
-ActivePeer(127.0.0.1:1004): TCP Connected. Sending Handshake...
-ActivePeer(127.0.0.1:1004): Handshake sent (30 bytes)
-ActivePeer(127.0.0.1:1005): Connecting...
-ActivePeer(127.0.0.1:1005): TCP Connected. Sending Handshake...
-ActivePeer(127.0.0.1:1005): Handshake sent (30 bytes)
-00:00 +4: /Users/rbb/Documents/AI ... Peer Deduplication Does not connect to same peer twice via alias (localhost/127.0.0.1)                                                                           00:00 +4: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/multi_peer_test.dart: Multi-Peer Connection Routine Periodically retries FAILED connections                   
-RedPandaLightClient: Running connection check. Known peers: 2
-00:00 +4: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/handshake_test.dart: Handshake identifies as Light Client (ActivePeer)                                        
-ActivePeer(localhost:1234): Connecting...
-ActivePeer(localhost:1234): TCP Connected. Sending Handshake...
-ActivePeer(localhost:1234): Handshake sent (30 bytes)
-00:00 +4: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/multi_peer_test.dart: Multi-Peer Connection Routine Periodically retries FAILED connections                   
-RedPandaLightClient: Starting connection routine...
-RedPandaLightClient: Running connection check. Known peers: 0
-RedPandaLightClient: Running connection check. Known peers: 1
-ActivePeer(localhost:1001): Connecting...
-ActivePeer(localhost:1001): TCP Connected. Sending Handshake...
-ActivePeer(localhost:1001): Handshake sent (30 bytes)
-ActivePeer(localhost:1001): Connecting...
-ActivePeer(localhost:1001) connection failed: Connection Refused
-ActivePeer(localhost:1002): Connecting...
-ActivePeer(localhost:1002): TCP Connected. Sending Handshake...
-ActivePeer(localhost:1002): Handshake sent (30 bytes)
-00:00 +5: /Users/rbb/Documents/AI ... Peer Deduplication Does not connect to same peer twice via alias (localhost/127.0.0.1)                                                                           00:00 +5: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/peer_list_test.dart: ActivePeer handles SEND_PEERLIST command correctly                                       
-ActivePeer(localhost:1234): Connecting...
-ActivePeer(localhost:1234): TCP Connected. Sending Handshake...
-ActivePeer(localhost:1234): Handshake sent (30 bytes)
-ActivePeer(localhost:1234): Handshake Verified.
-ActivePeer(localhost:1234): Requesting Peer Public Key...
-00:00 +5: /Users/rbb/Documents/AI ... Peer Deduplication Does not connect to same peer twice via alias (localhost/127.0.0.1)                                                                           00:00 +5: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/connection_logic_test.dart: Connection Logic Unit Tests Max Connections: Does not exceed limit (5)            
-RedPandaLightClient: Running connection check. Known peers: 7
-00:00 +5: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/e2e/launcher_test.dart: E2E Node Launcher starts and stops the java process                                        
-Searching for project root starting from: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client
-Found project root at: /Users/rbb/Documents/AI Test/redpanda
-Looking for JAR at: /Users/rbb/Documents/AI Test/redpanda/references/redPandaj/target/redpanda.jar
-Starting Node on port 50001...
-Waiting for port 50001 to open...
-00:00 +5: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/peer_list_test.dart: ActivePeer handles SEND_PEERLIST command correctly                                       
-ActivePeer(localhost:1234): Received sendPeerList
-00:00 +6: /Users/rbb/Documents/AI ... Peer Deduplication Does not connect to same peer twice via alias (localhost/127.0.0.1)                                                                           00:00 +6: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/peer_list_test.dart: ActivePeer sends REQUEST_PEERLIST command                                                
-ActivePeer(localhost:1234): Connecting...
-ActivePeer(localhost:1234): TCP Connected. Sending Handshake...
-ActivePeer(localhost:1234): Handshake sent (30 bytes)
-00:00 +7: /Users/rbb/Documents/AI ... Peer Deduplication Does not connect to same peer twice via alias (localhost/127.0.0.1)                                                                           00:00 +7: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/connection_logic_test.dart: Connection Logic Unit Tests Max Connections: Does not exceed limit (5)            
-ActivePeer(127.0.0.1:1001) socket closed
-ActivePeer(127.0.0.1:1002) socket closed
-ActivePeer(127.0.0.1:1003) socket closed
-00:00 +8: /Users/rbb/Documents/AI ... Peer Deduplication Does not connect to same peer twice via alias (localhost/127.0.0.1)                                                                           00:00 +8: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/connection_logic_test.dart: Connection Logic Unit Tests Max Connections: Does not exceed limit (5)            
-ActivePeer(127.0.0.1:1004) socket closed
-ActivePeer(127.0.0.1:1005) socket closed
-00:00 +8: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/connection_logic_test.dart: Connection Logic Unit Tests Core Preference: Prefers low latency peers            
-RedPandaLightClient: Running connection check. Known peers: 6
-ActivePeer(127.0.0.1:1001): Connecting...
-ActivePeer(127.0.0.1:1001): TCP Connected. Sending Handshake...
-ActivePeer(127.0.0.1:1001): Handshake sent (30 bytes)
-ActivePeer(127.0.0.1:1002): Connecting...
-ActivePeer(127.0.0.1:1002): TCP Connected. Sending Handshake...
-ActivePeer(127.0.0.1:1002): Handshake sent (30 bytes)
-ActivePeer(127.0.0.1:1003): Connecting...
-ActivePeer(127.0.0.1:1003): TCP Connected. Sending Handshake...
-ActivePeer(127.0.0.1:1003): Handshake sent (30 bytes)
-ActivePeer(127.0.0.1:1004): Connecting...
-ActivePeer(127.0.0.1:1004): TCP Connected. Sending Handshake...
-ActivePeer(127.0.0.1:1004): Handshake sent (30 bytes)
-ActivePeer(127.0.0.1:1005): Connecting...
-ActivePeer(127.0.0.1:1005): TCP Connected. Sending Handshake...
-00:00 +8: /Users/rbb/Documents/AI ... Peer Deduplication Does not connect to same peer twice via alias (localhost/127.0.0.1)                                                                           00:00 +8: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/connection_logic_test.dart: Connection Logic Unit Tests Core Preference: Prefers low latency peers            
-ActivePeer(127.0.0.1:1005): Handshake sent (30 bytes)
-00:00 +8: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/e2e/client_connect_test.dart: E2E Real Client Client connects to local node and transitions to connected state     
-Searching for project root starting from: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client
-Found project root at: /Users/rbb/Documents/AI Test/redpanda
-Looking for JAR at: /Users/rbb/Documents/AI Test/redpanda/references/redPandaj/target/redpanda.jar
-Starting Node on port 50002...
-Waiting for port 50002 to open...
-00:01 +8: /Users/rbb/Documents/AI ... Peer Deduplication Does not connect to same peer twice via alias (localhost/127.0.0.1)                                                                           Shell: 2025-12-30T20:35:04.570230Z main INFO Starting configuration XmlConfiguration[location=jar:file:/Users/rbb/Documents/AI%20Test/redpanda/references/redPandaj/target/redpanda.jar!/log4j2.xml, lastModified=1970-01-01T00:00:00Z]...
-Shell: 2025-12-30T20:35:04.570869Z main INFO Configuration XmlConfiguration[location=jar:file:/Users/rbb/Documents/AI%20Test/redpanda/references/redPandaj/target/redpanda.jar!/log4j2.xml, lastModified=1970-01-01T00:00:00Z] started.
-Shell: 2025-12-30T20:35:04.571736Z main INFO Stopping configuration org.apache.logging.log4j.core.config.DefaultConfiguration@d44fc21...
-Shell: 2025-12-30T20:35:04.572001Z main INFO Configuration org.apache.logging.log4j.core.config.DefaultConfiguration@d44fc21 stopped.
-Shell:               _ _____                _       
-Shell:              | |  __ \              | |      
-Shell:  _ __ ___  __| | |__) |_ _ _ __   __| | __ _ 
-Shell: | '__/ _ \/ _` |  ___/ _` | '_ \ / _` |/ _` |
-Shell: | | |  __/ (_| | |  | (_| | | | | (_| | (_| |
-Shell: |_|  \___|\__,_|_|   \__,_|_| |_|\__,_|\__,_|               - p2p chat, https://github.com/redPanda-project/redpandaj
-Shell:                                              
-Shell: 
-Shell: Starting redpanda 0.1.6-SNAPSHOT
-Shell: 2025-12-30 21:35:04,574 [main] INFO  im.redpanda.App - redPanda started.
-Shell: 2025-12-30 21:35:04,575 [main] INFO  im.redpanda.App - Activate Sentry: false
-Shell: 2025-12-30 21:35:04,576 [main] INFO  im.redpanda.App - found git revision: a655c19 Sentry: false
-00:01 +8: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/e2e/client_ping_pong_test.dart: E2E Real Client PING/PONG Client exchanges PING/PONG over encrypted channel        
-Searching for project root starting from: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client
-Found project root at: /Users/rbb/Documents/AI Test/redpanda
-Looking for JAR at: /Users/rbb/Documents/AI Test/redpanda/references/redPandaj/target/redpanda.jar
-Shell: 2025-12-30 21:35:04,583 [main] INFO  im.redpanda.core.ConnectionHandler - bin to specific port 50001 ...
-Starting Node on port 50003...
-Shell: 2025-12-30 21:35:04,584 [main] INFO  im.redpanda.core.ConnectionHandler - bound successfully to port: 50001
-Waiting for port 50003 to open...
-Shell: 21:35:04.593 [main] INFO im.redpanda.core.LocalSettings -- error loading local settings
-Shell: java.io.FileNotFoundException: data/localSettings50001.dat (No such file or directory)
-Shell: 	at java.base/java.io.FileInputStream.open0(Native Method)
-Shell: 	at java.base/java.io.FileInputStream.open(FileInputStream.java:185)
-Shell: 	at java.base/java.io.FileInputStream.<init>(FileInputStream.java:139)
-Shell: 	at im.redpanda.core.LocalSettings.load(LocalSettings.java:81)
-Shell: 	at im.redpanda.App.startServer(App.java:95)
-Shell: 	at im.redpanda.App.main(App.java:85)
-Shell: 21:35:04.593 [main] INFO im.redpanda.core.LocalSettings -- could not load localSettings.dat, generating new LocalSettings
-00:01 +8: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/connection_logic_test.dart: Connection Logic Unit Tests Core Preference: Prefers low latency peers            
-ActivePeer(127.0.0.1:1001) socket closed
-ActivePeer(127.0.0.1:1002) socket closed
-ActivePeer(127.0.0.1:1003) socket closed
-00:01 +9: /Users/rbb/Documents/AI ... Peer Deduplication Does not connect to same peer twice via alias (localhost/127.0.0.1)                                                                           00:01 +9: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/connection_logic_test.dart: Connection Logic Unit Tests Core Preference: Prefers low latency peers            
-ActivePeer(127.0.0.1:1004) socket closed
-ActivePeer(127.0.0.1:1005) socket closed
-00:01 +9: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/connection_logic_test.dart: Connection Logic Unit Tests Bad Internet: Stops trying if all connections fail    
-RedPandaLightClient: Running connection check. Known peers: 6
-ActivePeer(127.0.0.1:1001): Connecting...
-ActivePeer(127.0.0.1:1001) connection failed: SocketException: Connection refused
-ActivePeer(127.0.0.1:1002): Connecting...
-ActivePeer(127.0.0.1:1002) connection failed: SocketException: Connection refused
-ActivePeer(127.0.0.1:1003): Connecting...
-ActivePeer(127.0.0.1:1003) connection failed: SocketException: Connection refused
-ActivePeer(127.0.0.1:1004): Connecting...
-ActivePeer(127.0.0.1:1004) connection failed: SocketException: Connection refused
-ActivePeer(127.0.0.1:1005): Connecting...
-ActivePeer(127.0.0.1:1005) connection failed: SocketException: Connection refused
-Shell: 2025-12-30T20:35:04.663214Z main INFO Starting configuration XmlConfiguration[location=jar:file:/Users/rbb/Documents/AI%20Test/redpanda/references/redPandaj/target/redpanda.jar!/log4j2.xml, lastModified=1970-01-01T00:00:00Z]...
-Shell: 2025-12-30T20:35:04.663775Z main INFO Configuration XmlConfiguration[location=jar:file:/Users/rbb/Documents/AI%20Test/redpanda/references/redPandaj/target/redpanda.jar!/log4j2.xml, lastModified=1970-01-01T00:00:00Z] started.
-Shell: 2025-12-30T20:35:04.664506Z main INFO Stopping configuration org.apache.logging.log4j.core.config.DefaultConfiguration@d44fc21...
-Shell: 2025-12-30T20:35:04.664658Z main INFO Configuration org.apache.logging.log4j.core.config.DefaultConfiguration@d44fc21 stopped.
-Shell:               _ _____                _       
-Shell:              | |  __ \              | |      
-Shell:  _ __ ___  __| | |__) |_ _ _ __   __| | __ _ 
-Shell: | '__/ _ \/ _` |  ___/ _` | '_ \ / _` |/ _` |
-Shell: | | |  __/ (_| | |  | (_| | | | | (_| | (_| |
-Shell: |_|  \___|\__,_|_|   \__,_|_| |_|\__,_|\__,_|               - p2p chat, https://github.com/redPanda-project/redpandaj
-Shell:                                              
-Shell: 
-Shell: Starting redpanda 0.1.6-SNAPSHOT
-Shell: 2025-12-30 21:35:04,666 [main] INFO  im.redpanda.App - redPanda started.
-Shell: 2025-12-30 21:35:04,667 [main] INFO  im.redpanda.App - Activate Sentry: false
-Shell: 2025-12-30 21:35:04,668 [main] INFO  im.redpanda.App - found git revision: a655c19 Sentry: false
-Shell: 2025-12-30 21:35:04,677 [main] INFO  im.redpanda.core.ConnectionHandler - bin to specific port 50002 ...
-Shell: 2025-12-30 21:35:04,678 [main] INFO  im.redpanda.core.ConnectionHandler - bound successfully to port: 50002
-Shell: 21:35:04.687 [main] INFO im.redpanda.core.LocalSettings -- error loading local settings
-Shell: java.io.FileNotFoundException: data/localSettings50002.dat (No such file or directory)
-Shell: 	at java.base/java.io.FileInputStream.open0(Native Method)
-Shell: 	at java.base/java.io.FileInputStream.open(FileInputStream.java:185)
-Shell: 	at java.base/java.io.FileInputStream.<init>(FileInputStream.java:139)
-Shell: 	at im.redpanda.core.LocalSettings.load(LocalSettings.java:81)
-Shell: 	at im.redpanda.App.startServer(App.java:95)
-Shell: 	at im.redpanda.App.main(App.java:85)
-Shell: 21:35:04.688 [main] INFO im.redpanda.core.LocalSettings -- could not load localSettings.dat, generating new LocalSettings
-00:01 +9: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/e2e/launcher_test.dart: E2E Node Launcher starts and stops the java process                                        
-Port open. Waiting 2 seconds for node to settle...
-Shell: 2025-12-30T20:35:04.863517Z main INFO Starting configuration XmlConfiguration[location=jar:file:/Users/rbb/Documents/AI%20Test/redpanda/references/redPandaj/target/redpanda.jar!/log4j2.xml, lastModified=1970-01-01T00:00:00Z]...
-Shell: 2025-12-30T20:35:04.864162Z main INFO Configuration XmlConfiguration[location=jar:file:/Users/rbb/Documents/AI%20Test/redpanda/references/redPandaj/target/redpanda.jar!/log4j2.xml, lastModified=1970-01-01T00:00:00Z] started.
-Shell: 2025-12-30T20:35:04.865040Z main INFO Stopping configuration org.apache.logging.log4j.core.config.DefaultConfiguration@d44fc21...
-Shell: 2025-12-30T20:35:04.865219Z main INFO Configuration org.apache.logging.log4j.core.config.DefaultConfiguration@d44fc21 stopped.
-Shell:               _ _____                _       
-Shell:              | |  __ \              | |      
-Shell:  _ __ ___  __| | |__) |_ _ _ __   __| | __ _ 
-Shell: | '__/ _ \/ _` |  ___/ _` | '_ \ / _` |/ _` |
-Shell: | | |  __/ (_| | |  | (_| | | | | (_| | (_| |
-Shell: |_|  \___|\__,_|_|   \__,_|_| |_|\__,_|\__,_|               - p2p chat, https://github.com/redPanda-project/redpandaj
-Shell:                                              
-Shell: 
-Shell: Starting redpanda 0.1.6-SNAPSHOT
-Shell: 2025-12-30 21:35:04,867 [main] INFO  im.redpanda.App - redPanda started.
-Shell: 2025-12-30 21:35:04,868 [main] INFO  im.redpanda.App - Activate Sentry: false
-Shell: 2025-12-30 21:35:04,869 [main] INFO  im.redpanda.App - found git revision: a655c19 Sentry: false
-Shell: 2025-12-30 21:35:04,876 [main] INFO  im.redpanda.core.ConnectionHandler - bin to specific port 50003 ...
-Shell: 2025-12-30 21:35:04,877 [main] INFO  im.redpanda.core.ConnectionHandler - bound successfully to port: 50003
-Shell: 2025-12-30 21:35:04,883 [main] INFO  im.redpanda.App - started node with KademliaId: 3dbN9ezUzs port: 50001
-Shell: 21:35:04.886 [main] INFO im.redpanda.core.LocalSettings -- error loading local settings
-Shell: java.io.FileNotFoundException: data/localSettings50003.dat (No such file or directory)
-Shell: 	at java.base/java.io.FileInputStream.open0(Native Method)
-Shell: 	at java.base/java.io.FileInputStream.open(FileInputStream.java:185)
-Shell: 	at java.base/java.io.FileInputStream.<init>(FileInputStream.java:139)
-Shell: 	at im.redpanda.core.LocalSettings.load(LocalSettings.java:81)
-Shell: 	at im.redpanda.App.startServer(App.java:95)
-Shell: 	at im.redpanda.App.main(App.java:85)
-Shell: 21:35:04.887 [main] INFO im.redpanda.core.LocalSettings -- could not load localSettings.dat, generating new LocalSettings
-00:01 +9: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/e2e/client_connect_test.dart: E2E Real Client Client connects to local node and transitions to connected state     
-Port open. Waiting 2 seconds for node to settle...
-Shell: No jar to update found, disable auto update
-Shell: starting HTTP server...
-Shell: refresh the KadContent
-Shell: Log: remaining entries in GMStoreManager after cleanup: 0
-Shell: 21:35:04.944 [Jobs-5] INFO im.redpanda.core.SystemUpTimeData -- current uptime: 0.0
-Shell: 21:35:04.944 [Jobs-5] INFO im.redpanda.core.SystemUpTimeData -- current uptime: 0.005952380952380952 after update
-Shell: Generating new ByteBuffer for pool. Free memory (MB): 61.37969207763672 Idle: 0 Active: 1 Waiters: 0
-Shell: 
-Shell: 
-Shell: List of Pool: 
-Shell: key: 1024 size: 0
-Shell: 
-Shell: 
-Shell: 
-Shell: peer disconnected...
-Shell: Log: Verbindungsaufbau (127.0.0.1): k3gV 22 2aRKCQ7UGQ 59558
-Shell: updating KadId, old null new: 2aRKCQ7UGQ
-Shell: written bytes to REQUEST_PUBLIC_KEY: 1
-Shell: peer status for handshake: 1
-Shell: 2025-12-30 21:35:04,952 [main] INFO  im.redpanda.App - started node with KademliaId: 2kVQ2tMQ3v port: 50002
-Shell: No jar to update found, disable auto update
-Shell: starting HTTP server...
-Shell: refresh the KadContent
-Shell: Log: remaining entries in GMStoreManager after cleanup: 0
-Shell: 21:35:05.023 [Jobs-0] INFO im.redpanda.core.SystemUpTimeData -- current uptime: 0.0
-Shell: 21:35:05.023 [Jobs-0] INFO im.redpanda.core.SystemUpTimeData -- current uptime: 0.005952380952380952 after update
-Shell: Generating new ByteBuffer for pool. Free memory (MB): 58.29595947265625 Idle: 0 Active: 1 Waiters: 0
-Shell: 
-Shell: 
-Shell: List of Pool: 
-Shell: key: 1024 size: 0
-Shell: 
-Shell: 
-Shell: 
-Shell: Log: Verbindungsaufbau (127.0.0.1): k3gV 22 2aRKCQ7UGQ 59558
-Shell: updating KadId, old null new: 2aRKCQ7UGQ
-Shell: written bytes to REQUEST_PUBLIC_KEY: 1
-Shell: peer status for handshake: 1
-Shell: peer disconnected...
-00:01 +9: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/e2e/client_ping_pong_test.dart: E2E Real Client PING/PONG Client exchanges PING/PONG over encrypted channel        
-Port open. Waiting 2 seconds for node to settle...
-Shell: 2025-12-30 21:35:05,214 [main] INFO  im.redpanda.App - started node with KademliaId: 4NF19BbkSL port: 50003
-Shell: No jar to update found, disable auto update
-Shell: starting HTTP server...
-Shell: refresh the KadContent
-Shell: Log: remaining entries in GMStoreManager after cleanup: 0
-Shell: 21:35:05.267 [Jobs-0] INFO im.redpanda.core.SystemUpTimeData -- current uptime: 0.0
-Shell: 21:35:05.267 [Jobs-0] INFO im.redpanda.core.SystemUpTimeData -- current uptime: 0.005952380952380952 after update
-Shell: Generating new ByteBuffer for pool. Free memory (MB): 61.50392150878906 Idle: 0 Active: 1 Waiters: 0
-Shell: 
-Shell: 
-Shell: List of Pool: 
-Shell: key: 1024 size: 0
-Shell: 
-Shell: 
-Shell: 
-Shell: peer disconnected...
-Shell: Log: Verbindungsaufbau (127.0.0.1): k3gV 22 2aRKCQ7UGQ 59558
-Shell: updating KadId, old null new: 2aRKCQ7UGQ
-Shell: written bytes to REQUEST_PUBLIC_KEY: 1
-Shell: peer status for handshake: 1
-Shell: written bytes to SEND_PUBLIC_KEY: 66
-Shell: Log: DEBUG: Processing ACTIVATE_ENCRYPTION. Remaining bytes: 8
-Shell: Log: DEBUG: Parsed ACTIVATE_ENCRYPTION. Pending finalization.
-00:03 +9: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/e2e/launcher_test.dart: E2E Node Launcher starts and stops the java process                                        
-Node 50001 successfully started and listening.
-00:03 +10: /Users/rbb/Documents/AI ... Peer Deduplication Does not connect to same peer twice via alias (localhost/127.0.0.1)                                                                          Shell: peer disconnected...
-Shell: 2025-12-30 21:35:06,933 [Thread-1 - shutdownhook] INFO  im.redpanda.App - started shutdownhook...
-Shell: 2025-12-30T20:35:06.934935Z pool-1-thread-1 INFO Stopping configuration XmlConfiguration[location=jar:file:/Users/rbb/Documents/AI%20Test/redpanda/references/redPandaj/target/redpanda.jar!/log4j2.xml, lastModified=1970-01-01T00:00:00Z]...
-Shell: 2025-12-30T20:35:06.936027Z pool-1-thread-1 INFO Configuration XmlConfiguration[location=jar:file:/Users/rbb/Documents/AI%20Test/redpanda/references/redPandaj/target/redpanda.jar!/log4j2.xml, lastModified=1970-01-01T00:00:00Z] stopped.
-00:03 +10: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/peer_deduplication_test.dart: Peer Deduplication Does not connect to same peer twice via alias (localhost/127.0.0.1)
-RedPandaLightClient: Running connection check. Known peers: 1
-00:03 +10: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/e2e/client_connect_test.dart: E2E Real Client Client connects to local node and transitions to connected state    
-Node 50002 successfully started and listening.
-00:03 +10: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/multi_peer_test.dart: Multi-Peer Connection Routine Connects to all seeds initially                          
-RedPandaLightClient: Running connection check. Known peers: 2
-00:03 +10: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/e2e/client_connect_test.dart: E2E Real Client Client connects to local node and transitions to connected state    
-RedPandaLightClient: Starting connection routine...
-RedPandaLightClient: Running connection check. Known peers: 0
-RedPandaLightClient: Running connection check. Known peers: 1
-ActivePeer(127.0.0.1:50002): Connecting...
-ActivePeer(127.0.0.1:50002): TCP Connected. Sending Handshake...
-ActivePeer(127.0.0.1:50002): Handshake sent (30 bytes)
-ActivePeer(127.0.0.1:50002): Handshake Verified.
-ActivePeer(127.0.0.1:50002): Requesting Peer Public Key...
-ActivePeer(127.0.0.1:50002): Received requestPublicKey
-ActivePeer(127.0.0.1:50002): Sending Public Key...
-Shell: Log: Verbindungsaufbau (127.0.0.1): k3gV 22 t1fU3H53CM 0
-Shell: written bytes to REQUEST_PUBLIC_KEY: 1
-Shell: peer status for handshake: 1
-Shell: written bytes to SEND_PUBLIC_KEY: 66
-ActivePeer(127.0.0.1:50002): Received sendPublicKey
-ActivePeer(127.0.0.1:50002): Peer Public Key Parsed.
-ActivePeer(127.0.0.1:50002): Initiating Encryption Handshake...
-ActivePeer(127.0.0.1:50002): Received activateEncryption
-00:03 +10: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/backoff_test.dart: RedPandaLightClient Backoff should apply exponential backoff on repeated failures         
-RedPandaLightClient: Running connection check. Known peers: 1
-RedPandaLightClient: Removing disconnected peer 127.0.0.1:9000
-RedPandaLightClient: No peers to connect to. Bad Internet?
-00:03 +10: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/e2e/client_ping_pong_test.dart: E2E Real Client PING/PONG Client exchanges PING/PONG over encrypted channel       
-Node 50003 successfully started and listening.
-00:03 +10: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/multi_peer_test.dart: Multi-Peer Connection Routine Periodically retries FAILED connections                  
-RedPandaLightClient: Running connection check. Known peers: 1
-RedPandaLightClient: Removing disconnected peer localhost:1001
-RedPandaLightClient: No peers to connect to. Bad Internet?
-00:03 +10: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/e2e/client_connect_test.dart: E2E Real Client Client connects to local node and transitions to connected state    
-ActivePeer(127.0.0.1:50002): Sent activateEncryption request.
-ActivePeer(127.0.0.1:50002): Finalizing Encryption...
-ActivePeer(127.0.0.1:50002): Encryption Active!
-ActivePeer(127.0.0.1:50002): Sending Initial ping (Encrypted)...
-ActivePeer(127.0.0.1:50002): Requesting Peer List (Encrypted)...
-Shell: Log: DEBUG: Processing ACTIVATE_ENCRYPTION. Remaining bytes: 8
-Shell: Log: DEBUG: Parsed ACTIVATE_ENCRYPTION. Pending finalization.
-Shell: Log: DEBUG: Conditions met. Generating Shared Secret and Activating Encryption.
-Shell: Log: DEBUG: Encryption Activated.
-Shell: Generating new ByteBuffer for pool. Free memory (MB): 50.296043395996094 Idle: 1 Active: 1 Waiters: 0
-Shell: 
-Shell: 
-Shell: List of Pool: 
-Shell: key: 16 size: 0
-Shell: key: 1024 size: 1
-Shell: 
-Shell: 
-Shell: 
-Shell: Log: DEBUG: Written bytes for PING: 1
-Shell: received first encrypted command...
-Shell: received first ping...
-ActivePeer(127.0.0.1:50002): Received ping (Encrypted). Sending pong...
-ActivePeer(127.0.0.1:50002): Sending pong...
-Shell: 2025-12-30 21:35:07,237 [IncomingHandler] INFO  im.redpanda.core.ConnectionHandler - Connected successfully to 127.0.0.1:0 (KadId: t1fU3H53CM)
-00:03 +10: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/e2e/client_ping_pong_test.dart: E2E Real Client PING/PONG Client exchanges PING/PONG over encrypted channel       
-RedPandaLightClient: Starting connection routine...
-RedPandaLightClient: Running connection check. Known peers: 0
-Shell: WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
-Shell: WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/Users/rbb/Documents/AI%20Test/redpanda/references/redPandaj/target/redpanda.jar)
-Shell: WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
-Shell: WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
-00:03 +10: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/e2e/client_connect_test.dart: E2E Real Client Client connects to local node and transitions to connected state    
-ActivePeer(127.0.0.1:50002): Received sendPeerList
-00:03 +10: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/e2e/client_ping_pong_test.dart: E2E Real Client PING/PONG Client exchanges PING/PONG over encrypted channel       
-RedPandaLightClient: Running connection check. Known peers: 1
-ActivePeer(127.0.0.1:50003): Connecting...
-ActivePeer(127.0.0.1:50003): TCP Connected. Sending Handshake...
-ActivePeer(127.0.0.1:50003): Handshake sent (30 bytes)
-ActivePeer(127.0.0.1:50003): Handshake Verified.
-ActivePeer(127.0.0.1:50003): Requesting Peer Public Key...
-ActivePeer(127.0.0.1:50003): Received requestPublicKey
-ActivePeer(127.0.0.1:50003): Sending Public Key...
-Shell: Log: Verbindungsaufbau (127.0.0.1): k3gV 22 t1fU3H53CM 0
-Shell: written bytes to REQUEST_PUBLIC_KEY: 1
-Shell: peer status for handshake: 1
-Shell: written bytes to SEND_PUBLIC_KEY: 66
-ActivePeer(127.0.0.1:50003): Received sendPublicKey
-00:03 +10: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/e2e/client_connect_test.dart: E2E Real Client Client connects to local node and transitions to connected state    
-RedPandaLightClient: Received 3 peers from 127.0.0.1:50002
-00:03 +10: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/e2e/client_ping_pong_test.dart: E2E Real Client PING/PONG Client exchanges PING/PONG over encrypted channel       
-ActivePeer(127.0.0.1:50003): Peer Public Key Parsed.
-ActivePeer(127.0.0.1:50003): Initiating Encryption Handshake...
-ActivePeer(127.0.0.1:50003): Received activateEncryption
-ActivePeer(127.0.0.1:50003): Sent activateEncryption request.
-ActivePeer(127.0.0.1:50003): Finalizing Encryption...
-ActivePeer(127.0.0.1:50003): Encryption Active!
-ActivePeer(127.0.0.1:50003): Sending Initial ping (Encrypted)...
-ActivePeer(127.0.0.1:50003): Requesting Peer List (Encrypted)...
-Shell: Log: DEBUG: Processing ACTIVATE_ENCRYPTION. Remaining bytes: 8
-Shell: Log: DEBUG: Parsed ACTIVATE_ENCRYPTION. Pending finalization.
-Shell: Log: DEBUG: Conditions met. Generating Shared Secret and Activating Encryption.
-Shell: Log: DEBUG: Encryption Activated.
-Shell: Generating new ByteBuffer for pool. Free memory (MB): 55.10430145263672 Idle: 1 Active: 1 Waiters: 0
-Shell: 
-Shell: 
-Shell: List of Pool: 
-Shell: key: 16 size: 0
-Shell: key: 1024 size: 1
-Shell: 
-Shell: 
-Shell: 
-Shell: Log: DEBUG: Written bytes for PING: 1
-Shell: received first encrypted command...
-Shell: received first ping...
-ActivePeer(127.0.0.1:50003): Received ping (Encrypted). Sending pong...
-ActivePeer(127.0.0.1:50003): Sending pong...
-Shell: 2025-12-30 21:35:07,370 [IncomingHandler] INFO  im.redpanda.core.ConnectionHandler - Connected successfully to 127.0.0.1:0 (KadId: t1fU3H53CM)
-Shell: WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
-Shell: WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/Users/rbb/Documents/AI%20Test/redpanda/references/redPandaj/target/redpanda.jar)
-Shell: WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
-Shell: WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
-ActivePeer(127.0.0.1:50003): Received sendPeerList
-RedPandaLightClient: Received 3 peers from 127.0.0.1:50003
-00:03 +10: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/peer_deduplication_test.dart: Peer Deduplication Does not connect to same peer twice via alias (localhost/127.0.0.1)
-RedPandaLightClient: Running connection check. Known peers: 2
-00:04 +11: /Users/rbb/Documents/AI ... Peer Deduplication Does not connect to same peer twice via alias (localhost/127.0.0.1)                                                                          00:04 +11: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/multi_peer_test.dart: Multi-Peer Connection Routine Connects to new peers added to list                      
-RedPandaLightClient: Running connection check. Known peers: 2
-RedPandaLightClient: Starting connection routine...
-RedPandaLightClient: Running connection check. Known peers: 2
-ActivePeer(localhost:1001): Connecting...
-ActivePeer(localhost:1001): TCP Connected. Sending Handshake...
-ActivePeer(localhost:1001): Handshake sent (30 bytes)
-ActivePeer(localhost:1001): Connecting...
-ActivePeer(localhost:1001): TCP Connected. Sending Handshake...
-ActivePeer(localhost:1001): Handshake sent (30 bytes)
-ActivePeer(localhost:1002): Connecting...
-ActivePeer(localhost:1002): TCP Connected. Sending Handshake...
-ActivePeer(localhost:1002): Handshake sent (30 bytes)
-ActivePeer(localhost:1002): Connecting...
-ActivePeer(localhost:1002): TCP Connected. Sending Handshake...
-ActivePeer(localhost:1002): Handshake sent (30 bytes)
-RedPandaLightClient: Running connection check. Known peers: 3
-00:04 +12: /Users/rbb/Documents/AI ... Peer Deduplication Does not connect to same peer twice via alias (localhost/127.0.0.1)                                                                          00:04 +12: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/multi_peer_test.dart: Multi-Peer Connection Routine Connects to new peers added to list                      
-ActivePeer(localhost:1003): Connecting...
-ActivePeer(localhost:1003): TCP Connected. Sending Handshake...
-ActivePeer(localhost:1003): Handshake sent (30 bytes)
-00:04 +12: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/connection_logic_test.dart: Connection Logic Unit Tests Backoff: Does not retry failed peer immediately      
-RedPandaLightClient: Running connection check. Known peers: 1
-ActivePeer(127.0.0.1:9999): Connecting...
-ActivePeer(127.0.0.1:9999) connection failed: SocketException: Connection refused
-00:06 +12 -1: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/backoff_test.dart: RedPandaLightClient Backoff should apply exponential backoff on repeated failures [E]  
-  Expected: <2>
-    Actual: <1>
-  Should retry at T=3s (Attempt 2)
-  
-  package:matcher                    expect
-  test/unit/backoff_test.dart 101:7  main.<fn>.<fn>
-  
-
-To run this test again: /opt/homebrew/share/flutter/bin/cache/dart-sdk/bin/dart test /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/backoff_test.dart -p vm --plain-name 'RedPandaLightClient Backoff should apply exponential backoff on repeated failures'
-00:06 +12 -1: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/peer_deduplication_test.dart: Peer Deduplication Does not connect to same peer twice via alias (localhost/127.0.0.1)
-RedPandaLightClient: Running connection check. Known peers: 2
-00:06 +12 -1: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/multi_peer_test.dart: Multi-Peer Connection Routine Connects to all seeds initially                       
-RedPandaLightClient: Running connection check. Known peers: 2
-00:06 +12 -1: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/e2e/client_connect_test.dart: E2E Real Client Client connects to local node and transitions to connected state 
-RedPandaLightClient: Running connection check. Known peers: 4
-ActivePeer(127.0.0.1:50002): Sending Ping (Latency Check)...
-ActivePeer(127.0.0.1:50002): Received pong (Encrypted).
-ActivePeer(127.0.0.1:50002): Latency updated to 2ms (current: 2ms)
-ActivePeer(195.201.25.223:59558): Connecting...
-ActivePeer(redpanda.im:59559): Connecting...
-ActivePeer(127.0.0.1:59558): Connecting...
-ActivePeer(127.0.0.1:59558): TCP Connected. Sending Handshake...
-ActivePeer(127.0.0.1:59558): Handshake sent (30 bytes)
-ActivePeer(127.0.0.1:59558): Handshake Verified.
-ActivePeer(127.0.0.1:59558): Requesting Peer Public Key...
-ActivePeer(127.0.0.1:59558): Received activateEncryption
-ActivePeer(127.0.0.1:59558): Initiating Encryption Handshake...
-ActivePeer(195.201.25.223:59558) connection failed: SocketException: Connection refused (OS Error: Connection refused, errno = 61), address = 195.201.25.223, port = 0
-ActivePeer(redpanda.im:59559) connection failed: SocketException: Connection refused (OS Error: Connection refused, errno = 61), address = redpanda.im, port = 0
-ActivePeer(127.0.0.1:59558): Sent activateEncryption request.
-ActivePeer(127.0.0.1:59558): Peer Public Key missing. Deferring encryption finalization.
-ActivePeer(127.0.0.1:59558): Received sendPublicKey
-ActivePeer(127.0.0.1:59558): Peer Public Key Parsed.
-ActivePeer(127.0.0.1:59558): Found pending encryption request. Finalizing now.
-ActivePeer(127.0.0.1:59558): Finalizing Encryption...
-ActivePeer(127.0.0.1:59558): Encryption Active!
-ActivePeer(127.0.0.1:59558): Sending Initial ping (Encrypted)...
-ActivePeer(127.0.0.1:59558): Requesting Peer List (Encrypted)...
-ActivePeer(127.0.0.1:59558): Received ping (Encrypted). Sending pong...
-ActivePeer(127.0.0.1:59558): Sending pong...
-ActivePeer(127.0.0.1:59558): Received sendPeerList
-RedPandaLightClient: Received 2 peers from 127.0.0.1:59558
-00:06 +12 -1: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/e2e/client_ping_pong_test.dart: E2E Real Client PING/PONG Client exchanges PING/PONG over encrypted channel    
-RedPandaLightClient: Running connection check. Known peers: 4
-ActivePeer(127.0.0.1:50003): Sending Ping (Latency Check)...
-ActivePeer(127.0.0.1:50003): Received pong (Encrypted).
-ActivePeer(127.0.0.1:50003): Latency updated to 1ms (current: 1ms)
-ActivePeer(195.201.25.223:59558): Connecting...
-ActivePeer(redpanda.im:59559): Connecting...
-ActivePeer(127.0.0.1:59558): Connecting...
-ActivePeer(127.0.0.1:59558): TCP Connected. Sending Handshake...
-ActivePeer(127.0.0.1:59558): Handshake sent (30 bytes)
-ActivePeer(127.0.0.1:59558): Handshake Verified.
-ActivePeer(127.0.0.1:59558): Requesting Peer Public Key...
-ActivePeer(127.0.0.1:59558): Received activateEncryption
-ActivePeer(127.0.0.1:59558): Initiating Encryption Handshake...
-ActivePeer(195.201.25.223:59558) connection failed: SocketException: Connection refused (OS Error: Connection refused, errno = 61), address = 195.201.25.223, port = 0
-ActivePeer(redpanda.im:59559) connection failed: SocketException: Connection refused (OS Error: Connection refused, errno = 61), address = redpanda.im, port = 0
-ActivePeer(127.0.0.1:59558): Sent activateEncryption request.
-ActivePeer(127.0.0.1:59558): Peer Public Key missing. Deferring encryption finalization.
-ActivePeer(127.0.0.1:59558): Received sendPublicKey
-ActivePeer(127.0.0.1:59558): Peer Public Key Parsed.
-ActivePeer(127.0.0.1:59558): Found pending encryption request. Finalizing now.
-ActivePeer(127.0.0.1:59558): Finalizing Encryption...
-ActivePeer(127.0.0.1:59558): Encryption Active!
-ActivePeer(127.0.0.1:59558): Sending Initial ping (Encrypted)...
-ActivePeer(127.0.0.1:59558): Requesting Peer List (Encrypted)...
-ActivePeer(127.0.0.1:59558): Received ping (Encrypted). Sending pong...
-ActivePeer(127.0.0.1:59558): Sending pong...
-00:06 +12 -1: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/e2e/client_connect_test.dart: E2E Real Client Client connects to local node and transitions to connected state 
-ActivePeer(127.0.0.1:59558) socket closed
-00:06 +12 -1: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/e2e/client_ping_pong_test.dart: E2E Real Client PING/PONG Client exchanges PING/PONG over encrypted channel    
-ActivePeer(127.0.0.1:59558): Received sendPeerList
-RedPandaLightClient: Received 2 peers from 127.0.0.1:59558
-00:07 +12 -1: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/unit/multi_peer_test.dart: Multi-Peer Connection Routine Connects to new peers added to list                   
-RedPandaLightClient: Running connection check. Known peers: 3
-00:07 +13 -1: /Users/rbb/Documents/AI ... Peer Deduplication Does not connect to same peer twice via alias (localhost/127.0.0.1)                                                                       00:07 +14 -1: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/e2e/client_connect_test.dart: E2E Real Client Client connects to local node and transitions to connected state 00:07 +15 -1: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/e2e/client_connect_test.dart: E2E Real Client Client connects to local node and transitions to connected state 00:08 +15 -1: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/e2e/client_connect_test.dart: E2E Real Client Client connects to local node and transitions to connected state 00:08 +15 -1: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/e2e/client_connect_test.dart: E2E Real Client Client connects to local node and transitions to connected state 
-ActivePeer(127.0.0.1:50002) socket closed
-00:08 +16 -1: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/e2e/client_ping_pong_test.dart: E2E Real Client PING/PONG Client exchanges PING/PONG over encrypted channel    Shell: 2025-12-30 21:35:12,138 [Thread-1 - shutdownhook] INFO  im.redpanda.App - started shutdownhook...
-Shell: 2025-12-30T20:35:12.139642Z pool-1-thread-1 INFO Stopping configuration XmlConfiguration[location=jar:file:/Users/rbb/Documents/AI%20Test/redpanda/references/redPandaj/target/redpanda.jar!/log4j2.xml, lastModified=1970-01-01T00:00:00Z]...
-00:08 +16 -1: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/e2e/client_ping_pong_test.dart: E2E Real Client PING/PONG Client exchanges PING/PONG over encrypted channel    
-ActivePeer(127.0.0.1:59558): Received ping (Encrypted). Sending pong...
-ActivePeer(127.0.0.1:59558): Sending pong...
-ActivePeer(127.0.0.1:50003): Received ping (Encrypted). Sending pong...
-ActivePeer(127.0.0.1:50003): Sending pong...
-RedPandaLightClient: Running connection check. Known peers: 5
-ActivePeer(127.0.0.1:50003): Sending Ping (Latency Check)...
-RedPandaLightClient: Removing disconnected peer 195.201.25.223:59558
-RedPandaLightClient: Removing disconnected peer redpanda.im:59559
-ActivePeer(127.0.0.1:59558): Sending Ping (Latency Check)...
-ActivePeer(127.0.0.1:50003): Received pong (Encrypted).
-ActivePeer(127.0.0.1:50003): Latency updated to 1ms (current: 1ms)
-ActivePeer(127.0.0.1:59558): Received pong (Encrypted).
-ActivePeer(127.0.0.1:59558): Latency updated to 1ms (current: 1ms)
-ActivePeer(65.109.130.115:59558): Connecting...
-ActivePeer(65.109.130.115:59558): TCP Connected. Sending Handshake...
-ActivePeer(65.109.130.115:59558): Handshake sent (30 bytes)
-ActivePeer(65.109.130.115:59558): Handshake Verified.
-ActivePeer(65.109.130.115:59558): Requesting Peer Public Key...
-ActivePeer(65.109.130.115:59558): Received activateEncryption
-ActivePeer(65.109.130.115:59558): Initiating Encryption Handshake...
-ActivePeer(65.109.130.115:59558): Sent activateEncryption request.
-ActivePeer(65.109.130.115:59558): Peer Public Key missing. Deferring encryption finalization.
-ActivePeer(65.109.130.115:59558): Received sendPublicKey
-ActivePeer(65.109.130.115:59558): Peer Public Key Parsed.
-ActivePeer(65.109.130.115:59558): Found pending encryption request. Finalizing now.
-ActivePeer(65.109.130.115:59558): Finalizing Encryption...
-ActivePeer(65.109.130.115:59558): Encryption Active!
-ActivePeer(65.109.130.115:59558): Sending Initial ping (Encrypted)...
-ActivePeer(65.109.130.115:59558): Requesting Peer List (Encrypted)...
-ActivePeer(65.109.130.115:59558): Received ping (Encrypted). Sending pong...
-ActivePeer(65.109.130.115:59558): Sending pong...
-ActivePeer(65.109.130.115:59558): Received sendPeerList
-RedPandaLightClient: Received 6 peers from 65.109.130.115:59558
-ActivePeer(127.0.0.1:50003): Received ping (Encrypted). Sending pong...
-ActivePeer(127.0.0.1:50003): Sending pong...
-ActivePeer(127.0.0.1:50003) socket closed
-ActivePeer(127.0.0.1:59558) socket closed
-ActivePeer(65.109.130.115:59558) socket closed
-00:11 +17 -1: /Users/rbb/Documents/AI Test/redpanda/packages/redpanda_light_client/test/e2e/client_ping_pong_test.dart: E2E Real Client PING/PONG Client exchanges PING/PONG over encrypted channel    00:11 +17 -1: Some tests failed.                                                                                                                                                                       
