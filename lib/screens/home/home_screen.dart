@@ -76,12 +76,6 @@ class _GlassTopBar extends StatelessWidget implements PreferredSizeWidget {
                 ),
               ),
               const ConnectionStatusBadge(),
-              IconButton(
-                icon: const Icon(Icons.settings_outlined),
-                onPressed: () {
-                  // TODO: Settings
-                },
-              ),
             ],
           ),
         ),

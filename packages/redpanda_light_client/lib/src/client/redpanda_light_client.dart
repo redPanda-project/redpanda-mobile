@@ -53,15 +53,9 @@ import 'package:redpanda_light_client/src/network/active_peer.dart';
 
 /// The implementation of the RedPanda Light Client.
 /// Manages network connections, encryption, and routing.
-
-/// The implementation of the RedPanda Light Client.
-/// Manages network connections, encryption, and routing.
 class RedPandaLightClient implements RedPandaClient {
   final NodeId selfNodeId;
   final KeyPair selfKeys;
-
-  // TODO: Inject NetworkManager/ConnectionManager
-  // final NetworkManager _networkManager;
 
   final _connectionStatusController =
       StreamController<ConnectionStatus>.broadcast();
