@@ -474,7 +474,19 @@ if has_scenario s4; then
   # node logged it while `bob_net down` was still returning (T89c).
   S4_NODE_MARK="$(node_log_lines)"
   bob_net down
-  sleep 3   # let the disconnect propagate before Alice sends
+  # A fixed sleep here is a race: `airplane-mode enable` returns (and reports
+  # "enabled") before the guest's network teardown has actually severed the
+  # established TCP socket to the node. On a loaded host that teardown took
+  # >3 s and Alice's S4 message slipped through the still-open connection,
+  # arriving DURING the blackout (gate run 2026-08-18, reconnectDeliveryMs
+  # -90661). Verify from inside Bob's guest that the host is unreachable
+  # before green-lighting Alice.
+  for _ in $(seq 1 30); do
+    adb -s "$SERIAL_BOB" shell ping -c1 -W1 10.0.2.2 >/dev/null 2>&1 || break
+    sleep 1
+  done
+  adb -s "$SERIAL_BOB" shell ping -c1 -W1 10.0.2.2 >/dev/null 2>&1 \
+    && die "S4: 10.0.2.2 still reachable 30s after airplane-mode enable — cut ineffective"
   kv_put s4-net-down host
   wait_kv "sent-e2e-s4" 300
   # The silence has to outlast the node's ping timeout — see the
