@@ -405,12 +405,20 @@ Future<void> openChat(WidgetTester tester) async {
 
 /// Sends [text] through the chat UI and stamps `sent-<text>` on the coord
 /// server (server-side timestamp — the delivery clock starts here).
+///
+/// The stamp goes out BEFORE the send tap: the tap dispatches the actual
+/// network send, and with a loopback node delivery can complete in tens of
+/// milliseconds — faster than our own `sent-` PUT when this emulator's vCPU
+/// is starved. Stamping afterwards let the peer's `recv-` PUT win the race
+/// to the coord server, which reported as a negative latency and failed the
+/// run (TD046; -167/-47 ms on 2026-08-17/18). Stamping first can only
+/// overestimate latency by the tap dispatch time, never produce a negative.
 Future<void> sendChatMessage(WidgetTester tester, String text) async {
   await setTextField(tester, text);
   await tester.pump();
+  await kvPut('sent-$text', role);
   await tester.tap(find.byIcon(Icons.send));
   await tester.pump();
-  await kvPut('sent-$text', role);
   log('sent message: "$text"');
 }
 
