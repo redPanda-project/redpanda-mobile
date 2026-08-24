@@ -4,11 +4,15 @@
 
 Run `tool/pre_push_validation.sh` (the **Pre-Push Validation** skill,
 `.claude/skills/pre-push-validation/SKILL.md`) before every `report_progress` call.
-It mirrors the CI pipeline exactly and catches formatting, analysis, and test
-failures before they reach GitHub Actions. Its exit code / last line
-(`PRE_PUSH_VALIDATION_OK`) is the only valid verdict — never reconstruct the
-steps as an ad-hoc `cmd | tail && echo OK` chain, a pipe swallows the failing
-exit code (TD048).
+It mirrors the CI pipeline step by step (the node-backed E2E suites are opt-in
+via `--with-e2e` — **required** when `packages/redpanda_light_client/lib` or
+`test/e2e` changed, since CI always runs them) and catches formatting, analysis,
+and test failures before they reach GitHub Actions. A pass is exit code 0 **and**
+the last line `PRE_PUSH_VALIDATION_OK` — never reconstruct the steps as an
+ad-hoc `cmd | tail && echo OK` chain, and never pipe the script itself into
+`tail`: a pipe swallows the failing exit code (TD048). The script prints the
+local toolchain version; that, not the pinned version text further down (stale
+until T98), is what your formatting ran on.
 
 ## Key Rules
 
@@ -23,7 +27,7 @@ exit code (TD048).
 ## Validation Steps Summary
 
 1. **Light Client** (`packages/redpanda_light_client`):
-   `flutter pub get` → `dart format --output=none --set-exit-if-changed .` → `flutter analyze` → `flutter test`
+   `flutter pub get` → `dart format --output=none --set-exit-if-changed .` → `flutter analyze` → `flutter test --exclude-tags e2e` → `flutter test --tags e2e --concurrency=1` (E2E: `--with-e2e`)
 
 2. **Main App** (project root):
    `flutter pub get` → `dart format --output=none --set-exit-if-changed .` → `dart run build_runner build --delete-conflicting-outputs` → `flutter analyze` → `flutter test`

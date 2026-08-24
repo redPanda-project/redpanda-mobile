@@ -34,7 +34,9 @@ Flutter must be on `PATH`. Locally the toolchain lives in `~/tools/flutter`
 (`export PATH=~/tools/flutter/bin:$PATH`). CI uses `flutter-version: '3.x'` on
 the `stable` channel, i.e. whatever the **latest stable** is at run time — keep
 the local Flutter on current stable (`flutter upgrade`) so `dart format` agrees
-with CI (formatter output changes between Dart minor versions).
+with CI (formatter output changes between Dart minor versions). The E2E suites
+additionally need Java 21 (`~/tools/jdk`, CI: Temurin 21) and a backend JAR
+(see `--with-e2e` below).
 
 ### 1 · Light Client Package (`packages/redpanda_light_client`)
 
@@ -49,8 +51,11 @@ dart format --output=none --set-exit-if-changed .
 # 1c) Static analysis
 flutter analyze
 
-# 1d) Run tests
-flutter test
+# 1d) Unit tests (everything except the node-backed E2E suites)
+flutter test --exclude-tags e2e
+
+# 1e) E2E suites — CI always runs these, serially; locally via --with-e2e
+flutter test --tags e2e --concurrency=1
 ```
 
 > **Important:** Formatting checks ALL files in the directory, not just changed files.
@@ -100,20 +105,40 @@ tool/pre_push_validation.sh             # full run (E2E suites opt-in: --with-e2
 
 The script runs the steps above in CI order with `set -euo pipefail`, stops at
 the first failure and prints exactly one verdict as its last line:
-`PRE_PUSH_VALIDATION_OK` or `PRE_PUSH_VALIDATION_FAILED: <step>`. Its exit code
-is the verdict; nothing else is.
+`PRE_PUSH_VALIDATION_OK` or `PRE_PUSH_VALIDATION_FAILED: <step>` (usage and
+toolchain errors also print a `FAILED:` line and exit 2). A pass is **exit 0
+AND the `OK` line** — check both.
 
 > **Why a script (TD048, 2026-08-18):** an ad-hoc chain like
 > `dart format --set-exit-if-changed . | tail -3 && echo OK` reports OK even
 > when `dart format` fails, because a pipeline returns the status of its LAST
-> command (`tail`). Same for `cmd 2>&1 | grep …`. If you must post-process
-> output, run the script and read its final line — never pipe the individual
-> steps.
+> command (`tail`). Same for `cmd 2>&1 | grep …` — and the same trap applies
+> to the script itself: `tool/pre_push_validation.sh | tail -1; echo $?`
+> prints `tail`'s status. If you need the output in a file, use
+>
+> ```bash
+> tool/pre_push_validation.sh 2>&1 | tee validation.log; rc=${PIPESTATUS[0]}
+> ```
+>
+> and judge by `$rc` plus the last line of `validation.log`.
 
-Flags: `--with-e2e` also runs the node-backed E2E suites exactly as CI does
-(needs `references/redPandaj/target/redpanda.jar`); `--skip-tests` is a quick
-format/analyze/build_runner loop while iterating and is **not** sufficient
-before a push.
+Flags: `--with-e2e` also runs the node-backed E2E suites (`--tags e2e
+--concurrency=1`, like CI). CI **always** runs them; locally they are opt-in
+because they take ~20 min — so a default run ends with a `WARNING: E2E suites
+NOT run` line before the `OK`. **Pass `--with-e2e` before pushing anything that
+touches `packages/redpanda_light_client/lib` or `test/e2e`.** It needs Java 21
+and a non-empty backend JAR at `references/redPandaj/target/redpanda.jar` or
+`redpandaj/target/redpanda.jar` (the script fails fast if either is missing,
+because the suites would otherwise *skip*, not fail); CI always downloads the
+latest redpandaj release — keep the local JAR current with
+`gh release download latest --repo redPanda-project/redpandaj --pattern redpanda.jar --dir references/redPandaj/target`.
+`--skip-tests` is a quick format/analyze/build_runner loop while iterating
+and is **not** sufficient before a push.
+
+A newer local Flutter may rewrite `analysis_options.yaml` / `pubspec.lock`
+during `pub get`/`analyze` (TD050); the script lists such newly dirtied files at
+the end — do not commit them by accident, and never `git checkout --` them
+together with real changes.
 
 ---
 
@@ -136,7 +161,8 @@ Use this checklist to track progress:
 - [ ] Light Client: `flutter pub get`
 - [ ] Light Client: `dart format --output=none --set-exit-if-changed .`
 - [ ] Light Client: `flutter analyze`
-- [ ] Light Client: `flutter test`
+- [ ] Light Client: `flutter test --exclude-tags e2e`
+- [ ] Light Client: `flutter test --tags e2e --concurrency=1` (`--with-e2e`; required for lib/ or test/e2e changes)
 - [ ] App: `flutter pub get`
 - [ ] App: `dart format --output=none --set-exit-if-changed .`
 - [ ] App: `dart run build_runner build --delete-conflicting-outputs`
