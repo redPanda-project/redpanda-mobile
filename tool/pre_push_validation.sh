@@ -47,7 +47,16 @@ if [ "$WITH_E2E" -eq 1 ] && [ "$SKIP_TESTS" -eq 1 ]; then
   fail_usage "--with-e2e and --skip-tests contradict each other"
 fi
 
-SCRIPT_PATH="$(readlink -f "$0")"
+# Resolve symlinks without `readlink -f` (absent on macOS/BSD).
+resolve_path() {
+  local p="$1" t
+  while [ -L "$p" ]; do
+    t="$(readlink "$p")"
+    case "$t" in /*) p="$t" ;; *) p="$(dirname "$p")/$t" ;; esac
+  done
+  printf '%s\n' "$p"
+}
+SCRIPT_PATH="$(resolve_path "$0")"
 REPO_ROOT="$(git -C "$(dirname "$SCRIPT_PATH")" rev-parse --show-toplevel)"
 PKG_DIR="$REPO_ROOT/packages/redpanda_light_client"
 CURRENT_STEP="(startup)"
@@ -71,8 +80,11 @@ command -v flutter >/dev/null 2>&1 \
   || fail_usage "flutter not on PATH (local toolchain: export PATH=~/tools/flutter/bin:\$PATH)"
 command -v dart >/dev/null 2>&1 || fail_usage "dart not on PATH"
 
+# No `cmd | head -1` here: under pipefail a SIGPIPE from the producer would
+# fail the whole run. Capture, then print the first line.
 step "0. toolchain"
-flutter --version | head -1
+FLUTTER_VER="$(flutter --version)"
+echo "${FLUTTER_VER%%$'\n'*}"
 dart --version
 echo "CI resolves flutter-version '3.x' on the stable channel = latest stable at run time;"
 echo "if your local Dart differs, 'dart format' may disagree with CI — run 'flutter upgrade' (T98)."
@@ -80,7 +92,8 @@ echo "if your local Dart differs, 'dart format' may disagree with CI — run 'fl
 if [ "$WITH_E2E" -eq 1 ]; then
   command -v java >/dev/null 2>&1 \
     || fail_usage "--with-e2e needs java on PATH (CI: Temurin 21; local: export PATH=~/tools/jdk/bin:\$PATH)"
-  java -version 2>&1 | head -1
+  JAVA_VER="$(java -version 2>&1)"
+  echo "${JAVA_VER%%$'\n'*}"
   JAR=""
   for cand in "$REPO_ROOT/references/redPandaj/target/redpanda.jar" "$REPO_ROOT/redpandaj/target/redpanda.jar"; do
     if [ -s "$cand" ]; then JAR="$cand"; break; fi
@@ -88,11 +101,12 @@ if [ "$WITH_E2E" -eq 1 ]; then
   # The E2E suites SKIP (not fail) when the JAR is missing, so an absent JAR
   # would otherwise yield a hollow PRE_PUSH_VALIDATION_OK.
   [ -n "$JAR" ] || fail_usage "--with-e2e needs a non-empty backend JAR at references/redPandaj/target/redpanda.jar (or redpandaj/target/redpanda.jar); CI downloads the latest redpandaj release: gh release download latest --repo redPanda-project/redpandaj --pattern redpanda.jar --dir references/redPandaj/target"
-  echo "E2E backend JAR: $JAR ($(stat -c '%s bytes, modified %y' "$JAR"))"
+  echo "E2E backend JAR: $JAR ($(wc -c < "$JAR" | tr -d ' ') bytes)"
+  ls -l "$JAR"
   echo "NOTE: CI always uses the LATEST redpandaj release; make sure this JAR is current."
 fi
 
-TREE_BEFORE="$(git -C "$REPO_ROOT" status --porcelain)"
+TREE_BEFORE="$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no)"
 
 # --- Light client package ---------------------------------------------------
 step "cd packages/redpanda_light_client"
@@ -148,7 +162,7 @@ if [ "$SKIP_TESTS" -eq 0 ]; then
 fi
 
 # --- Side effects ------------------------------------------------------------
-TREE_AFTER="$(git -C "$REPO_ROOT" status --porcelain)"
+TREE_AFTER="$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no)"
 if [ "$TREE_BEFORE" != "$TREE_AFTER" ]; then
   echo
   echo "NOTE: this run changed tracked files (toolchain rewrite, see TD050) — review before committing:"
