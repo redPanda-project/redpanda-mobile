@@ -3,9 +3,10 @@
 Two headless Android emulators (Alice + Bob) chat with each other through a
 **local** backend node — the deterministic, host-only variant of the desktop
 duo E2E. This is a local loop tool; it does **not** run in GitHub CI (it
-needs KVM, an Android system image and roughly 5 GB of effective free
-RAM — run.sh measures this up front and refuses to start when the host
-cannot hold a full run, see "Known limits").
+needs KVM, an Android system image and ~4.5 GB of effective free RAM by
+default — run.sh computes and prints the exact threshold up front and
+refuses to start when the host cannot hold a full run, see "Known
+limits").
 
 ## Scenarios
 
@@ -153,6 +154,7 @@ triaged as "the gate flaked" or "the gate found something" without opening a
 | `clients.<role>.hostNodeNotConnected` / `noActivePeer` | mailbox polls that found no usable connection. Whole-run totals — only the node counters are sliced per scenario — and in a healthy run nearly all of them fall in the S4 silence (~20 at 90 s); the T88 run had 171 |
 | `clients.<role>.clientInitialized` / `connectRoutineStarts` | 1 per app process (Bob has 2: S3 restarts him) — higher means the worker was recreated |
 | `clients.<role>.pollCycles` / `testTimeouts` | poll activity, and how often the in-app test gave up on a `pumpUntil` |
+| `clients.<role>.lmkdKills` | `lmkd` lines in the logcat — with real 1024 MB guests (T101) the in-guest lowmemorykiller is a possible failure mode; >0 alongside a dead app means the guest, not the host, took it |
 
 ## Known limits
 

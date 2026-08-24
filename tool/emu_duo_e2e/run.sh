@@ -98,8 +98,14 @@ kill_our_emulator() { # serial avd_name
 
 cleanup() {
   set +e
-  [[ -n "${MEM_SAMPLER_PID:-}" ]] && kill "$MEM_SAMPLER_PID" 2>/dev/null
-  declare -F summarize_mem >/dev/null && log "mem (T101): $(summarize_mem)"
+  # Summarize only when THIS invocation started the sampler — a pre-flight
+  # abort would otherwise report a stale mem.csv from a previous run as if
+  # it were this run's telemetry (Copilot finding, PR #101).
+  if [[ -n "${MEM_SAMPLER_PID:-}" ]]; then
+    kill "$MEM_SAMPLER_PID" 2>/dev/null
+    wait "$MEM_SAMPLER_PID" 2>/dev/null
+    log "mem (T101): $(summarize_mem)"
+  fi
   log "cleanup: stopping emulators, node, coord server"
   for pid in "${LOGCAT_PIDS[@]:-}"; do [[ -n "$pid" ]] && kill "$pid" 2>/dev/null; done
   kill_our_emulator "$SERIAL_ALICE" rp_alice
@@ -182,6 +188,8 @@ client_counters_json() { # logcat file
     "$(count_pat "$f" 'RedPandaIsolateClient: worker isolate died.')" \
     "$(count_pat "$f" 'RedPandaIsolateClient: respawning worker')" \
     "$(count_pat "$f" 'Isolate not ready. Dropping command')"
+  printf '"lmkdKills": %s, ' \
+    "$(count_pat "$f" "lmkd")"
   printf '"hostNodeNotConnected": %s, "noActivePeer": %s, "pollCycles": %s, "testTimeouts": %s}' \
     "$(count_pat "$f" 'not connected — requesting a connection')" \
     "$(count_pat "$f" 'fetchMessages() no active peer available')" \
@@ -199,7 +207,11 @@ collect_counters() {
   for pair in "alice:$SERIAL_ALICE:rp_alice" "bob:$SERIAL_BOB:rp_bob"; do
     IFS=: read -r mrole mserial mavd <<<"$pair"
     adb -s "$mserial" shell cat /proc/meminfo >"$ART/guest-meminfo-$mrole.txt" 2>/dev/null || true
-    mpid="$(pgrep -f -- "avd $mavd" 2>/dev/null | head -1)" || mpid=""
+    # Heaviest match, not first PID: a light launcher/wrapper process can
+    # share the cmdline fragment with the actual qemu engine.
+    mpid="$(for mp in $(pgrep -f -- "avd $mavd" 2>/dev/null || true); do
+      echo "$(awk '/^VmRSS:/{print $2}' "/proc/$mp/status" 2>/dev/null || echo 0) $mp"
+    done | sort -rn | head -1 | cut -d' ' -f2)"
     [[ -n "$mpid" ]] && { cat "/proc/$mpid/smaps_rollup" >"$ART/qemu-smaps-$mrole.txt" 2>/dev/null || true; }
   done
   dup_total="$(count_pat "$log" 'duplicate parallel connection from the same identity')"
@@ -265,8 +277,12 @@ start_mem_sampler() {
   local t0
   t0=$(date +%s)
   (
+    # The subshell inherits `set -e`: without the guards a single transient
+    # failure (a /proc entry vanishing mid-read) would silently end the
+    # sampler for the rest of a 45-min run.
+    set +e
     while :; do
-      echo "$(( $(date +%s) - t0 )),$(( $(mem_kb MemAvailable) / 1024 )),$(( $(mem_kb SwapFree) / 1024 )),$(rss_mb_of "avd rp_alice"),$(rss_mb_of "avd rp_bob"),$(rss_mb_of "redpanda\.jar")" >>"$ART/mem.csv"
+      echo "$(( $(date +%s) - t0 )),$(( $(mem_kb MemAvailable) / 1024 )),$(( $(mem_kb SwapFree) / 1024 )),$(rss_mb_of "avd rp_alice"),$(rss_mb_of "avd rp_bob"),$(rss_mb_of "redpanda\.jar")" >>"$ART/mem.csv" || true
       sleep 5
     done
   ) &
@@ -345,9 +361,21 @@ if port_open "$COORD_PORT"; then die "port $COORD_PORT already in use"; fi
 # (zygote preloads, dead app heaps) swap out fine, and MemAvailable alone
 # underestimates what a run survives (2026-08-18 evidence: green gate with
 # ~5.3 GB free). Override with RP_MIN_AVAIL_MB; 0 disables the check.
-QEMU_OVERHEAD_MB=800   # RSS(qemu) minus guest RAM, measured (~0.7 GB) + margin
+# RSS(qemu) minus guest RAM, measured ~0.7 GB + margin — calibrated at
+# 1024 MB guests on this host; NOT proportional to guest size. Re-measure
+# via mem.csv before trusting the pre-flight with a much larger RP_AVD_RAM_MB.
+QEMU_OVERHEAD_MB=800
+# A non-numeric override must die loudly: `[[ "$MIN_AVAIL_MB" -gt 0 ]]` with
+# a non-integer merely returns false under `if`, which would silently skip
+# exactly the safety check this exists for.
+[[ "$AVD_RAM_MB" =~ ^[0-9]+$ ]] || die "RP_AVD_RAM_MB must be a number of MB (got '$AVD_RAM_MB')"
 MIN_AVAIL_MB="${RP_MIN_AVAIL_MB:-$(( 2 * (AVD_RAM_MB + QEMU_OVERHEAD_MB) + 512 + 256 ))}"
-mem_kb() { awk -v k="$1:" '$1 == k {print $2}' /proc/meminfo; }
+[[ "$MIN_AVAIL_MB" =~ ^[0-9]+$ ]] || die "RP_MIN_AVAIL_MB must be a number of MB, 0 disables (got '$MIN_AVAIL_MB')"
+mem_kb() { # -> value in kB, 0 when the key is missing (empty would be a fatal arithmetic syntax error)
+  local v
+  v="$(awk -v k="$1:" '$1 == k {print $2}' /proc/meminfo 2>/dev/null)" || v=""
+  echo "${v:-0}"
+}
 if [[ "$MIN_AVAIL_MB" -gt 0 ]]; then
   MEM_AVAILABLE_MB=$(( $(mem_kb MemAvailable) / 1024 ))
   SWAP_FREE_MB=$(( $(mem_kb SwapFree) / 1024 ))
@@ -391,7 +419,7 @@ tune_avd() { # name
   # then write ours. The emulator clamps this value up to the image minimum
   # (2560 MB here) anyway — the effective size comes from `-qemu -m` in
   # boot_avd; the config entry documents intent and keeps tooling honest.
-  sed -i -E '/^hw\.ramSize[ =]/d; /^hw\.ram\.size[ =]?/d' "$cfg"
+  sed -i -E '/^hw\.ramSize[ =]/d; /^hw\.ram\.size[ =]/d' "$cfg"
   for kv in "hw.ramSize=$AVD_RAM_MB" "hw.cpu.ncore=2" "hw.keyboard=yes" \
             "hw.gpu.mode=swiftshader_indirect" "disk.dataPartition.size=2048M"; do
     local key="${kv%%=*}"
@@ -487,6 +515,19 @@ boot_avd() { # name console_port serial
     sleep 2
   done
   [[ "$booted" == "1" ]] || die "AVD $1 did not finish booting within 6 minutes"
+  # T101: the -qemu -m override beats the emulator's clamped value only by
+  # "last -m wins", which is measured behaviour, not documented qemu API —
+  # verify the guest really got the requested size so a regression shows up
+  # as a WARNING here instead of as an unexplained OOM later.
+  local guest_total_kb guest_mb
+  guest_total_kb="$(adb -s "$3" shell cat /proc/meminfo 2>/dev/null | awk '/^MemTotal:/{print $2}')" || guest_total_kb=""
+  if [[ "$guest_total_kb" =~ ^[0-9]+$ ]]; then
+    guest_mb=$(( guest_total_kb / 1024 ))
+    log "AVD $1 guest MemTotal: ${guest_mb} MB (requested $AVD_RAM_MB)"
+    if (( guest_mb > AVD_RAM_MB + AVD_RAM_MB / 4 )); then
+      log "WARNING: guest RAM is >25% above the requested size — the -qemu -m override did not stick; expect ~$(( guest_mb + QEMU_OVERHEAD_MB )) MB RSS for this emulator"
+    fi
+  fi
   # Keep the (headless) device awake and predictable for widget taps.
   adb -s "$3" shell svc power stayon true || true
   adb -s "$3" shell input keyevent 82 || true
