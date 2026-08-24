@@ -3,7 +3,9 @@
 Two headless Android emulators (Alice + Bob) chat with each other through a
 **local** backend node — the deterministic, host-only variant of the desktop
 duo E2E. This is a local loop tool; it does **not** run in GitHub CI (it
-needs KVM, an Android system image and ~4 GB of free RAM).
+needs KVM, an Android system image and roughly 5 GB of effective free
+RAM — run.sh measures this up front and refuses to start when the host
+cannot hold a full run, see "Known limits").
 
 ## Scenarios
 
@@ -89,12 +91,16 @@ an apk rebuild.
 
 The script:
 
-1. creates the AVDs `rp_alice` / `rp_bob` once (API 35, 1536 MB RAM, 2 cores,
+1. checks the host RAM budget (T101 pre-flight: `MemAvailable` plus half the
+   free swap must cover two emulators, the node and headroom — it aborts with
+   the numbers instead of letting the OOM killer end the run 15 minutes in;
+   override with `RP_MIN_AVAIL_MB`, `0` disables),
+2. creates the AVDs `rp_alice` / `rp_bob` once (API 35, 1024 MB RAM, 2 cores,
    swiftshader) and reuses them afterwards,
-2. builds ONE debug apk with `integration_test/emu_duo_e2e_test.dart` as the
+3. builds ONE debug apk with `integration_test/emu_duo_e2e_test.dart` as the
    entrypoint (`RP_SEEDS`/`RP_COORD` are dart-defines; the role is derived
    from the AVD name at runtime, so both emulators run the identical apk),
-3. starts the local node with `PORT=59558 REDPANDA_KNOWN_NODES=none` and
+4. starts the local node with `PORT=59558 REDPANDA_KNOWN_NODES=none` and
    the coord server (`tool/emu_duo_e2e/coord_server.dart`). `none` (T29)
    starts the node without any bootstrap peers and keeps it isolated:
    peers gossiped from other nodes have addresses that are wrong or
@@ -103,13 +109,13 @@ The script:
    default known nodes (which include `127.0.0.1:59558`). Before T29 the
    harness used the blackhole seed `127.0.0.1:9` instead; `none` requires
    the jar from the 2026-07-19 release or newer.
-4. boots the emulators sequentially (tight RAM), installs the apk (app data
+5. boots the emulators sequentially (tight RAM), installs the apk (app data
    is wiped via `pm clear` so reused AVDs still start fresh), launches the
    app on both,
-5. orchestrates the lifecycle scenarios: S3 (force-stop Bob → Alice sends →
+6. orchestrates the lifecycle scenarios: S3 (force-stop Bob → Alice sends →
    restart with `bob_phase=resume-s3`) and S4 (airplane mode on → Alice
    sends → silence → airplane mode off), and
-6. waits for both verdicts, then writes the artifacts.
+7. waits for both verdicts, then writes the artifacts.
 
 Exit code 0 iff both roles report `ok:true` AND S1 stayed within its 30 s
 budget AND (with s3 enabled) the catch-up stayed within the 60 s budget AND
@@ -124,6 +130,8 @@ node actually evicted the stale peer during the silence.
 | `counters.json` | the same counter block, written straight to disk so it survives a run that dies before the report can be fetched |
 | `alice.logcat`, `bob.logcat` | full logcat per emulator (`flutter: [emu-duo]` lines are the test's own log) |
 | `node.log`, `coord.log`, `emulator-*.log` | host-side process logs |
+| `mem.csv` | T101 memory samples (5 s interval): `MemAvailable`, free swap, RSS of each qemu and the node — the peaks are also printed at the end of every run, including failed ones |
+| `guest-meminfo-*.txt`, `qemu-smaps-*.txt` | one guest `/proc/meminfo` + host `smaps_rollup` snapshot per emulator, taken when counters are collected — tells guest page cache from qemu-side overhead |
 
 ### Run counters (T89c)
 
@@ -148,16 +156,19 @@ triaged as "the gate flaked" or "the gate found something" without opening a
 
 ## Known limits
 
-- RAM: two emulators à 1.5 GB + JVM node need roughly 4 GB free; the apk is
-  built before the emulators boot and the gradle daemon is stopped to make
-  room. Do not run RAM-heavy jobs in parallel. The number that actually
-  decides is the qemu *resident* size, which grows to ~2.9 GB per emulator
-  towards the end of a full s1-s4 run — on a host that cannot hold that, the
-  OOM killer takes one emulator out mid-scenario (`Getötet` in the run log,
-  `Out of memory: Killed process … qemu-system-x86` in `dmesg`) and the gate
-  fails with whatever the surviving side happened to be waiting for. Lower
-  the guest RAM with `RP_AVD_RAM_MB=1280` on such a host rather than reading
-  the resulting verdict as a finding.
+- RAM: the number that decides is the qemu *resident* size ≈ guest RAM +
+  ~0.7 GB qemu-side overhead per emulator (measured per run in `mem.csv`).
+  Until T101 (2026-08-24) the `RP_AVD_RAM_MB` knob was dead: the script
+  wrote the wrong config key (`hw.ram.size` instead of `hw.ramSize`) and
+  the emulator clamps even the right key up to the image minimum
+  ("Increasing RAM size to 2560MB"), so every run booted 2.5 GB guests and
+  the pair peaked near 3 GB resident *each* — which is how the OOM killer
+  (or systemd-oomd) kept ending runs on an 8 GB host with a desktop session
+  (`Getötet`/`Beendet` in the run log, `Out of memory: Killed process …
+  qemu-system-x86` in `dmesg`). run.sh now passes the size directly to qemu
+  (`-qemu -m`), the apk is built before the emulators boot, the gradle
+  daemon is stopped, and the T101 pre-flight refuses to start a run the
+  host cannot hold. Do not run RAM-heavy jobs in parallel.
 - The QR *scan* is bypassed (headless emulators have no camera); everything
   else drives the real UI. On the creator side the peer-OH import writes only
   the peer-OH columns instead of re-scanning — a real scan would go through
