@@ -30,15 +30,11 @@ fix the problem, and restart the validation from the beginning.
 
 ### 0. Environment Setup
 
-Flutter must be available. The CI uses `flutter-version: '3.x'` on the
-`stable` channel (currently resolves to **Flutter 3.41.2 / Dart 3.11.0**).
-
-```bash
-# If flutter is not already on PATH:
-curl -fsSL https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.41.2-stable.tar.xz \
-  | tar xJ -C /opt/
-export PATH="/opt/flutter/bin:/opt/flutter/bin/cache/dart-sdk/bin:$PATH"
-```
+Flutter must be on `PATH`. Locally the toolchain lives in `~/tools/flutter`
+(`export PATH=~/tools/flutter/bin:$PATH`). CI uses `flutter-version: '3.x'` on
+the `stable` channel, i.e. whatever the **latest stable** is at run time — keep
+the local Flutter on current stable (`flutter upgrade`) so `dart format` agrees
+with CI (formatter output changes between Dart minor versions).
 
 ### 1 · Light Client Package (`packages/redpanda_light_client`)
 
@@ -59,7 +55,8 @@ flutter test
 
 > **Important:** Formatting checks ALL files in the directory, not just changed files.
 > If any file has formatting issues (including pre-existing ones from main),
-> this step fails.
+> this step fails — and it must be allowed to: never wrap it in a pipe or
+> `|| true` (see Quick-Run Script).
 
 > **Important:** `flutter analyze` treats `info` level issues as errors
 > (exit code 1). Common issues:
@@ -94,43 +91,29 @@ if [ -d "test" ]; then flutter test; else echo "No test directory, skipping."; f
 
 ## Quick-Run Script
 
-Copy-paste this to run all steps at once:
+**Use the checked-in script — do not hand-roll a shell chain:**
 
 ```bash
-export PATH="/opt/flutter/bin:/opt/flutter/bin/cache/dart-sdk/bin:$PATH"
-REPO_ROOT="/home/runner/work/redpanda-mobile/redpanda-mobile"
-
-set -e  # Stop on first error
-
-echo "=== 1. pub get (light client) ==="
-cd "$REPO_ROOT/packages/redpanda_light_client" && flutter pub get
-
-echo "=== 2. dart format (light client) ==="
-dart format --output=none --set-exit-if-changed .
-
-echo "=== 3. flutter analyze (light client) ==="
-flutter analyze
-
-echo "=== 4. flutter test (light client) ==="
-flutter test
-
-echo "=== 5. pub get (app) ==="
-cd "$REPO_ROOT" && flutter pub get
-
-echo "=== 6. dart format (app) ==="
-dart format --output=none --set-exit-if-changed .
-
-echo "=== 7. build_runner (app) ==="
-dart run build_runner build --delete-conflicting-outputs
-
-echo "=== 8. flutter analyze (app) ==="
-flutter analyze
-
-echo "=== 9. flutter test (app) ==="
-if [ -d "test" ]; then flutter test; else echo "No tests."; fi
-
-echo "✅ All checks passed!"
+export PATH=~/tools/flutter/bin:$PATH   # local toolchain; CI installs its own
+tool/pre_push_validation.sh             # full run (E2E suites opt-in: --with-e2e)
 ```
+
+The script runs the steps above in CI order with `set -euo pipefail`, stops at
+the first failure and prints exactly one verdict as its last line:
+`PRE_PUSH_VALIDATION_OK` or `PRE_PUSH_VALIDATION_FAILED: <step>`. Its exit code
+is the verdict; nothing else is.
+
+> **Why a script (TD048, 2026-08-18):** an ad-hoc chain like
+> `dart format --set-exit-if-changed . | tail -3 && echo OK` reports OK even
+> when `dart format` fails, because a pipeline returns the status of its LAST
+> command (`tail`). Same for `cmd 2>&1 | grep …`. If you must post-process
+> output, run the script and read its final line — never pipe the individual
+> steps.
+
+Flags: `--with-e2e` also runs the node-backed E2E suites exactly as CI does
+(needs `references/redPandaj/target/redpanda.jar`); `--skip-tests` is a quick
+format/analyze/build_runner loop while iterating and is **not** sufficient
+before a push.
 
 ---
 
