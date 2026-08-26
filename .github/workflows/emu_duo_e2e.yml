@@ -9,6 +9,10 @@ name: Emulator Duo E2E
 # Manual trigger only while this is a PoC. If it proves stable, wire it up as
 # a nightly + deploy gate.
 on:
+  # TEMPORARY (PoC test drive): trigger on pushes to this branch so the run
+  # can start before the file exists on main. Remove before merge.
+  push:
+    branches: [ feat/emu-e2e-ci-poc ]
   workflow_dispatch:
     inputs:
       scenarios:
@@ -81,7 +85,7 @@ jobs:
 
       - name: Run emulator duo E2E
         env:
-          RP_SCENARIOS: ${{ inputs.scenarios }}
+          RP_SCENARIOS: ${{ inputs.scenarios || 's1,s2,s3,s4' }}
         run: tool/emu_duo_e2e/run.sh
 
       - name: Upload artifacts
