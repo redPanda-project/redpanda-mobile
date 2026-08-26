@@ -83,6 +83,18 @@ jobs:
           flutter pub get
           dart run build_runner build --delete-conflicting-outputs
 
+      # TEMPORARY diagnostic (remove before merge): where does avdmanager on
+      # this image actually put the AVD? Run 32981944251 created it with exit 0
+      # but $HOME/.android/avd/rp_alice.avd/config.ini did not exist.
+      - name: Probe AVD creation
+        run: |
+          env | grep -i -E 'android|avd|xdg' || true
+          which avdmanager || true
+          echo no | avdmanager create avd -n rp_probe -k "system-images;android-35;google_apis;x86_64" || echo "avdmanager exit=$?"
+          find "$HOME" -maxdepth 5 -iname '*avd*' 2>/dev/null | head -20
+          find "$HOME" -name 'config.ini' -path '*avd*' 2>/dev/null | head
+          avdmanager delete avd -n rp_probe || true
+
       - name: Run emulator duo E2E
         env:
           RP_SCENARIOS: ${{ inputs.scenarios || 's1,s2,s3,s4' }}
