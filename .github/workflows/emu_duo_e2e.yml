@@ -86,14 +86,21 @@ jobs:
       # TEMPORARY diagnostic (remove before merge): where does avdmanager on
       # this image actually put the AVD? Run 32981944251 created it with exit 0
       # but $HOME/.android/avd/rp_alice.avd/config.ini did not exist.
+      # TEMPORARY diagnostic (remove before merge): run avdmanager exactly the
+      # way run.sh does (same PATH), but without the >/dev/null, and show where
+      # the AVD lands.
       - name: Probe AVD creation
         run: |
-          env | grep -i -E 'android|avd|xdg' || true
-          which avdmanager || true
-          echo no | avdmanager create avd -n rp_probe -k "system-images;android-35;google_apis;x86_64" || echo "avdmanager exit=$?"
-          find "$HOME" -maxdepth 5 -iname '*avd*' 2>/dev/null | head -20
-          find "$HOME" -name 'config.ini' -path '*avd*' 2>/dev/null | head
-          avdmanager delete avd -n rp_probe || true
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+          ls "$ANDROID_HOME/cmdline-tools/"
+          which avdmanager
+          set +e
+          echo no | avdmanager create avd -n rp_probe -k "system-images;android-35;google_apis;x86_64"
+          echo "create exit=$?"
+          set -e
+          echo "--- HOME/.android:"; find "$HOME/.android" -maxdepth 3 2>/dev/null || true
+          echo "--- HOME/.config:"; find "$HOME/.config" -maxdepth 3 -iname '*android*' -o -maxdepth 3 -iname '*avd*' 2>/dev/null || true
+          echo "--- avd config.ini anywhere under HOME:"; find "$HOME" -name 'config.ini' -path '*avd*' 2>/dev/null || true
 
       - name: Run emulator duo E2E
         env:
