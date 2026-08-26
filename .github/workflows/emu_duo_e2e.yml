@@ -9,10 +9,6 @@ name: Emulator Duo E2E
 # Manual trigger only while this is a PoC. If it proves stable, wire it up as
 # a nightly + deploy gate.
 on:
-  # TEMPORARY (PoC test drive): trigger on pushes to this branch so the run
-  # can start before the file exists on main. Remove before merge.
-  push:
-    branches: [ feat/emu-e2e-ci-poc ]
   workflow_dispatch:
     inputs:
       scenarios:
@@ -33,6 +29,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # MODE=0666 is deliberate: this is the unlock documented by GitHub for
+      # hosted runners (see changelog link above). The tighter alternative —
+      # kvm group + membership for the runner user — does not apply to the
+      # already-running job session without a re-login, and the runner VM is
+      # ephemeral and single-user anyway.
       - name: Enable KVM group permissions
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
