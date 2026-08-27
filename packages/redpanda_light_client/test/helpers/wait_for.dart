@@ -17,9 +17,11 @@ Future<void> waitFor(
   Duration timeout = const Duration(seconds: 5),
   String description = 'condition',
 }) async {
-  final deadline = DateTime.now().add(timeout);
+  // Stopwatch, not DateTime.now(): a wall-clock jump (NTP step, VM
+  // suspend/resume) must not shorten or stretch the budget.
+  final elapsed = Stopwatch()..start();
   while (!predicate()) {
-    if (DateTime.now().isAfter(deadline)) {
+    if (elapsed.elapsed > timeout) {
       fail('$description not met within $timeout');
     }
     await Future.delayed(const Duration(milliseconds: 10));
