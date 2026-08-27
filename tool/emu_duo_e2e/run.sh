@@ -28,15 +28,22 @@ export PATH="$JAVA_HOME/bin:$TOOLS/flutter/bin:$ANDROID_HOME/platform-tools:$AND
 COORD_PORT="${RP_COORD_PORT:-8123}"
 NODE_PORT="${RP_NODE_PORT:-59558}"
 SYSIMG="system-images;android-35;google_apis;x86_64"
-# Guest RAM per AVD. Overridable because the real cost is not this number but
-# the qemu RSS around it: two emulators reach ~2.9 GB resident each towards the
-# end of a full s1-s4 run, which is more than a 8 GB laptop with a warm swap
-# file has left, and the OOM killer then takes an emulator out mid-scenario
-# ("Getötet" in the run log, `Out of memory: Killed process ... qemu-system-x86`
-# in dmesg) — a failure mode that looks nothing like a gate finding. 1280 still
-# boots API 35 and runs the profile apk; go lower only if you enjoy watching
-# Android's lowmemorykiller take the app instead.
-AVD_RAM_MB="${RP_AVD_RAM_MB:-1536}"
+# Guest RAM per AVD. T101 finding: this knob was DEAD until 2026-08-24 —
+# tune_avd wrote the wrong config key (`hw.ram.size`; canonical is
+# `hw.ramSize`), and even the right key gets clamped UP by the emulator
+# ("Increasing RAM size to 2560MB" for this API 35 image), so every "1536/
+# 1280/1024" run of the past actually booted a 2.5 GB guest and each qemu
+# grew to ~2.9-3.3 GB resident — which is why an 8 GB host with a desktop
+# session kept losing an emulator to the OOM killer ("Getötet" in the run
+# log, `Out of memory: Killed process ... qemu-system-x86` in dmesg; on
+# hosts with systemd-oomd the whole run gets SIGTERMed instead). The only
+# thing that beats the clamp is handing qemu the size directly
+# (`-qemu -m`, see boot_avd), which run.sh now does. Measured on this host
+# (single AVD, booted + settled): guest 988 MB, qemu RSS 1.68 GB — the
+# qemu-side overhead on top of guest RAM is ~0.7 GB. 1024 leaves the guest
+# ~260 MB available after boot before the app starts; go lower only if you
+# enjoy watching Android's lowmemorykiller take the app instead.
+AVD_RAM_MB="${RP_AVD_RAM_MB:-1024}"
 JAR="$REPO/references/redPandaj/target/redpanda.jar"
 # Profile build (T27): AOT-compiled like a release apk, so crypto costs
 # (Ed25519 signing, ratchet decrypt) match production. A debug/JIT build
@@ -91,6 +98,14 @@ kill_our_emulator() { # serial avd_name
 
 cleanup() {
   set +e
+  # Summarize only when THIS invocation started the sampler — a pre-flight
+  # abort would otherwise report a stale mem.csv from a previous run as if
+  # it were this run's telemetry (Copilot finding, PR #101).
+  if [[ -n "${MEM_SAMPLER_PID:-}" ]]; then
+    kill "$MEM_SAMPLER_PID" 2>/dev/null
+    wait "$MEM_SAMPLER_PID" 2>/dev/null
+    log "mem (T101): $(summarize_mem)"
+  fi
   log "cleanup: stopping emulators, node, coord server"
   for pid in "${LOGCAT_PIDS[@]:-}"; do [[ -n "$pid" ]] && kill "$pid" 2>/dev/null; done
   kill_our_emulator "$SERIAL_ALICE" rp_alice
@@ -173,6 +188,8 @@ client_counters_json() { # logcat file
     "$(count_pat "$f" 'RedPandaIsolateClient: worker isolate died.')" \
     "$(count_pat "$f" 'RedPandaIsolateClient: respawning worker')" \
     "$(count_pat "$f" 'Isolate not ready. Dropping command')"
+  printf '"lmkdKills": %s, ' \
+    "$(count_pat "$f" "lmkd")"
   printf '"hostNodeNotConnected": %s, "noActivePeer": %s, "pollCycles": %s, "testTimeouts": %s}' \
     "$(count_pat "$f" 'not connected — requesting a connection')" \
     "$(count_pat "$f" 'fetchMessages() no active peer available')" \
@@ -183,6 +200,20 @@ client_counters_json() { # logcat file
 collect_counters() {
   local log="$ART/node.log"
   local dup_total dup_s4 evict_total evict_s4 act enc conn exc s4slice
+  # T101/TD040: one guest-side + host-side snapshot per run, to tell guest
+  # page cache from qemu overhead when the RSS numbers look bad. Best-effort —
+  # on the failure path the emulators may already be gone.
+  local pair mrole mserial mavd mpid
+  for pair in "alice:$SERIAL_ALICE:rp_alice" "bob:$SERIAL_BOB:rp_bob"; do
+    IFS=: read -r mrole mserial mavd <<<"$pair"
+    adb -s "$mserial" shell cat /proc/meminfo >"$ART/guest-meminfo-$mrole.txt" 2>/dev/null || true
+    # Heaviest match, not first PID: a light launcher/wrapper process can
+    # share the cmdline fragment with the actual qemu engine.
+    mpid="$(for mp in $(pgrep -f -- "avd $mavd" 2>/dev/null || true); do
+      echo "$(awk '/^VmRSS:/{print $2}' "/proc/$mp/status" 2>/dev/null || echo 0) $mp"
+    done | sort -rn | head -1 | cut -d' ' -f2)"
+    [[ -n "$mpid" ]] && { cat "/proc/$mpid/smaps_rollup" >"$ART/qemu-smaps-$mrole.txt" 2>/dev/null || true; }
+  done
   dup_total="$(count_pat "$log" 'duplicate parallel connection from the same identity')"
   evict_total="$(count_pat "$log" 'removed undialable disconnected peer from peerList')"
   act="$(count_pat "$log" 'parsed ACTIVATE_ENCRYPTION')"
@@ -225,6 +256,42 @@ collect_counters() {
   # server may already be gone — counters.json on disk is still the artifact.
   "${CURL[@]}" -X PUT --data-binary "@$ART/counters.json" \
     "http://127.0.0.1:$COORD_PORT/kv/harness_counters" >/dev/null 2>&1 || true
+}
+
+# ---------------------------------------------------------------------------
+# T101: memory sampler — one CSV line every 5 s so an OOM (or a near miss)
+# leaves numbers behind instead of folklore. The peaks feed the run log (also
+# on the failure path, via cleanup) and calibrated QEMU_OVERHEAD_MB above.
+# ---------------------------------------------------------------------------
+MEM_SAMPLER_PID=""
+rss_mb_of() { # pgrep -f pattern -> summed RSS in MB (0 when absent)
+  local p kb=0 v
+  for p in $(pgrep -f -- "$1" 2>/dev/null || true); do
+    v="$(awk '/^VmRSS:/ {print $2}' "/proc/$p/status" 2>/dev/null)" || v=""
+    kb=$(( kb + ${v:-0} ))
+  done
+  echo $(( kb / 1024 ))
+}
+start_mem_sampler() {
+  echo "elapsedSec,memAvailableMB,swapFreeMB,aliceRssMB,bobRssMB,nodeRssMB" >"$ART/mem.csv"
+  local t0
+  t0=$(date +%s)
+  (
+    # The subshell inherits `set -e`: without the guards a single transient
+    # failure (a /proc entry vanishing mid-read) would silently end the
+    # sampler for the rest of a 45-min run.
+    set +e
+    while :; do
+      echo "$(( $(date +%s) - t0 )),$(( $(mem_kb MemAvailable) / 1024 )),$(( $(mem_kb SwapFree) / 1024 )),$(rss_mb_of "avd rp_alice"),$(rss_mb_of "avd rp_bob"),$(rss_mb_of "redpanda\.jar")" >>"$ART/mem.csv" || true
+      sleep 5
+    done
+  ) &
+  MEM_SAMPLER_PID=$!
+}
+summarize_mem() { # -> one line: per-process peaks + min MemAvailable
+  [[ -s "$ART/mem.csv" ]] || { echo "no samples"; return 0; }
+  awk -F, 'NR>1 { if ($4>a) a=$4; if ($5>b) b=$5; if ($6>n) n=$6; if (m=="" || $2<m) m=$2 }
+    END { printf "peak RSS MB: alice=%d bob=%d node=%d (pair=%d); min MemAvailable=%d MB", a, b, n, a+b, m }' "$ART/mem.csv"
 }
 
 save_report() {
@@ -286,6 +353,37 @@ if [[ "$START_NODE" == 1 ]]; then
   fi
 fi
 if port_open "$COORD_PORT"; then die "port $COORD_PORT already in use"; fi
+# T101: host RAM pre-flight — fail fast HERE instead of letting the kernel
+# OOM killer shoot a qemu mid-scenario after ~15 min of build+boot (three
+# gate runs died that way on 2026-08-17; the resulting verdict looks nothing
+# like a finding). Budget: 2 x (guest RAM + measured qemu overhead) + node
+# heap + headroom. Half of the free swap is credited: cold guest pages
+# (zygote preloads, dead app heaps) swap out fine, and MemAvailable alone
+# underestimates what a run survives (2026-08-18 evidence: green gate with
+# ~5.3 GB free). Override with RP_MIN_AVAIL_MB; 0 disables the check.
+# RSS(qemu) minus guest RAM, measured ~0.7 GB + margin — calibrated at
+# 1024 MB guests on this host; NOT proportional to guest size. Re-measure
+# via mem.csv before trusting the pre-flight with a much larger RP_AVD_RAM_MB.
+QEMU_OVERHEAD_MB=800
+# A non-numeric override must die loudly: `[[ "$MIN_AVAIL_MB" -gt 0 ]]` with
+# a non-integer merely returns false under `if`, which would silently skip
+# exactly the safety check this exists for.
+[[ "$AVD_RAM_MB" =~ ^[0-9]+$ ]] || die "RP_AVD_RAM_MB must be a number of MB (got '$AVD_RAM_MB')"
+MIN_AVAIL_MB="${RP_MIN_AVAIL_MB:-$(( 2 * (AVD_RAM_MB + QEMU_OVERHEAD_MB) + 512 + 256 ))}"
+[[ "$MIN_AVAIL_MB" =~ ^[0-9]+$ ]] || die "RP_MIN_AVAIL_MB must be a number of MB, 0 disables (got '$MIN_AVAIL_MB')"
+mem_kb() { # -> value in kB, 0 when the key is missing (empty would be a fatal arithmetic syntax error)
+  local v
+  v="$(awk -v k="$1:" '$1 == k {print $2}' /proc/meminfo 2>/dev/null)" || v=""
+  echo "${v:-0}"
+}
+if [[ "$MIN_AVAIL_MB" -gt 0 ]]; then
+  MEM_AVAILABLE_MB=$(( $(mem_kb MemAvailable) / 1024 ))
+  SWAP_FREE_MB=$(( $(mem_kb SwapFree) / 1024 ))
+  EFFECTIVE_MB=$(( MEM_AVAILABLE_MB + SWAP_FREE_MB / 2 ))
+  [[ "$EFFECTIVE_MB" -ge "$MIN_AVAIL_MB" ]] || die "not enough free RAM for the duo gate: MemAvailable ${MEM_AVAILABLE_MB} MB + SwapFree/2 (${SWAP_FREE_MB}/2) MB = ${EFFECTIVE_MB} MB effective, threshold ${MIN_AVAIL_MB} MB (= 2 AVDs x (${AVD_RAM_MB} MB guest + ~${QEMU_OVERHEAD_MB} MB qemu overhead) + node + headroom).
+Close desktop apps (browsers are the usual offender) and retry — or lower RP_AVD_RAM_MB / override RP_MIN_AVAIL_MB if you know better."
+  log "RAM pre-flight ok: MemAvailable ${MEM_AVAILABLE_MB} MB + SwapFree/2 -> ${EFFECTIVE_MB} MB effective (threshold ${MIN_AVAIL_MB} MB)"
+fi
 SCENARIOS="$(echo "$SCENARIOS" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
 for s in ${SCENARIOS//,/ }; do
   [[ "$s" =~ ^s[1-4]$ ]] || die "unknown scenario '$s' in RP_SCENARIOS (allowed: s1,s2,s3,s4)"
@@ -305,7 +403,9 @@ log "scenarios: $SCENARIOS"
 
 mkdir -p "$ART"
 rm -f "$ART"/report.json "$ART"/counters.json "$ART"/alice.logcat "$ART"/bob.logcat \
-      "$ART"/node.log "$ART"/coord.log
+      "$ART"/node.log "$ART"/coord.log "$ART"/mem.csv \
+      "$ART"/guest-meminfo-*.txt "$ART"/qemu-smaps-*.txt
+start_mem_sampler   # T101: covers the build phase too — gradle is a RAM hog
 
 # ---------------------------------------------------------------------------
 # AVDs (created once, reused afterwards)
@@ -313,7 +413,14 @@ rm -f "$ART"/report.json "$ART"/counters.json "$ART"/alice.logcat "$ART"/bob.log
 tune_avd() { # name
   local cfg="$HOME/.android/avd/$1.avd/config.ini"
   [[ -f "$cfg" ]] || die "AVD config not found: $cfg"
-  for kv in "hw.ram.size=$AVD_RAM_MB" "hw.cpu.ncore=2" "hw.keyboard=yes" \
+  # T101: `hw.ramSize` is the canonical key. Earlier versions appended the
+  # non-key `hw.ram.size`, which the emulator silently ignored; avdmanager
+  # also seeds `hw.ramSize = 96M` (spaces around '='). Purge both spellings,
+  # then write ours. The emulator clamps this value up to the image minimum
+  # (2560 MB here) anyway — the effective size comes from `-qemu -m` in
+  # boot_avd; the config entry documents intent and keeps tooling honest.
+  sed -i -E '/^hw\.ramSize[ =]/d; /^hw\.ram\.size[ =]/d' "$cfg"
+  for kv in "hw.ramSize=$AVD_RAM_MB" "hw.cpu.ncore=2" "hw.keyboard=yes" \
             "hw.gpu.mode=swiftshader_indirect" "disk.dataPartition.size=2048M"; do
     local key="${kv%%=*}"
     # Literal prefix match (keys contain '.', which is a regex wildcard).
@@ -391,9 +498,14 @@ boot_avd() { # name console_port serial
     fi
   fi
   log "booting AVD $1 (serial $3, console port $2)"
+  # `-qemu -m` (must stay the LAST arguments) instead of `-memory`: the
+  # emulator clamps both `-memory` and hw.ramSize up to the image minimum
+  # (2560 MB — "Increasing RAM size to 2560MB" in emulator-*.log). Passing
+  # the size straight to qemu is the only override that sticks; measured
+  # guest MemTotal 988 MB at 1024 vs 2532 MB via the clamped path (T101).
   emulator -avd "$1" -port "$2" \
     -no-window -no-audio -no-snapshot -no-boot-anim -no-metrics \
-    -gpu swiftshader_indirect -memory "$AVD_RAM_MB" -cores 2 \
+    -gpu swiftshader_indirect -cores 2 -qemu -m "$AVD_RAM_MB" \
     >"$ART/emulator-$1.log" 2>&1 &
   timeout 300 adb -s "$3" wait-for-device || die "AVD $1 never appeared on adb ($3)"
   local booted=""
@@ -403,6 +515,19 @@ boot_avd() { # name console_port serial
     sleep 2
   done
   [[ "$booted" == "1" ]] || die "AVD $1 did not finish booting within 6 minutes"
+  # T101: the -qemu -m override beats the emulator's clamped value only by
+  # "last -m wins", which is measured behaviour, not documented qemu API —
+  # verify the guest really got the requested size so a regression shows up
+  # as a WARNING here instead of as an unexplained OOM later.
+  local guest_total_kb guest_mb
+  guest_total_kb="$(adb -s "$3" shell cat /proc/meminfo 2>/dev/null | awk '/^MemTotal:/{print $2}')" || guest_total_kb=""
+  if [[ "$guest_total_kb" =~ ^[0-9]+$ ]]; then
+    guest_mb=$(( guest_total_kb / 1024 ))
+    log "AVD $1 guest MemTotal: ${guest_mb} MB (requested $AVD_RAM_MB)"
+    if (( guest_mb > AVD_RAM_MB + AVD_RAM_MB / 4 )); then
+      log "WARNING: guest RAM is >25% above the requested size — the -qemu -m override did not stick; expect ~$(( guest_mb + QEMU_OVERHEAD_MB )) MB RSS for this emulator"
+    fi
+  fi
   # Keep the (headless) device awake and predictable for widget taps.
   adb -s "$3" shell svc power stayon true || true
   adb -s "$3" shell input keyevent 82 || true

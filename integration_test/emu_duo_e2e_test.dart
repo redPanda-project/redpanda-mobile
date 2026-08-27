@@ -412,7 +412,11 @@ Future<void> openChat(WidgetTester tester) async {
 /// is starved. Stamping afterwards let the peer's `recv-` PUT win the race
 /// to the coord server, which reported as a negative latency and failed the
 /// run (TD046; -167/-47 ms on 2026-08-17/18). Stamping first can only
-/// overestimate latency by the tap dispatch time, never produce a negative.
+/// overestimate latency, never produce a negative — the overestimate is the
+/// tap dispatch time plus whatever remains of the `sent-` PUT round-trip
+/// after the server has stamped its arrival (the stamp is taken when the
+/// request arrives, before the response leg and our local await complete;
+/// TD049).
 Future<void> sendChatMessage(WidgetTester tester, String text) async {
   await setTextField(tester, text);
   await tester.pump();
