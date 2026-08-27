@@ -10,6 +10,8 @@ import 'package:redpanda_light_client/src/network/active_peer.dart';
 import 'package:redpanda_light_client/src/security/gcm_framed_codec.dart';
 import 'package:test/test.dart';
 
+import '../helpers/wait_for.dart';
+
 /// In-memory socket that emulates a v23 full node: magic handshake,
 /// 64-byte public key exchange, ephemeral X25519 + HKDF key schedule and
 /// framed AES-256-GCM transport. Lets tests observe the client's encrypted
@@ -219,19 +221,6 @@ Future<(ActivePeer, ScriptedV23Server, List<ConnectionStatus>)> connect({
   );
   await peer.connect();
   return (peer, server, statuses);
-}
-
-Future<void> waitFor(
-  bool Function() predicate, {
-  Duration timeout = const Duration(seconds: 5),
-}) async {
-  final deadline = DateTime.now().add(timeout);
-  while (!predicate()) {
-    if (DateTime.now().isAfter(deadline)) {
-      fail('condition not met within $timeout');
-    }
-    await Future.delayed(const Duration(milliseconds: 20));
-  }
 }
 
 void main() {
