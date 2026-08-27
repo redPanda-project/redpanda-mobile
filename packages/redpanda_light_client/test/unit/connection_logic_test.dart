@@ -5,6 +5,8 @@ import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
 
+import '../helpers/wait_for.dart';
+
 // --- Mocks ---
 
 class MockSocket implements Socket {
@@ -160,8 +162,14 @@ void main() {
         seeds: [], // No seeds, rely on repo
       );
 
-      // Wait for async load and connection check
-      await Future.delayed(Duration(milliseconds: 50));
+      // Wait for the async load -> _runConnectionCheck to have dialled its
+      // slots. The dial loop awaits a DNS lookup per address, so the attempts
+      // trickle in; a fixed sleep here was the TD052 flake (host under load
+      // => 0-4 attempts after 50 ms).
+      await waitFor(
+        () => socketAttempts.length >= 5,
+        description: 'fast-boot burst (5 dials)',
+      );
 
       // We expect it to try connecting to the best peers
       // Since maxConnections=5, and we have 6 peers, and logic tries top 10 candidates...
@@ -182,7 +190,10 @@ void main() {
         seeds: [],
       );
 
-      await Future.delayed(Duration(milliseconds: 100)); // Let it stabilize
+      await waitFor(
+        () => socketAttempts.length >= 5,
+        description: 'initial burst (5 dials)',
+      );
 
       final count = await client.peerCountStream.first;
       expect(count, lessThanOrEqualTo(5));
@@ -191,10 +202,19 @@ void main() {
       mockRepo.setPeerScore('127.0.0.1:2001', 10); // Super good peer
       await client.addPeer('127.0.0.1:2001');
 
+      // Negative check: give the addPeer-triggered connection check time to
+      // NOT dial. A fixed delay is correct here - too short only weakens the
+      // assertion, it can never make it red.
       await Future.delayed(Duration(milliseconds: 100));
 
       final count2 = await client.peerCountStream.first;
       expect(count2, lessThanOrEqualTo(5));
+      // All 5 slots are taken, so the new (better) peer must not be dialled.
+      expect(
+        socketAttempts.length,
+        5,
+        reason: 'no extra dial once maxConnections slots are filled',
+      );
     });
 
     test('Core Preference: Prefers low latency peers', () async {
@@ -209,7 +229,13 @@ void main() {
         seeds: [],
       );
 
-      await Future.delayed(Duration(milliseconds: 200));
+      // Wait for the burst to finish before judging it - otherwise the
+      // 'isNot(contains 1006)' assertion can pass simply because nothing has
+      // been dialled yet.
+      await waitFor(
+        () => socketAttempts.length >= 5,
+        description: 'initial burst (5 dials)',
+      );
 
       // We access the repo to see usage or check internal state if we could.
       // Instead, checking socket attempts isn't enough as it shows history.
@@ -240,14 +266,21 @@ void main() {
         seeds: [],
       );
 
-      // Initial burst
-      await Future.delayed(Duration(milliseconds: 100));
+      // Initial burst - wait for it to complete, not for a guessed 100 ms:
+      // if it were still in flight, its remaining dials would land inside the
+      // observation window below and fail the 'no new attempts' check.
+      await waitFor(
+        () => socketAttempts.length >= 5,
+        description: 'initial burst (5 dials)',
+      );
       final initialAttempts = socketAttempts.length;
       expect(initialAttempts, greaterThan(0));
 
-      // Wait for timer tick (3s)
-      // If bad internet detected, it should throttle (wait 10s).
-      // So between T+100ms and T+4000ms, there should be NO new attempts.
+      // Observation window. NOTE: no periodic check runs here - the 3 s
+      // timer is started by connect()/onResume()/onPause() only, and the
+      // constructor fires exactly one _runConnectionCheck via load(). So this
+      // window proves the single burst stays bounded; it does NOT cover the
+      // _isBadInternetDetected throttle (see the follow-up tech-debt note).
 
       await Future.delayed(Duration(milliseconds: 3100));
 
@@ -270,14 +303,15 @@ void main() {
         seeds: [],
       );
 
-      // First attempt
-      await Future.delayed(Duration(milliseconds: 100));
+      // First attempt - wait for it instead of guessing 100 ms; a late dial
+      // would otherwise show up inside the observation window below.
+      await waitFor(() => socketAttempts.isNotEmpty, description: 'first dial');
       expect(socketAttempts.length, 1);
 
-      // Force a check manually by waiting or calling if we could (we can't public api).
-      // We rely on Timer (3s).
-      // Backoff is 10s.
-      // So at 3s, it should NOT retry.
+      // Observation window. NOTE: as in the 'Bad Internet' test, no periodic
+      // check runs (the 3 s timer needs connect()/onResume()/onPause()), so
+      // this proves the burst does not grow after the fact - it does not
+      // exercise the exponential backoff itself.
 
       await Future.delayed(Duration(milliseconds: 3100));
       expect(socketAttempts.length, 1); // Still 1
