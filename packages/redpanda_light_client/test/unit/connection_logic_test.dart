@@ -268,7 +268,7 @@ void main() {
 
       // Initial burst - wait for it to complete, not for a guessed 100 ms:
       // if it were still in flight, its remaining dials would land inside the
-      // 3 s observation window below and fail the 'no new attempts' check.
+      // observation window below and fail the 'no new attempts' check.
       await waitFor(
         () => socketAttempts.length >= 5,
         description: 'initial burst (5 dials)',
@@ -276,9 +276,11 @@ void main() {
       final initialAttempts = socketAttempts.length;
       expect(initialAttempts, greaterThan(0));
 
-      // Wait for timer tick (3s)
-      // If bad internet detected, it should throttle (wait 10s).
-      // So between T+100ms and T+4000ms, there should be NO new attempts.
+      // Observation window. NOTE: no periodic check runs here - the 3 s
+      // timer is started by connect()/onResume()/onPause() only, and the
+      // constructor fires exactly one _runConnectionCheck via load(). So this
+      // window proves the single burst stays bounded; it does NOT cover the
+      // _isBadInternetDetected throttle (see the follow-up tech-debt note).
 
       await Future.delayed(Duration(milliseconds: 3100));
 
@@ -306,10 +308,10 @@ void main() {
       await waitFor(() => socketAttempts.isNotEmpty, description: 'first dial');
       expect(socketAttempts.length, 1);
 
-      // Force a check manually by waiting or calling if we could (we can't public api).
-      // We rely on Timer (3s).
-      // Backoff is 10s.
-      // So at 3s, it should NOT retry.
+      // Observation window. NOTE: as in the 'Bad Internet' test, no periodic
+      // check runs (the 3 s timer needs connect()/onResume()/onPause()), so
+      // this proves the burst does not grow after the fact - it does not
+      // exercise the exponential backoff itself.
 
       await Future.delayed(Duration(milliseconds: 3100));
       expect(socketAttempts.length, 1); // Still 1
