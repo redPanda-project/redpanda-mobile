@@ -6,8 +6,14 @@ name: Emulator Duo E2E
 # step below is the documented way to open it up:
 # https://github.blog/changelog/2024-04-02-github-actions-hardware-accelerated-android-virtualization-now-available/
 #
-# Manual trigger only while this is a PoC. If it proves stable, wire it up as
-# a nightly + deploy gate.
+# T103: the PoC held up (run 32982989702, full s1-s4 green in 11m43s), so this
+# is now the primary way to run the gate: nightly for a flake baseline, and on
+# demand before a deploy or to gate a harness PR. Note when gating a branch:
+# workflow_dispatch reads the workflow definition from the ref you dispatch, so
+# the branch must already contain this file -- merge main into it first. That is
+# how mobile#101 was gated (merge ae1364a, then run 33091988264).
+# The local harness under tool/emu_duo_e2e/ stays the fallback for debugging
+# with the emulators in front of you -- it is the same script either way.
 on:
   workflow_dispatch:
     inputs:
@@ -15,9 +21,21 @@ on:
         description: 'RP_SCENARIOS (comma list of s1,s2,s3,s4; s1 always runs)'
         required: false
         default: 's1,s2,s3,s4'
+  schedule:
+    # 02:17 UTC. Off the hour on purpose: GitHub queues the whole cron minute
+    # across all of github.com, and :00 is the worst of them.
+    - cron: '17 2 * * *'
 
 permissions:
   contents: read
+
+# A run takes ~12-25 min and boots two emulators. Overlapping runs on the same
+# ref would compete for the same runner minutes without telling us anything new,
+# so queue them instead -- and do NOT cancel in progress: a nightly that gets
+# killed halfway by a manual dispatch would look like a flake in the baseline.
+concurrency:
+  group: emu-duo-e2e-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   duo-e2e:

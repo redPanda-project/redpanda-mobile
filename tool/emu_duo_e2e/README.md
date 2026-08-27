@@ -1,12 +1,23 @@
 # Emulator Duo E2E Harness (T23/T24)
 
 Two headless Android emulators (Alice + Bob) chat with each other through a
-**local** backend node — the deterministic, host-only variant of the desktop
-duo E2E. This is a local loop tool; it does **not** run in GitHub CI (it
-needs KVM, an Android system image and ~4.5 GB of effective free RAM by
-default — run.sh computes and prints the exact threshold up front and
-refuses to start when the host cannot hold a full run, see "Known
-limits").
+**local** backend node — the deterministic variant of the desktop duo E2E.
+
+It runs in two places, from this one script:
+
+- **GitHub Actions** (`.github/workflows/emu_duo_e2e.yml`, T103) — nightly and
+  on demand via `workflow_dispatch`. Dispatch reads the workflow from the ref
+  you select, so a branch can only be gated once it contains this file: merge
+  `main` into the branch first, then dispatch it. This is the primary path:
+  hosted Linux runners have exposed `/dev/kvm` since 2024-04 and give 4 vCPU /
+  16 GB, so the gate no longer competes with whatever else is using the dev
+  host. (The earlier claim here that it "does not run in GitHub CI" was wrong;
+  run 32982989702 was the first full s1–s4 pass on a runner, 11m43s.)
+- **Locally** — the fallback when you want the emulators in front of you.
+  Needs KVM, an Android system image and ~4.5 GB of effective free RAM by
+  default; `run.sh` computes and prints the exact threshold up front and
+  refuses to start when the host cannot hold a full run, rather than being
+  OOM-killed halfway (see "Known limits").
 
 ## Scenarios
 
