@@ -6,7 +6,9 @@ Two headless Android emulators (Alice + Bob) chat with each other through a
 It runs in two places, from this one script:
 
 - **GitHub Actions** (`.github/workflows/emu_duo_e2e.yml`, T103) — nightly and
-  on demand via `workflow_dispatch` against any ref. This is the primary path:
+  on demand via `workflow_dispatch`. Dispatch reads the workflow from the ref
+  you select, so a branch can only be gated once it contains this file: merge
+  `main` into the branch first, then dispatch it. This is the primary path:
   hosted Linux runners have exposed `/dev/kvm` since 2024-04 and give 4 vCPU /
   16 GB, so the gate no longer competes with whatever else is using the dev
   host. (The earlier claim here that it "does not run in GitHub CI" was wrong;
