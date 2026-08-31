@@ -93,7 +93,7 @@ class MockPeerRepository implements PeerRepository {
     );
     if (latencyMs != null) stats.averageLatencyMs = latencyMs;
     if (isFailure == true) failures.add(address);
-    // stats.successCount/failureCount logic ignored for simplicty unless needed
+    // stats.successCount/failureCount logic ignored for simplicity unless needed
   }
 
   @override
@@ -149,7 +149,10 @@ Future<Socket> Function(String host, int port) recordingFactory(
 
 void main() {
   group('Connection Logic Unit Tests', () {
-    late RedPandaLightClient client;
+    // Nullable, not `late`: a test that throws before the assignment (a key
+    // pair that fails to generate) would otherwise die a second time in
+    // tearDown with a LateInitializationError, hiding the real failure.
+    RedPandaLightClient? client;
     late MockPeerRepository mockRepo;
 
     setUp(() {
@@ -164,7 +167,7 @@ void main() {
     });
 
     tearDown(() async {
-      await client.disconnect();
+      await client?.disconnect();
     });
 
     test('Fast Boot: Connects to top peers immediately on start', () async {
@@ -212,19 +215,19 @@ void main() {
         description: 'initial burst (5 dials)',
       );
 
-      final count = await client.peerCountStream.first;
+      final count = await client!.peerCountStream.first;
       expect(count, lessThanOrEqualTo(5));
 
       // Even if we add more peers
       mockRepo.setPeerScore('127.0.0.1:2001', 10); // Super good peer
-      await client.addPeer('127.0.0.1:2001');
+      await client!.addPeer('127.0.0.1:2001');
 
       // Negative check: give the addPeer-triggered connection check time to
       // NOT dial. A fixed delay is correct here - too short only weakens the
       // assertion, it can never make it red.
       await Future.delayed(Duration(milliseconds: 100));
 
-      final count2 = await client.peerCountStream.first;
+      final count2 = await client!.peerCountStream.first;
       expect(count2, lessThanOrEqualTo(5));
       // All 5 slots are taken, so the new (better) peer must not be dialled.
       expect(
@@ -299,7 +302,9 @@ void main() {
         description: 'a failure recorded for every dial',
       );
 
-      expect(mockRepo.failures.toSet(), socketAttempts.toSet());
+      // Sorted lists, not sets: a bug that reports one address twice while
+      // dialling it once keeps the *set* equal.
+      expect(mockRepo.failures..sort(), socketAttempts.toList()..sort());
     });
 
     test(
@@ -325,13 +330,18 @@ void main() {
           description: '5 failures recorded (backoff armed)',
         );
 
-        // Drive the periodic path for real - connect() runs a check immediately
-        // (and then every 3 s, which this test no longer waits for). The five
-        // just-failed addresses sit in their 2 s backoff, so the only address
-        // this check may dial is the untried 1006. That dial is the positive
-        // edge we wait for: it proves the check ran to the end of its dial loop,
-        // which a blind sleep never proves.
-        await client.connect();
+        // Drive a second, real connection check - the same work a periodic
+        // tick does. addPeer() runs exactly one check; connect()/onResume()
+        // would additionally arm Timer.periodic(3 s), and that tick is a
+        // second, unsynchronised dial source *after* the 2 s backoff has
+        // expired - i.e. exactly the kind of race this file is cleaning up.
+        // Re-adding a known address is a no-op on the repository.
+        //
+        // The five just-failed addresses sit in their 2 s backoff, so the only
+        // address this check may dial is the untried 1006. That dial is the
+        // positive edge we wait for: it proves the check ran to the end of its
+        // dial loop, which a blind sleep never proves.
+        await client!.addPeer('127.0.0.1:1001');
         await waitFor(
           () => socketAttempts.contains('127.0.0.1:1006'),
           description: 'second check dials the untried peer',
@@ -348,6 +358,44 @@ void main() {
           reason:
               'no address may be dialled twice while its backoff is running',
         );
+      },
+    );
+
+    test(
+      'Backoff: the only known peer stays in backoff (no candidate left)',
+      () async {
+        // Single-peer repository: once its dial fails there is nothing left to
+        // connect to, which is the branch the 6-peer test above cannot reach.
+        final socketAttempts = <String>[];
+        mockRepo = MockPeerRepository();
+        mockRepo.setPeerScore('127.0.0.1:9999', 50);
+
+        client = RedPandaLightClient(
+          selfNodeId: NodeId.fromPublicKey(await KeyPair.generate()),
+          selfKeys: await KeyPair.generate(),
+          peerRepository: mockRepo,
+          socketFactory: recordingFactory(socketAttempts, failing: true),
+          seeds: [],
+        );
+
+        await waitFor(
+          () => socketAttempts.isNotEmpty,
+          description: 'first dial',
+        );
+        await waitFor(
+          () => mockRepo.failures.isNotEmpty,
+          description: 'failure recorded (backoff armed)',
+        );
+
+        // Second check, again without arming a periodic timer. No positive edge
+        // exists here - there is no second address to dial - so this is the one
+        // place a fixed window is the right tool: it is the only dial source in
+        // flight, so a too-short window can only weaken the assertion, never
+        // redden it (see helpers/wait_for.dart).
+        await client!.addPeer('127.0.0.1:9999');
+        await Future.delayed(const Duration(milliseconds: 100));
+
+        expect(socketAttempts.length, 1);
       },
     );
   });
