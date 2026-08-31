@@ -70,6 +70,14 @@ class MockPeerRepository implements PeerRepository {
   @override
   Future<void> save() async {}
 
+  /// Addresses reported with `isFailure: true`, in call order.
+  ///
+  /// This is the client's own "the dial failed" signal (it runs through
+  /// `ActivePeer._shutdown` -> `onDisconnect`), and it is armed in the same
+  /// step as the retry backoff. Tests use it to wait for the failure to have
+  /// landed instead of guessing a delay.
+  final List<String> failures = [];
+
   @override
   void updatePeer(
     String address, {
@@ -84,6 +92,7 @@ class MockPeerRepository implements PeerRepository {
       () => PeerStats(address: address),
     );
     if (latencyMs != null) stats.averageLatencyMs = latencyMs;
+    if (isFailure == true) failures.add(address);
     // stats.successCount/failureCount logic ignored for simplicty unless needed
   }
 
@@ -118,26 +127,32 @@ class MockPeerRepository implements PeerRepository {
 
 // --- Tests ---
 
+/// Builds a socket factory that appends every dial to [attempts]; with
+/// [failing] set it also throws, so the client sees a refused connection.
+///
+/// Deliberately built per test instead of sharing one group-level list: a
+/// client's dial loop keeps running after the test body returned (nothing
+/// awaits it), so a shared list receives the *previous* test's late dials and
+/// the next test reads them as its own - that leak surfaced in #105 as
+/// `Expected: <1>, Actual: <5>`. A closure over a list that only one test can
+/// see makes the leak structurally impossible.
+Future<Socket> Function(String host, int port) recordingFactory(
+  List<String> attempts, {
+  bool failing = false,
+}) {
+  return (String host, int port) async {
+    attempts.add('$host:$port');
+    if (failing) throw SocketException('Connection refused');
+    return MockSocket(host, port);
+  };
+}
+
 void main() {
   group('Connection Logic Unit Tests', () {
     late RedPandaLightClient client;
     late MockPeerRepository mockRepo;
-    late List<String> socketAttempts;
-
-    // We mock socket factory to track attempts
-    Future<Socket> mockFactory(String host, int port) async {
-      socketAttempts.add('$host:$port');
-      return MockSocket(host, port);
-    }
-
-    // Factory that fails connections
-    Future<Socket> failingFactory(String host, int port) async {
-      socketAttempts.add('$host:$port');
-      throw SocketException('Connection refused');
-    }
 
     setUp(() {
-      socketAttempts = [];
       mockRepo = MockPeerRepository();
       // Setup some initial peers
       mockRepo.setPeerScore('127.0.0.1:1001', 50); // Best
@@ -148,17 +163,18 @@ void main() {
       mockRepo.setPeerScore('127.0.0.1:1006', 900); // Worst
     });
 
-    tearDown(() {
-      client.disconnect();
+    tearDown(() async {
+      await client.disconnect();
     });
 
     test('Fast Boot: Connects to top peers immediately on start', () async {
+      final socketAttempts = <String>[];
       // Logic: Constructor calls load() -> load calls _runConnectionCheck
       client = RedPandaLightClient(
         selfNodeId: NodeId.fromPublicKey(await KeyPair.generate()),
         selfKeys: await KeyPair.generate(),
         peerRepository: mockRepo,
-        socketFactory: mockFactory,
+        socketFactory: recordingFactory(socketAttempts),
         seeds: [], // No seeds, rely on repo
       );
 
@@ -181,12 +197,13 @@ void main() {
     });
 
     test('Max Connections: Does not exceed limit (5)', () async {
+      final socketAttempts = <String>[];
       // Start client
       client = RedPandaLightClient(
         selfNodeId: NodeId.fromPublicKey(await KeyPair.generate()),
         selfKeys: await KeyPair.generate(),
         peerRepository: mockRepo,
-        socketFactory: mockFactory,
+        socketFactory: recordingFactory(socketAttempts),
         seeds: [],
       );
 
@@ -221,11 +238,12 @@ void main() {
       // We have 6 peers in repo. 1001-1005 are good (low latency), 1006 is bad (900ms).
       // We start client. It should eventually drop 1006 if it connected to it, or strictly pick 1001-1005.
 
+      final socketAttempts = <String>[];
       client = RedPandaLightClient(
         selfNodeId: NodeId.fromPublicKey(await KeyPair.generate()),
         selfKeys: await KeyPair.generate(),
         peerRepository: mockRepo,
-        socketFactory: mockFactory,
+        socketFactory: recordingFactory(socketAttempts),
         seeds: [],
       );
 
@@ -256,69 +274,81 @@ void main() {
       ); // Should skip the worst one if slots filled by better ones
     });
 
-    test('Bad Internet: Stops trying if all connections fail', () async {
-      // Use failing factory
+    test('Failed dials are reported to the peer repository', () async {
+      final socketAttempts = <String>[];
       client = RedPandaLightClient(
         selfNodeId: NodeId.fromPublicKey(await KeyPair.generate()),
         selfKeys: await KeyPair.generate(),
         peerRepository: mockRepo,
-        socketFactory: failingFactory,
+        socketFactory: recordingFactory(socketAttempts, failing: true),
         seeds: [],
       );
 
-      // Initial burst - wait for it to complete, not for a guessed 100 ms:
-      // if it were still in flight, its remaining dials would land inside the
-      // observation window below and fail the 'no new attempts' check.
+      // Fast-boot burst: the constructor's single connection check fills all
+      // maxConnections slots. Every dial throws.
       await waitFor(
         () => socketAttempts.length >= 5,
         description: 'initial burst (5 dials)',
       );
-      final initialAttempts = socketAttempts.length;
-      expect(initialAttempts, greaterThan(0));
 
-      // Observation window. NOTE: no periodic check runs here - the 3 s
-      // timer is started by connect()/onResume()/onPause() only, and the
-      // constructor fires exactly one _runConnectionCheck via load(). So this
-      // window proves the single burst stays bounded; it does NOT cover the
-      // _isBadInternetDetected throttle (see the follow-up tech-debt note).
-
-      await Future.delayed(Duration(milliseconds: 3100));
-
-      // If logic works: failure -> sets _isBadInternetDetected -> next check (3s later) -> sees flag -> checks time -> returns early.
-      // So counts should be same.
-
-      expect(socketAttempts.length, equals(initialAttempts));
-    });
-
-    test('Backoff: Does not retry failed peer immediately', () async {
-      // Setup repo with just 1 peer
-      mockRepo = MockPeerRepository();
-      mockRepo.setPeerScore('127.0.0.1:9999', 50);
-
-      client = RedPandaLightClient(
-        selfNodeId: NodeId.fromPublicKey(await KeyPair.generate()),
-        selfKeys: await KeyPair.generate(),
-        peerRepository: mockRepo,
-        socketFactory: failingFactory, // Fails
-        seeds: [],
+      // The failure travels ActivePeer._shutdown -> onDisconnect -> repository
+      // (and arms the retry backoff on the way), so it lands a moment after
+      // the dial itself.
+      await waitFor(
+        () => mockRepo.failures.length >= socketAttempts.length,
+        description: 'a failure recorded for every dial',
       );
 
-      // First attempt - wait for it instead of guessing 100 ms; a late dial
-      // would otherwise show up inside the observation window below.
-      await waitFor(() => socketAttempts.isNotEmpty, description: 'first dial');
-      expect(socketAttempts.length, 1);
-
-      // Observation window. NOTE: as in the 'Bad Internet' test, no periodic
-      // check runs (the 3 s timer needs connect()/onResume()/onPause()), so
-      // this proves the burst does not grow after the fact - it does not
-      // exercise the exponential backoff itself.
-
-      await Future.delayed(Duration(milliseconds: 3100));
-      expect(socketAttempts.length, 1); // Still 1
-
-      // wait until 11s (backoff expire)
-      // await Future.delayed(Duration(seconds: 8));
-      // expect(socketAttempts.length, 2);
+      expect(mockRepo.failures.toSet(), socketAttempts.toSet());
     });
+
+    test(
+      'Backoff: a failed peer is not re-dialled while its backoff runs',
+      () async {
+        final socketAttempts = <String>[];
+        client = RedPandaLightClient(
+          selfNodeId: NodeId.fromPublicKey(await KeyPair.generate()),
+          selfKeys: await KeyPair.generate(),
+          peerRepository: mockRepo,
+          socketFactory: recordingFactory(socketAttempts, failing: true),
+          seeds: [],
+        );
+
+        // The fast-boot check takes the top five of the six known peers; the
+        // worst one (1006) is left untried and is therefore NOT in backoff.
+        await waitFor(
+          () => socketAttempts.length >= 5,
+          description: 'initial burst (5 dials)',
+        );
+        await waitFor(
+          () => mockRepo.failures.length >= 5,
+          description: '5 failures recorded (backoff armed)',
+        );
+
+        // Drive the periodic path for real - connect() runs a check immediately
+        // (and then every 3 s, which this test no longer waits for). The five
+        // just-failed addresses sit in their 2 s backoff, so the only address
+        // this check may dial is the untried 1006. That dial is the positive
+        // edge we wait for: it proves the check ran to the end of its dial loop,
+        // which a blind sleep never proves.
+        await client.connect();
+        await waitFor(
+          () => socketAttempts.contains('127.0.0.1:1006'),
+          description: 'second check dials the untried peer',
+        );
+
+        expect(
+          socketAttempts.length,
+          6,
+          reason: 'the second check may only add the untried peer',
+        );
+        expect(
+          socketAttempts.toSet().length,
+          socketAttempts.length,
+          reason:
+              'no address may be dialled twice while its backoff is running',
+        );
+      },
+    );
   });
 }
