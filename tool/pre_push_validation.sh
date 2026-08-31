@@ -91,13 +91,18 @@ dart --version
 # differs from the pin makes this whole validation meaningless: `dart format`
 # changes its output between Dart releases, so it would either reformat
 # untouched files locally or let CI reformat them after the push.
+# No `| head -1` in either extraction: as the header of this file explains, a
+# `head` that closes the pipe early can SIGPIPE the producer and fail the whole
+# run under `set -o pipefail`. awk reads the workflow directly and `exit`s at
+# the first hit; the local version is parsed out of the already-captured
+# `$FLUTTER_VER` rather than invoking flutter a second time.
 CI_WORKFLOW="$REPO_ROOT/.github/workflows/flutter_ci.yml"
-PINNED_FLUTTER="$(sed -n "s/^[[:space:]]*flutter-version:[[:space:]]*['\"]\{0,1\}\([0-9][^'\" ]*\)['\"]\{0,1\}[[:space:]]*$/\1/p" "$CI_WORKFLOW" | head -1)"
+PINNED_FLUTTER="$(awk '/^[[:space:]]*flutter-version:/ { v = $2; gsub(/[\047"]/, "", v); print v; exit }' "$CI_WORKFLOW")"
 [ -n "$PINNED_FLUTTER" ] \
   || fail_usage "cannot read the flutter-version pin from $CI_WORKFLOW (T98)"
-LOCAL_FLUTTER="$(flutter --version --machine 2>/dev/null | sed -n 's/.*"frameworkVersion"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+LOCAL_FLUTTER="$(printf '%s\n' "$FLUTTER_VER" | sed -n 's/^Flutter \([0-9][^ ]*\).*/\1/p' | tr -d '\n')"
 [ -n "$LOCAL_FLUTTER" ] \
-  || LOCAL_FLUTTER="$(printf '%s' "${FLUTTER_VER%%$'\n'*}" | awk '{print $2}')"
+  || fail_usage "cannot parse the local Flutter version out of 'flutter --version' (T98)"
 echo "CI pin (flutter_ci.yml): $PINNED_FLUTTER — local: $LOCAL_FLUTTER"
 [ "$LOCAL_FLUTTER" = "$PINNED_FLUTTER" ] \
   || fail_usage "local Flutter $LOCAL_FLUTTER != CI pin $PINNED_FLUTTER. Install the pinned version — do NOT 'flutter upgrade' (that moves you further off the pin). To move the pin, bump it in both workflows + CLAUDE.md + the pre-push-validation skill in one PR (T98)."
