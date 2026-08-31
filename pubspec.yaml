@@ -69,7 +69,6 @@ dev_dependencies:
   integration_test:
     sdk: flutter
   arch_test: ^1.0.0
-  import_lint: ^0.1.6
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
