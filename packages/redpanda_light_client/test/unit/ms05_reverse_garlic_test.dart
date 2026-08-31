@@ -179,7 +179,7 @@ void main() {
     await waitFor(
       () => client.activePeerAddresses.isNotEmpty,
       timeout: const Duration(seconds: 15),
-      description: 'peer became handshake-verified',
+      description: 'peer handshake verification',
     );
     return (client, socket, hops);
   }

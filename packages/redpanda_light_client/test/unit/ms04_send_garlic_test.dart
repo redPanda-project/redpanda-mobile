@@ -170,7 +170,7 @@ void main() {
     await waitFor(
       () => client.activePeerAddresses.isNotEmpty,
       timeout: const Duration(seconds: 15),
-      description: 'peer became handshake-verified',
+      description: 'peer handshake verification',
     );
     return (client, socket, hops);
   }
@@ -232,6 +232,8 @@ void main() {
       final messageId = await client.sendMessage(channel.id, 'Garlic hello!');
       expect(messageId, hasLength(32));
 
+      // Outbound frames travel an async tx chain, so poll rather than assert
+      // straight away.
       await waitFor(
         () => frames.isNotEmpty,
         description: 'garlic frame written to the socket',
