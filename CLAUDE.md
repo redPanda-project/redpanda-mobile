@@ -39,5 +39,7 @@ until T98), is what your formatting ran on.
 ## Flutter / Dart Versions
 
 CI uses Flutter stable channel (`flutter-version: '3.x'`), currently resolving to
-**Flutter 3.41.2 / Dart 3.11.0**. Use this exact version for formatting to avoid
-style drift.
+**Flutter 3.47.1 / Dart 3.13.1**. Use this exact version for formatting to avoid
+style drift. Both manifests declare `environment.sdk: ^3.12.0` (matching
+`pubspec.lock`'s `sdks.dart: >=3.12.0 <4.0.0`), so a toolchain below Dart 3.12
+cannot resolve this repo at all.

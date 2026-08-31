@@ -104,26 +104,17 @@ class RatchetSession {
   Future<void> _pending = Future.value();
 
   RatchetSession._({
-    required Uint8List rootKey,
-    required Uint8List ownPrivateKey,
-    required Uint8List ownPublicKey,
-    required Uint8List? remotePublicKey,
-    required Uint8List? sendChainKey,
-    required int sendCount,
-    required Uint8List? recvChainKey,
-    required int recvCount,
-    required int prevSendCount,
-    required List<_SkippedKey> skipped,
-  }) : _rootKey = rootKey,
-       _ownPrivateKey = ownPrivateKey,
-       _ownPublicKey = ownPublicKey,
-       _remotePublicKey = remotePublicKey,
-       _sendChainKey = sendChainKey,
-       _sendCount = sendCount,
-       _recvChainKey = recvChainKey,
-       _recvCount = recvCount,
-       _prevSendCount = prevSendCount,
-       _skipped = skipped;
+    required this._rootKey,
+    required this._ownPrivateKey,
+    required this._ownPublicKey,
+    required this._remotePublicKey,
+    required this._sendChainKey,
+    required this._sendCount,
+    required this._recvChainKey,
+    required this._recvCount,
+    required this._prevSendCount,
+    required this._skipped,
+  });
 
   /// Initializes a fresh ratchet for a channel from its 32-byte `K_enc`.
   ///
