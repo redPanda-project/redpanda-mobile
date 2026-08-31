@@ -16,6 +16,7 @@ import 'package:redpanda_light_client/src/models/node_id.dart';
 import 'package:redpanda_light_client/src/peer_repository.dart';
 
 import '../helpers/garlic_test_utils.dart';
+import '../helpers/wait_for.dart';
 
 /// A scripted in-memory Socket: captures client writes and lets the test
 /// inject node responses. The exchange stays in plaintext because the
@@ -166,25 +167,12 @@ void main() {
       peerRepository: repo,
     );
     await client.connect();
-    final deadline = DateTime.now().add(const Duration(seconds: 15));
-    while (client.activePeerAddresses.isEmpty) {
-      if (DateTime.now().isAfter(deadline)) {
-        fail('peer never became handshake-verified');
-      }
-      await Future.delayed(const Duration(milliseconds: 10));
-    }
+    await waitFor(
+      () => client.activePeerAddresses.isNotEmpty,
+      timeout: const Duration(seconds: 15),
+      description: 'peer handshake verification',
+    );
     return (client, socket, hops);
-  }
-
-  /// Outbound frames travel an async tx chain; poll until [condition] holds.
-  Future<void> waitFor(bool Function() condition) async {
-    final deadline = DateTime.now().add(const Duration(seconds: 5));
-    while (!condition()) {
-      if (DateTime.now().isAfter(deadline)) {
-        fail('expected frame was never written to the socket');
-      }
-      await Future.delayed(const Duration(milliseconds: 10));
-    }
   }
 
   Future<Channel> channelWithKeys(
@@ -244,7 +232,12 @@ void main() {
       final messageId = await client.sendMessage(channel.id, 'Garlic hello!');
       expect(messageId, hasLength(32));
 
-      await waitFor(() => frames.isNotEmpty);
+      // Outbound frames travel an async tx chain, so poll rather than assert
+      // straight away.
+      await waitFor(
+        () => frames.isNotEmpty,
+        description: 'garlic frame written to the socket',
+      );
       expect(frames, hasLength(1));
       expect(frames.single.$1, equals(142), reason: 'no direct deposit');
       expect(client.lastSendHopCount, 3);
@@ -290,7 +283,10 @@ void main() {
       // CMD_DELIVER — i.e. the OH host never appears on any layer.
       for (var i = 0; i < 5; i++) {
         await client.sendMessage(channel.id, 'try $i');
-        await waitFor(() => frames.length == i + 1);
+        await waitFor(
+          () => frames.length == i + 1,
+          description: 'frame ${i + 1} written to the socket',
+        );
       }
       expect(frames, hasLength(5));
       for (final packet in frames) {
@@ -313,7 +309,10 @@ void main() {
       final channel = await channelWithKeys(client);
       await client.sendMessage(channel.id, 'Two hops');
 
-      await waitFor(() => frames.isNotEmpty);
+      await waitFor(
+        () => frames.isNotEmpty,
+        description: 'garlic frame written to the socket',
+      );
       expect(frames.single.$1, 142);
       expect(client.lastSendHopCount, 2);
       final (_, path) = await peelAll(frames.single.$2, hops);

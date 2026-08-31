@@ -22,6 +22,7 @@ import 'package:redpanda_light_client/src/peer_repository.dart';
 import 'package:fixnum/fixnum.dart' as fixnum;
 
 import '../helpers/garlic_test_utils.dart';
+import '../helpers/wait_for.dart';
 
 /// A scripted in-memory Socket (see ms04_send_garlic_test.dart): captures
 /// client writes and lets the test inject node responses. Extended for MS05
@@ -175,24 +176,12 @@ void main() {
       peerRepository: repo,
     );
     await client.connect();
-    final deadline = DateTime.now().add(const Duration(seconds: 15));
-    while (client.activePeerAddresses.isEmpty) {
-      if (DateTime.now().isAfter(deadline)) {
-        fail('peer never became handshake-verified');
-      }
-      await Future.delayed(const Duration(milliseconds: 10));
-    }
+    await waitFor(
+      () => client.activePeerAddresses.isNotEmpty,
+      timeout: const Duration(seconds: 15),
+      description: 'peer handshake verification',
+    );
     return (client, socket, hops);
-  }
-
-  Future<void> waitFor(bool Function() condition) async {
-    final deadline = DateTime.now().add(const Duration(seconds: 5));
-    while (!condition()) {
-      if (DateTime.now().isAfter(deadline)) {
-        fail('expected condition never became true');
-      }
-      await Future.delayed(const Duration(milliseconds: 10));
-    }
   }
 
   /// Registers an own OH for [channelId] without contacting the network.
@@ -289,7 +278,10 @@ void main() {
       await restoreOwnOh(client, channel.id);
 
       await client.sendMessage(channel.id, 'Hello with reply path!');
-      await waitFor(() => frames.isNotEmpty);
+      await waitFor(
+        () => frames.isNotEmpty,
+        description: 'garlic frame written to the socket',
+      );
 
       // Forward path: a garlic packet whose innermost layer is an acked
       // deliver (MS06 — the channel has an own OH, so an R-ACK is requested)
@@ -326,7 +318,10 @@ void main() {
 
       // The issued session tag is registered for the channel (persistence
       // snapshot emitted for the app layer).
-      await waitFor(() => updates.isNotEmpty);
+      await waitFor(
+        () => updates.isNotEmpty,
+        description: 'persistence update emitted',
+      );
       expect(updates.last.channelId, channel.id);
       expect(updates.last.sessionTags.keys, contains(rgb.sessionTagHex));
     });
@@ -347,7 +342,10 @@ void main() {
       );
 
       await client.sendMessage(channel.id, 'No reply path');
-      await waitFor(() => frames.isNotEmpty);
+      await waitFor(
+        () => frames.isNotEmpty,
+        description: 'garlic frame written to the socket',
+      );
 
       final (_, _, _, payload, _) = await peelAll(frames.single.$2, hops);
       final bobSession = await RatchetSession.create(
@@ -398,7 +396,10 @@ void main() {
       );
 
       await client.sendMessage(channel.id, 'Reply through your hops!');
-      await waitFor(() => frames.isNotEmpty);
+      await waitFor(
+        () => frames.isNotEmpty,
+        description: 'garlic frame written to the socket',
+      );
 
       expect(frames.single.$1, 142);
       expect(client.lastSendViaRgb, isTrue);
@@ -429,7 +430,10 @@ void main() {
       // next send has no route left at all — no RGB, no known peer OH, no
       // garlic hops for this channel. REDPANDAJ-2DR: sendMessage must refuse
       // rather than deposit with an empty oh_id.
-      await waitFor(() => updates.isNotEmpty);
+      await waitFor(
+        () => updates.isNotEmpty,
+        description: 'persistence update emitted',
+      );
       expect(updates.last.pendingRgbHex, isNull);
 
       await expectLater(
@@ -472,7 +476,10 @@ void main() {
       );
 
       await client.sendMessage(channel.id, 'Falls back');
-      await waitFor(() => frames.isNotEmpty);
+      await waitFor(
+        () => frames.isNotEmpty,
+        description: 'garlic frame written to the socket',
+      );
 
       expect(frames.single.$1, 142);
       expect(client.lastSendViaRgb, isFalse);
@@ -573,7 +580,10 @@ void main() {
       expect(messages.single.channelId, channel.id);
 
       // The consumed tag is gone and Bob's RGB is pending now.
-      await waitFor(() => updates.isNotEmpty);
+      await waitFor(
+        () => updates.isNotEmpty,
+        description: 'persistence update emitted',
+      );
       expect(updates.last.sessionTags, isEmpty);
       expect(updates.last.pendingRgbHex, HEX.encode(bobsRgb.serialize()));
 
