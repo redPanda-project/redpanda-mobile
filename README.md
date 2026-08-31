@@ -62,7 +62,9 @@ redpanda-mobile/
 
 ### Prerequisites
 
-- Flutter SDK (latest stable)
+- Flutter SDK — the exact version pinned as `flutter-version:` in
+  `.github/workflows/flutter_ci.yml` (not "latest stable": the formatter's output
+  changes between Dart releases, so a different version fails CI on formatting)
 - Java 21+ (only if running the reference full node locally)
 - Protobuf compiler (`protoc`) and Dart plugin (only for protocol changes)
 
