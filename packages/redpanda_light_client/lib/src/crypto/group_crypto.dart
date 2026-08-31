@@ -126,14 +126,11 @@ class GroupCryptoSession {
 
   GroupCryptoSession._({
     required this.groupId,
-    required int epoch,
-    required Uint8List? outerKey,
-    required Map<String, _SenderChain> chains,
-    required Map<int, _ArchivedEpoch> archive,
-  }) : _epoch = epoch,
-       _outerKey = outerKey,
-       _chains = chains,
-       _archive = archive;
+    required this._epoch,
+    required this._outerKey,
+    required this._chains,
+    required this._archive,
+  });
 
   /// A fresh session with no epoch installed yet (epoch 0) — the state of a
   /// joiner waiting for its first rotation.
