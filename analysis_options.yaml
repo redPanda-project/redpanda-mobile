@@ -22,17 +22,6 @@ analyzer:
     - windows/**
     - macos/**
     - linux/**
-  plugins:
-    - import_lint
-
-import_lint:
-  rules:
-    - target: "lib/screens/**"
-      from: "package:redpanda/database/**"
-      severity: error
-    - target: "lib/features/**"
-      from: "package:redpanda/shared/**"
-      severity: warning
 
 linter:
   rules:
