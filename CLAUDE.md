@@ -38,8 +38,21 @@ until T98), is what your formatting ran on.
 
 ## Flutter / Dart Versions
 
-CI uses Flutter stable channel (`flutter-version: '3.x'`), currently resolving to
-**Flutter 3.47.1 / Dart 3.13.1**. Use this exact version for formatting to avoid
-style drift. Both manifests declare `environment.sdk: ^3.12.0` (matching
-`pubspec.lock`'s `sdks.dart: >=3.12.0 <4.0.0`), so a toolchain below Dart 3.12
-cannot resolve this repo at all.
+The toolchain version lives in **exactly one place**:
+`flutter-version:` in `.github/workflows/flutter_ci.yml` (and the identical pin
+in `emu_duo_e2e.yml`). That pin is the source of truth — read it there, do not
+trust a version repeated anywhere else. At the time of writing it is
+**Flutter 3.47.2 (Dart 3.13.2)**; if this line and the workflow disagree, the
+workflow wins and this line is stale.
+
+Run `dart format` with that exact version. The formatter changes its output
+between Dart releases, so a mismatched local toolchain reformats unrelated files
+and a floating CI toolchain turns PRs red without a code change (which is what
+`'3.x'` did on 2026-08-30). Bumping the toolchain is a deliberate PR that
+changes the workflow pin, this section, and
+`.claude/skills/pre-push-validation/SKILL.md` together, and carries any
+resulting repo-wide reformat.
+
+Both manifests declare `environment.sdk: ^3.12.0` (matching `pubspec.lock`'s
+`sdks.dart: >=3.12.0 <4.0.0`), so a toolchain below Dart 3.12 cannot resolve
+this repo at all. That floor is a lower bound, not the pin.

@@ -78,7 +78,11 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.x'
+          # Keep in lockstep with .github/workflows/flutter_ci.yml, which holds
+          # the rationale for the exact pin. The gate must run on the same
+          # toolchain as the build CI, or a green gate proves nothing about the
+          # code the build CI checked.
+          flutter-version: '3.47.2'
           channel: 'stable'
           cache: true
 

@@ -31,12 +31,27 @@ fix the problem, and restart the validation from the beginning.
 ### 0. Environment Setup
 
 Flutter must be on `PATH`. Locally the toolchain lives in `~/tools/flutter`
-(`export PATH=~/tools/flutter/bin:$PATH`). CI uses `flutter-version: '3.x'` on
-the `stable` channel, i.e. whatever the **latest stable** is at run time — keep
-the local Flutter on current stable (`flutter upgrade`) so `dart format` agrees
-with CI (formatter output changes between Dart minor versions). The E2E suites
-additionally need Java 21 (`~/tools/jdk`, CI: Temurin 21) and a backend JAR
-(see `--with-e2e` below).
+(`export PATH=~/tools/flutter/bin:$PATH`).
+
+**The local Flutter must match the CI pin exactly.** CI pins one exact version
+via `flutter-version:` in `.github/workflows/flutter_ci.yml`; that pin is the
+source of truth for this repo (see `CLAUDE.md` → *Flutter / Dart Versions*).
+Read the version out of the workflow rather than from memory:
+
+```bash
+grep -m1 "flutter-version:" .github/workflows/flutter_ci.yml
+flutter --version | head -1   # must report the same version
+```
+
+If they differ, this validation is worthless — `dart format` output changes
+between Dart releases, so a mismatched toolchain either reformats unrelated
+files locally or lets CI reformat them for you. Do **not** `flutter upgrade` to
+fix a mismatch: that moves the local side away from the pin. Install the pinned
+version, or bump the pin deliberately in its own PR (workflow + `CLAUDE.md` +
+this file, plus any repo-wide reformat).
+
+The E2E suites additionally need Java 21 (`~/tools/jdk`, CI: Temurin 21) and a
+backend JAR (see `--with-e2e` below).
 
 ### 1 · Light Client Package (`packages/redpanda_light_client`)
 
@@ -99,7 +114,7 @@ if [ -d "test" ]; then flutter test; else echo "No test directory, skipping."; f
 **Use the checked-in script — do not hand-roll a shell chain:**
 
 ```bash
-export PATH=~/tools/flutter/bin:$PATH   # local toolchain; CI installs its own
+export PATH=~/tools/flutter/bin:$PATH   # must match the CI pin (see step 0)
 tool/pre_push_validation.sh             # full run (E2E suites opt-in: --with-e2e)
 ```
 
