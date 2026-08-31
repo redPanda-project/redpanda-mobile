@@ -26,16 +26,16 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-      # SINGLE SOURCE OF TRUTH for the Flutter/Dart toolchain of this repo.
-      # Pinned exactly, not '3.x': the floating range silently moved from
-      # 3.47.1 to 3.47.2 on 2026-08-30 and turned every open PR red without a
-      # single code change (the 3.47.2 analyzer deprecated the legacy
-      # `analyzer: plugins:` mechanism). A floating toolchain also means
-      # `dart format` can reformat untouched files between two runs, which no
-      # local pre-push validation can predict. Bump this deliberately, in a PR
-      # that also carries any resulting repo-wide reformat, and update
-      # CLAUDE.md + .claude/skills/pre-push-validation/SKILL.md in the same PR
-      # (emu_duo_e2e.yml carries the identical pin).
+          # SINGLE SOURCE OF TRUTH for the Flutter/Dart toolchain of this repo.
+          # Pinned exactly, not '3.x': the floating range silently moved from
+          # 3.47.1 to 3.47.2 on 2026-08-30 and turned every open PR red without a
+          # single code change (the 3.47.2 analyzer deprecated the legacy
+          # `analyzer: plugins:` mechanism). A floating toolchain also means
+          # `dart format` can reformat untouched files between two runs, which no
+          # local pre-push validation can predict. Bump this deliberately, in a PR
+          # that also carries any resulting repo-wide reformat, and update
+          # CLAUDE.md + .claude/skills/pre-push-validation/SKILL.md in the same PR
+          # (emu_duo_e2e.yml carries the identical pin).
           flutter-version: '3.47.2'
           channel: 'stable'
           cache: true

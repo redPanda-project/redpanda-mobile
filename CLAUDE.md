@@ -10,9 +10,9 @@ via `--with-e2e` — **required** when `packages/redpanda_light_client/lib` or
 and test failures before they reach GitHub Actions. A pass is exit code 0 **and**
 the last line `PRE_PUSH_VALIDATION_OK` — never reconstruct the steps as an
 ad-hoc `cmd | tail && echo OK` chain, and never pipe the script itself into
-`tail`: a pipe swallows the failing exit code (TD048). The script prints the
-local toolchain version; that, not the pinned version text further down (stale
-until T98), is what your formatting ran on.
+`tail`: a pipe swallows the failing exit code (TD048). The script prints
+both the CI pin and your local toolchain version and refuses to run when they
+differ — see *Flutter / Dart Versions* below.
 
 ## Key Rules
 
@@ -38,18 +38,19 @@ until T98), is what your formatting ran on.
 
 ## Flutter / Dart Versions
 
-The toolchain version lives in **exactly one place**:
-`flutter-version:` in `.github/workflows/flutter_ci.yml` (and the identical pin
-in `emu_duo_e2e.yml`). That pin is the source of truth — read it there, do not
-trust a version repeated anywhere else. At the time of writing it is
-**Flutter 3.47.2 (Dart 3.13.2)**; if this line and the workflow disagree, the
-workflow wins and this line is stale.
+The source of truth is `flutter-version:` in
+`.github/workflows/flutter_ci.yml`. Everything else must match it: the
+`flutter-version:` in `emu_duo_e2e.yml`, your local `~/tools/flutter`, and this
+section. Read the version out of `flutter_ci.yml` — do not trust a version
+repeated anywhere else, including here. At the time of writing it is
+**Flutter 3.47.2 (Dart 3.13.2)**; if this line and `flutter_ci.yml` disagree,
+`flutter_ci.yml` wins and this line is stale.
 
 Run `dart format` with that exact version. The formatter changes its output
 between Dart releases, so a mismatched local toolchain reformats unrelated files
 and a floating CI toolchain turns PRs red without a code change (which is what
 `'3.x'` did on 2026-08-30). Bumping the toolchain is a deliberate PR that
-changes the workflow pin, this section, and
+changes both workflow pins, this section, and
 `.claude/skills/pre-push-validation/SKILL.md` together, and carries any
 resulting repo-wide reformat.
 

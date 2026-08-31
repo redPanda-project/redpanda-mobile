@@ -36,7 +36,11 @@ Flutter must be on `PATH`. Locally the toolchain lives in `~/tools/flutter`
 **The local Flutter must match the CI pin exactly.** CI pins one exact version
 via `flutter-version:` in `.github/workflows/flutter_ci.yml`; that pin is the
 source of truth for this repo (see `CLAUDE.md` → *Flutter / Dart Versions*).
-Read the version out of the workflow rather than from memory:
+`tool/pre_push_validation.sh` enforces this in step 0: it reads the pin out of
+the workflow, prints both versions and aborts with
+`PRE_PUSH_VALIDATION_FAILED: local Flutter <x> != CI pin <y>` (exit 2) on a
+mismatch. To check by hand, read the version out of the workflow rather than
+from memory:
 
 ```bash
 grep -m1 "flutter-version:" .github/workflows/flutter_ci.yml

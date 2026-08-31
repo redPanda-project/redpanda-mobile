@@ -86,8 +86,21 @@ step "0. toolchain"
 FLUTTER_VER="$(flutter --version)"
 echo "${FLUTTER_VER%%$'\n'*}"
 dart --version
-echo "CI resolves flutter-version '3.x' on the stable channel = latest stable at run time;"
-echo "if your local Dart differs, 'dart format' may disagree with CI — run 'flutter upgrade' (T98)."
+# The toolchain version is NOT duplicated here — it is read out of the CI
+# workflow, which is the single source of truth (T98). A local Flutter that
+# differs from the pin makes this whole validation meaningless: `dart format`
+# changes its output between Dart releases, so it would either reformat
+# untouched files locally or let CI reformat them after the push.
+CI_WORKFLOW="$REPO_ROOT/.github/workflows/flutter_ci.yml"
+PINNED_FLUTTER="$(sed -n "s/^[[:space:]]*flutter-version:[[:space:]]*['\"]\{0,1\}\([0-9][^'\" ]*\)['\"]\{0,1\}[[:space:]]*$/\1/p" "$CI_WORKFLOW" | head -1)"
+[ -n "$PINNED_FLUTTER" ] \
+  || fail_usage "cannot read the flutter-version pin from $CI_WORKFLOW (T98)"
+LOCAL_FLUTTER="$(flutter --version --machine 2>/dev/null | sed -n 's/.*"frameworkVersion"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+[ -n "$LOCAL_FLUTTER" ] \
+  || LOCAL_FLUTTER="$(printf '%s' "${FLUTTER_VER%%$'\n'*}" | awk '{print $2}')"
+echo "CI pin (flutter_ci.yml): $PINNED_FLUTTER — local: $LOCAL_FLUTTER"
+[ "$LOCAL_FLUTTER" = "$PINNED_FLUTTER" ] \
+  || fail_usage "local Flutter $LOCAL_FLUTTER != CI pin $PINNED_FLUTTER. Install the pinned version — do NOT 'flutter upgrade' (that moves you further off the pin). To move the pin, bump it in both workflows + CLAUDE.md + the pre-push-validation skill in one PR (T98)."
 
 if [ "$WITH_E2E" -eq 1 ]; then
   command -v java >/dev/null 2>&1 \
