@@ -1,5 +1,7 @@
 import 'package:drift/drift.dart';
 import 'package:drift_flutter/drift_flutter.dart';
+import 'package:redpanda/domain/message_direction.dart';
+import 'package:redpanda/domain/message_lifecycle.dart';
 
 part 'database.g.dart';
 
@@ -121,6 +123,13 @@ class Messages extends Table {
   // MS08: authenticated sender member id (hex) for incoming group messages;
   // null for 1:1 messages and own outgoing messages.
   TextColumn get senderMemberId => text().nullable()();
+
+  // T114: which way the message travelled ([MessageDirection]). Explicit
+  // instead of derived from senderId/status — see message_direction.dart.
+  // The default is only for the v17 -> v18 upgrade path; both insert paths
+  // in MessageRepository set it.
+  IntColumn get direction =>
+      integer().withDefault(const Constant(MessageDirection.outgoing))();
 }
 
 // MS08: one row per group this device is a member of. The crypto state
@@ -288,7 +297,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 17;
+  int get schemaVersion => 18;
 
   @override
   MigrationStrategy get migration {
@@ -453,6 +462,23 @@ class AppDatabase extends _$AppDatabase {
           await m.createTable(messages);
           await m.createTable(outboundHandles);
           await m.createIndex(idxMessagesConvMessageId);
+        }
+        if (from < 18 && to >= 18) {
+          // T114: message direction becomes an explicit column instead of the
+          // two heuristics the chat screen used. Backfilled with EXACTLY those
+          // heuristics so nothing on screen moves side:
+          //   groups: incoming <=> status == received (the only writer of that
+          //           status is insertIncomingIfNew, and no transition leads
+          //           into or out of it, see MessageLifecycle)
+          //   1:1:    incoming <=> sender_id == conversation_id (the channel id
+          //           stands in for "them"; own rows carry the user's uuid)
+          // The union of both is safe: an outgoing row can satisfy neither.
+          await m.addColumn(messages, messages.direction);
+          await m.database.customStatement(
+            'UPDATE messages SET direction = ${MessageDirection.incoming} '
+            'WHERE status = ${MessageStatus.received} '
+            'OR sender_id = conversation_id',
+          );
         }
       },
     );

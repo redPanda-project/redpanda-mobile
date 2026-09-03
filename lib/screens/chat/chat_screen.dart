@@ -483,13 +483,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   itemCount: messages.length,
                   itemBuilder: (context, index) {
                     final msg = messages[index];
-                    // MS08: in groups the sender is a member id, so "mine"
-                    // is decided by the status (incoming rows are always
-                    // `received`); 1:1 keeps the legacy heuristic.
-                    final isMe = group != null
-                        ? msg.status != MessageStatus.received
-                        : msg.conversationId == widget.conversationId &&
-                              msg.senderId != widget.conversationId;
+                    // T114: the message says which way it went. This used
+                    // to be two heuristics (status for groups, `senderId !=
+                    // conversationId` for 1:1) over fields that mean three
+                    // different things depending on the row.
+                    final isMe = msg.direction == MessageDirection.outgoing;
 
                     final statusIcon = isMe ? _statusIcon(msg.status) : null;
                     // MS08: authenticated sender name for group messages.

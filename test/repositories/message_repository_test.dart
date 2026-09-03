@@ -498,4 +498,50 @@ void main() {
       expect(all.every((m) => m.messageId == null), isTrue);
     });
   });
+
+  // T114: the two insert paths ARE the two directions, so each stamps its own.
+  // Nothing downstream may re-derive it from senderId or status.
+  group('MessageRepository: direction', () {
+    test('insertOutgoing stamps outgoing', () async {
+      await repo.insertOutgoing(
+        conversationId: 'channel-1',
+        senderId: 'me',
+        content: 'Hello',
+      );
+
+      final row = await db.select(db.messages).getSingle();
+      expect(row.direction, equals(MessageDirection.outgoing));
+    });
+
+    test('insertIncomingIfNew stamps incoming', () async {
+      await repo.insertIncomingIfNew(
+        messageId: 'aa' * 8,
+        conversationId: 'channel-1',
+        senderId: 'channel-1',
+        content: 'Hi',
+        timestamp: DateTime.now(),
+      );
+
+      final row = await db.select(db.messages).getSingle();
+      expect(row.direction, equals(MessageDirection.incoming));
+    });
+
+    test(
+      'a group message keeps its direction independent of the sender',
+      () async {
+        await repo.insertIncomingIfNew(
+          messageId: 'bb' * 8,
+          conversationId: 'group-1',
+          senderId: 'ee' * 32,
+          content: 'from a member',
+          timestamp: DateTime.now(),
+          senderMemberId: 'ee' * 32,
+        );
+
+        final row = await db.select(db.messages).getSingle();
+        expect(row.direction, equals(MessageDirection.incoming));
+        expect(row.senderId, isNot(equals(row.conversationId)));
+      },
+    );
+  });
 }
