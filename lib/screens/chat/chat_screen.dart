@@ -98,9 +98,9 @@ class _GlassComposer extends StatelessWidget {
 }
 
 class ChatScreen extends ConsumerStatefulWidget {
-  final String peerUuid;
+  final String conversationId;
 
-  const ChatScreen({super.key, required this.peerUuid});
+  const ChatScreen({super.key, required this.conversationId});
 
   @override
   ConsumerState<ChatScreen> createState() => _ChatScreenState();
@@ -134,7 +134,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     await ref
         .read(outboxServiceProvider)
         .enqueue(
-          conversationId: widget.peerUuid,
+          conversationId: widget.conversationId,
           senderId: currentUser.uuid,
           content: content,
         );
@@ -321,17 +321,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     // Watch messages for this conversation
-    final messagesAsync = ref.watch(messagesStreamProvider(widget.peerUuid));
-    final channelAsync = ref.watch(channelProvider(widget.peerUuid));
+    final messagesAsync = ref.watch(
+      messagesStreamProvider(widget.conversationId),
+    );
+    final channelAsync = ref.watch(channelProvider(widget.conversationId));
 
     // MS08: this conversation may be a group instead of a 1:1 channel.
     final group = ref
         .watch(groupsProvider)
         .value
-        ?.where((g) => g.groupId == widget.peerUuid)
+        ?.where((g) => g.groupId == widget.conversationId)
         .firstOrNull;
     final groupMembers = group != null
-        ? ref.watch(groupMembersProvider(widget.peerUuid)).value ?? const []
+        ? ref.watch(groupMembersProvider(widget.conversationId)).value ??
+              const []
         : const <GroupMemberRow>[];
     final memberNames = {
       for (final member in groupMembers) member.memberId: member.displayName,
@@ -341,7 +344,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     ref.listen(mailboxOverflowProvider, (_, next) {
       final update = next.value;
       if (update == null) return;
-      if (update.channelId != null && update.channelId != widget.peerUuid) {
+      if (update.channelId != null &&
+          update.channelId != widget.conversationId) {
         return;
       }
       ScaffoldMessenger.of(context).showSnackBar(
@@ -360,7 +364,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     ref.listen(deliveryAttemptProvider, (_, next) {
       final attempt = next.value;
       if (attempt == null) return;
-      if (attempt.conversationId != widget.peerUuid) return;
+      if (attempt.conversationId != widget.conversationId) return;
       if (attempt.attempt != 1 || attempt.succeeded) return;
       final message = _failureMessage(attempt);
       if (message == null) return;
@@ -422,14 +426,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           if (group != null)
             IconButton(
               icon: const Icon(Icons.info_outline),
-              onPressed: () => context.push('/groups/${widget.peerUuid}/info'),
+              onPressed: () =>
+                  context.push('/groups/${widget.conversationId}/info'),
             )
           else
             IconButton(
               icon: const Icon(Icons.monitor_heart_outlined),
               tooltip: 'Channel status',
               onPressed: () =>
-                  context.push('/channels/${widget.peerUuid}/status'),
+                  context.push('/channels/${widget.conversationId}/status'),
             ),
           channelAsync.when(
             data: (channel) {
@@ -483,8 +488,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     // `received`); 1:1 keeps the legacy heuristic.
                     final isMe = group != null
                         ? msg.status != MessageStatus.received
-                        : msg.conversationId == widget.peerUuid &&
-                              msg.senderId != widget.peerUuid;
+                        : msg.conversationId == widget.conversationId &&
+                              msg.senderId != widget.conversationId;
 
                     final statusIcon = isMe ? _statusIcon(msg.status) : null;
                     // MS08: authenticated sender name for group messages.
@@ -578,10 +583,10 @@ final messagesStreamProvider = StreamProvider.family<List<Message>, String>((
 
 final channelProvider = FutureProvider.family<Channel?, String>((
   ref,
-  uuid,
+  conversationId,
 ) async {
   final db = ref.watch(dbProvider);
   return (db.select(
     db.channels,
-  )..where((t) => t.uuid.equals(uuid))).getSingleOrNull();
+  )..where((t) => t.conversationId.equals(conversationId))).getSingleOrNull();
 });

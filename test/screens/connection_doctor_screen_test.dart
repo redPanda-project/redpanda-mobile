@@ -22,7 +22,7 @@ void main() {
     return ProviderScope(
       overrides: [redPandaClientProvider.overrideWithValue(client)],
       child: const MaterialApp(
-        home: ConnectionDoctorScreen(channelUuid: 'channel-1'),
+        home: ConnectionDoctorScreen(conversationId: 'channel-1'),
       ),
     );
   }

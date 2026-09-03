@@ -49,7 +49,7 @@ class MessageSyncService {
   final _overflowController = StreamController<OhMailboxUpdate>.broadcast();
   StreamSubscription<DecryptedMessage>? _messageSub;
   StreamSubscription<StateUpdate>? _stateSub;
-  StreamSubscription<List<String>>? _channelIdsSub;
+  StreamSubscription<List<String>>? _conversationIdsSub;
 
   /// Channel ids already handed to the network worker in this app run (T111).
   /// Guards the watcher below so a channel is restored once, not on every
@@ -116,9 +116,9 @@ class MessageSyncService {
     // harness joins straight through the repository, and a future deep link
     // or import would too) silently ended up with a channel the worker has no
     // key for. The watcher makes it a property of the DATA instead.
-    _channelIdsSub ??= _db
+    _conversationIdsSub ??= _db
         .select(_db.channels)
-        .map((c) => c.uuid)
+        .map((c) => c.conversationId)
         .watch()
         .listen((ids) {
           for (final id in ids) {
@@ -173,10 +173,10 @@ class MessageSyncService {
   Future<void> stop() async {
     await _messageSub?.cancel();
     await _stateSub?.cancel();
-    await _channelIdsSub?.cancel();
+    await _conversationIdsSub?.cancel();
     _messageSub = null;
     _stateSub = null;
-    _channelIdsSub = null;
+    _conversationIdsSub = null;
     // Drain what is still queued: the subscriptions are gone, so no new link
     // can be appended, and callers (tests, app teardown) may close the
     // database right after stop() — a write still in flight would then fail.
@@ -188,17 +188,17 @@ class MessageSyncService {
   /// Persists a fetched message unless it was already stored (dedup via
   /// network-level message id — covers re-deliveries after failed AckFetch).
   Future<void> handleIncomingMessage(DecryptedMessage msg) async {
-    final channelId = msg.channelId;
-    if (channelId == null) {
+    final conversationId = msg.channelId;
+    if (conversationId == null) {
       // Without a channel association the message cannot be shown anywhere.
       return;
     }
     await _messages.insertIncomingIfNew(
       messageId: msg.id,
-      conversationId: channelId,
+      conversationId: conversationId,
       // MS08: group messages carry their authenticated sender; 1:1 messages
       // keep the channel id as sender (the counterpart).
-      senderId: msg.senderMemberIdHex ?? channelId,
+      senderId: msg.senderMemberIdHex ?? conversationId,
       content: msg.content,
       timestamp: DateTime.fromMillisecondsSinceEpoch(msg.receivedAtMs),
       senderMemberId: msg.senderMemberIdHex,
@@ -226,9 +226,12 @@ class MessageSyncService {
     // because the alternative reading of an empty set here would be
     // destructive (delete every persisted mailbox row of the channel).
     if (update.handles.isEmpty) return;
-    final channelId = update.channelId;
-    if (channelId == null) return;
-    await _outboundHandles.replaceAllForChannel(channelId, update.handles);
+    final conversationId = update.channelId;
+    if (conversationId == null) return;
+    await _outboundHandles.replaceAllForConversation(
+      conversationId,
+      update.handles,
+    );
   }
 
   /// Persists the partner's full mailbox set announced in-band via `oh_update`
@@ -242,7 +245,7 @@ class MessageSyncService {
     );
     await (_db.update(
       _db.channels,
-    )..where((c) => c.uuid.equals(update.channelId))).write(
+    )..where((c) => c.conversationId.equals(update.channelId))).write(
       ChannelsCompanion(
         counterpartOhEndpoint: Value(primary.serverEndpoint),
         counterpartOhId: Value(HEX.encode(primary.handleId)),
@@ -274,7 +277,7 @@ class MessageSyncService {
   /// in the QR code or any off-device backup.
   Future<void> handleRatchetStateUpdate(RatchetStateUpdate update) async {
     await (_db.update(_db.channels)
-          ..where((c) => c.uuid.equals(update.channelId)))
+          ..where((c) => c.conversationId.equals(update.channelId)))
         .write(ChannelsCompanion(ratchetState: Value(update.stateJson)));
   }
 
@@ -285,21 +288,21 @@ class MessageSyncService {
     await _db.transaction(() async {
       await (_db.delete(
         _db.sessionTags,
-      )..where((t) => t.channelId.equals(update.channelId))).go();
+      )..where((t) => t.conversationId.equals(update.channelId))).go();
       for (final entry in update.sessionTags.entries) {
         await _db
             .into(_db.sessionTags)
             .insert(
               SessionTagsCompanion.insert(
                 tag: entry.key,
-                channelId: update.channelId,
+                conversationId: update.channelId,
                 createdAt: DateTime.fromMillisecondsSinceEpoch(entry.value),
               ),
               mode: InsertMode.insertOrReplace,
             );
       }
       await (_db.update(_db.channels)
-            ..where((c) => c.uuid.equals(update.channelId)))
+            ..where((c) => c.conversationId.equals(update.channelId)))
           .write(ChannelsCompanion(pendingRgb: Value(update.pendingRgbHex)));
     });
   }
@@ -337,7 +340,7 @@ class MessageSyncService {
     for (final channel in channels) {
       _registerChannel(channel, {
         for (final tag in allTags)
-          if (tag.channelId == channel.uuid)
+          if (tag.conversationId == channel.conversationId)
             tag.tag: tag.createdAt.millisecondsSinceEpoch,
       });
     }
@@ -377,14 +380,14 @@ class MessageSyncService {
   ///
   /// The worker is authoritative — it adopts this snapshot only for a channel
   /// it does not know yet — so calling this more than once is harmless.
-  Future<void> registerChannel(String channelId) async {
+  Future<void> registerChannel(String conversationId) async {
     final channel = await (_db.select(
       _db.channels,
-    )..where((c) => c.uuid.equals(channelId))).getSingleOrNull();
+    )..where((c) => c.conversationId.equals(conversationId))).getSingleOrNull();
     if (channel == null) return;
     final tags = await (_db.select(
       _db.sessionTags,
-    )..where((t) => t.channelId.equals(channelId))).get();
+    )..where((t) => t.conversationId.equals(conversationId))).get();
     _registerChannel(channel, {
       for (final tag in tags) tag.tag: tag.createdAt.millisecondsSinceEpoch,
     });
@@ -394,9 +397,9 @@ class MessageSyncService {
   /// worker's restore call — with the COMPLETE argument set. Anything that
   /// registers a channel with fewer arguments is a bug, not an optimization.
   void _registerChannel(Channel channel, Map<String, int> sessionTags) {
-    _registeredChannelIds.add(channel.uuid);
+    _registeredChannelIds.add(channel.conversationId);
     _client.addChannelKeys(
-      channel.uuid,
+      channel.conversationId,
       HEX.decode(channel.encryptionKey),
       // T44: the channel secret enables the rendezvous DHT layer.
       channelSecret: channel.channelSecret != null

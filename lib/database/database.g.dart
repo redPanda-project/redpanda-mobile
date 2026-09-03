@@ -322,9 +322,11 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
   final GeneratedDatabase attachedDatabase;
   final String? _alias;
   $ChannelsTable(this.attachedDatabase, [this._alias]);
-  static const VerificationMeta _uuidMeta = const VerificationMeta('uuid');
+  static const VerificationMeta _conversationIdMeta = const VerificationMeta(
+    'conversationId',
+  );
   @override
-  late final GeneratedColumn<String> uuid = GeneratedColumn<String>(
+  late final GeneratedColumn<String> conversationId = GeneratedColumn<String>(
     'uuid',
     aliasedName,
     false,
@@ -463,7 +465,7 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
   );
   @override
   List<GeneratedColumn> get $columns => [
-    uuid,
+    conversationId,
     label,
     encryptionKey,
     channelSecret,
@@ -491,11 +493,14 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
     final data = instance.toColumns(true);
     if (data.containsKey('uuid')) {
       context.handle(
-        _uuidMeta,
-        uuid.isAcceptableOrUnknown(data['uuid']!, _uuidMeta),
+        _conversationIdMeta,
+        conversationId.isAcceptableOrUnknown(
+          data['uuid']!,
+          _conversationIdMeta,
+        ),
       );
     } else if (isInserting) {
-      context.missing(_uuidMeta);
+      context.missing(_conversationIdMeta);
     }
     if (data.containsKey('label')) {
       context.handle(
@@ -606,12 +611,12 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
   }
 
   @override
-  Set<GeneratedColumn> get $primaryKey => {uuid};
+  Set<GeneratedColumn> get $primaryKey => {conversationId};
   @override
   Channel map(Map<String, dynamic> data, {String? tablePrefix}) {
     final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
     return Channel(
-      uuid: attachedDatabase.typeMapping.read(
+      conversationId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}uuid'],
       )!,
@@ -673,7 +678,14 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
 }
 
 class Channel extends DataClass implements Insertable<Channel> {
-  final String uuid;
+  /// The conversation id: `SHA256(channel_pk)` as hex (spec Decision 1).
+  ///
+  /// T114: this is THE identifier of a 1:1 conversation. It used to be called
+  /// `uuid` here, `channelId` in the repositories and `peerUuid` in the chat
+  /// screen — four names (with `Messages.conversationId`) for one string. The
+  /// app layer says `conversationId` now; the SQL column keeps its historical
+  /// name so no migration is needed.
+  final String conversationId;
   final String label;
   final String encryptionKey;
   final String? channelSecret;
@@ -687,7 +699,7 @@ class Channel extends DataClass implements Insertable<Channel> {
   final String? ratchetState;
   final String? pendingRgb;
   const Channel({
-    required this.uuid,
+    required this.conversationId,
     required this.label,
     required this.encryptionKey,
     this.channelSecret,
@@ -704,7 +716,7 @@ class Channel extends DataClass implements Insertable<Channel> {
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
-    map['uuid'] = Variable<String>(uuid);
+    map['uuid'] = Variable<String>(conversationId);
     map['label'] = Variable<String>(label);
     map['encryption_key'] = Variable<String>(encryptionKey);
     if (!nullToAbsent || channelSecret != null) {
@@ -740,7 +752,7 @@ class Channel extends DataClass implements Insertable<Channel> {
 
   ChannelsCompanion toCompanion(bool nullToAbsent) {
     return ChannelsCompanion(
-      uuid: Value(uuid),
+      conversationId: Value(conversationId),
       label: Value(label),
       encryptionKey: Value(encryptionKey),
       channelSecret: channelSecret == null && nullToAbsent
@@ -780,7 +792,7 @@ class Channel extends DataClass implements Insertable<Channel> {
   }) {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return Channel(
-      uuid: serializer.fromJson<String>(json['uuid']),
+      conversationId: serializer.fromJson<String>(json['conversationId']),
       label: serializer.fromJson<String>(json['label']),
       encryptionKey: serializer.fromJson<String>(json['encryptionKey']),
       channelSecret: serializer.fromJson<String?>(json['channelSecret']),
@@ -803,7 +815,7 @@ class Channel extends DataClass implements Insertable<Channel> {
   Map<String, dynamic> toJson({ValueSerializer? serializer}) {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return <String, dynamic>{
-      'uuid': serializer.toJson<String>(uuid),
+      'conversationId': serializer.toJson<String>(conversationId),
       'label': serializer.toJson<String>(label),
       'encryptionKey': serializer.toJson<String>(encryptionKey),
       'channelSecret': serializer.toJson<String?>(channelSecret),
@@ -824,7 +836,7 @@ class Channel extends DataClass implements Insertable<Channel> {
   }
 
   Channel copyWith({
-    String? uuid,
+    String? conversationId,
     String? label,
     String? encryptionKey,
     Value<String?> channelSecret = const Value.absent(),
@@ -838,7 +850,7 @@ class Channel extends DataClass implements Insertable<Channel> {
     Value<String?> ratchetState = const Value.absent(),
     Value<String?> pendingRgb = const Value.absent(),
   }) => Channel(
-    uuid: uuid ?? this.uuid,
+    conversationId: conversationId ?? this.conversationId,
     label: label ?? this.label,
     encryptionKey: encryptionKey ?? this.encryptionKey,
     channelSecret: channelSecret.present
@@ -866,7 +878,9 @@ class Channel extends DataClass implements Insertable<Channel> {
   );
   Channel copyWithCompanion(ChannelsCompanion data) {
     return Channel(
-      uuid: data.uuid.present ? data.uuid.value : this.uuid,
+      conversationId: data.conversationId.present
+          ? data.conversationId.value
+          : this.conversationId,
       label: data.label.present ? data.label.value : this.label,
       encryptionKey: data.encryptionKey.present
           ? data.encryptionKey.value
@@ -905,7 +919,7 @@ class Channel extends DataClass implements Insertable<Channel> {
   @override
   String toString() {
     return (StringBuffer('Channel(')
-          ..write('uuid: $uuid, ')
+          ..write('conversationId: $conversationId, ')
           ..write('label: $label, ')
           ..write('encryptionKey: $encryptionKey, ')
           ..write('channelSecret: $channelSecret, ')
@@ -924,7 +938,7 @@ class Channel extends DataClass implements Insertable<Channel> {
 
   @override
   int get hashCode => Object.hash(
-    uuid,
+    conversationId,
     label,
     encryptionKey,
     channelSecret,
@@ -942,7 +956,7 @@ class Channel extends DataClass implements Insertable<Channel> {
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is Channel &&
-          other.uuid == this.uuid &&
+          other.conversationId == this.conversationId &&
           other.label == this.label &&
           other.encryptionKey == this.encryptionKey &&
           other.channelSecret == this.channelSecret &&
@@ -958,7 +972,7 @@ class Channel extends DataClass implements Insertable<Channel> {
 }
 
 class ChannelsCompanion extends UpdateCompanion<Channel> {
-  final Value<String> uuid;
+  final Value<String> conversationId;
   final Value<String> label;
   final Value<String> encryptionKey;
   final Value<String?> channelSecret;
@@ -973,7 +987,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
   final Value<String?> pendingRgb;
   final Value<int> rowid;
   const ChannelsCompanion({
-    this.uuid = const Value.absent(),
+    this.conversationId = const Value.absent(),
     this.label = const Value.absent(),
     this.encryptionKey = const Value.absent(),
     this.channelSecret = const Value.absent(),
@@ -989,7 +1003,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     this.rowid = const Value.absent(),
   });
   ChannelsCompanion.insert({
-    required String uuid,
+    required String conversationId,
     required String label,
     required String encryptionKey,
     this.channelSecret = const Value.absent(),
@@ -1003,12 +1017,12 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     this.ratchetState = const Value.absent(),
     this.pendingRgb = const Value.absent(),
     this.rowid = const Value.absent(),
-  }) : uuid = Value(uuid),
+  }) : conversationId = Value(conversationId),
        label = Value(label),
        encryptionKey = Value(encryptionKey),
        authPublicKey = Value(authPublicKey);
   static Insertable<Channel> custom({
-    Expression<String>? uuid,
+    Expression<String>? conversationId,
     Expression<String>? label,
     Expression<String>? encryptionKey,
     Expression<String>? channelSecret,
@@ -1024,7 +1038,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
-      if (uuid != null) 'uuid': uuid,
+      if (conversationId != null) 'uuid': conversationId,
       if (label != null) 'label': label,
       if (encryptionKey != null) 'encryption_key': encryptionKey,
       if (channelSecret != null) 'channel_secret': channelSecret,
@@ -1044,7 +1058,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
   }
 
   ChannelsCompanion copyWith({
-    Value<String>? uuid,
+    Value<String>? conversationId,
     Value<String>? label,
     Value<String>? encryptionKey,
     Value<String?>? channelSecret,
@@ -1060,7 +1074,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     Value<int>? rowid,
   }) {
     return ChannelsCompanion(
-      uuid: uuid ?? this.uuid,
+      conversationId: conversationId ?? this.conversationId,
       label: label ?? this.label,
       encryptionKey: encryptionKey ?? this.encryptionKey,
       channelSecret: channelSecret ?? this.channelSecret,
@@ -1082,8 +1096,8 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
-    if (uuid.present) {
-      map['uuid'] = Variable<String>(uuid.value);
+    if (conversationId.present) {
+      map['uuid'] = Variable<String>(conversationId.value);
     }
     if (label.present) {
       map['label'] = Variable<String>(label.value);
@@ -1132,7 +1146,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
   @override
   String toString() {
     return (StringBuffer('ChannelsCompanion(')
-          ..write('uuid: $uuid, ')
+          ..write('conversationId: $conversationId, ')
           ..write('label: $label, ')
           ..write('encryptionKey: $encryptionKey, ')
           ..write('channelSecret: $channelSecret, ')
@@ -2370,11 +2384,11 @@ class $OutboundHandlesTable extends OutboundHandles
     type: DriftSqlType.dateTime,
     requiredDuringInsert: true,
   );
-  static const VerificationMeta _channelIdMeta = const VerificationMeta(
-    'channelId',
+  static const VerificationMeta _conversationIdMeta = const VerificationMeta(
+    'conversationId',
   );
   @override
-  late final GeneratedColumn<String> channelId = GeneratedColumn<String>(
+  late final GeneratedColumn<String> conversationId = GeneratedColumn<String>(
     'channel_id',
     aliasedName,
     true,
@@ -2411,7 +2425,7 @@ class $OutboundHandlesTable extends OutboundHandles
     keypairBytes,
     serverEndpoint,
     expiresAt,
-    channelId,
+    conversationId,
     lastCursor,
     failedOverAt,
   ];
@@ -2470,8 +2484,11 @@ class $OutboundHandlesTable extends OutboundHandles
     }
     if (data.containsKey('channel_id')) {
       context.handle(
-        _channelIdMeta,
-        channelId.isAcceptableOrUnknown(data['channel_id']!, _channelIdMeta),
+        _conversationIdMeta,
+        conversationId.isAcceptableOrUnknown(
+          data['channel_id']!,
+          _conversationIdMeta,
+        ),
       );
     }
     if (data.containsKey('last_cursor')) {
@@ -2518,7 +2535,7 @@ class $OutboundHandlesTable extends OutboundHandles
         DriftSqlType.dateTime,
         data['${effectivePrefix}expires_at'],
       )!,
-      channelId: attachedDatabase.typeMapping.read(
+      conversationId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}channel_id'],
       ),
@@ -2545,7 +2562,7 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
   final Uint8List keypairBytes;
   final String serverEndpoint;
   final DateTime expiresAt;
-  final String? channelId;
+  final String? conversationId;
   final int lastCursor;
   final DateTime? failedOverAt;
   const OutboundHandle({
@@ -2554,7 +2571,7 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
     required this.keypairBytes,
     required this.serverEndpoint,
     required this.expiresAt,
-    this.channelId,
+    this.conversationId,
     required this.lastCursor,
     this.failedOverAt,
   });
@@ -2566,8 +2583,8 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
     map['keypair_bytes'] = Variable<Uint8List>(keypairBytes);
     map['server_endpoint'] = Variable<String>(serverEndpoint);
     map['expires_at'] = Variable<DateTime>(expiresAt);
-    if (!nullToAbsent || channelId != null) {
-      map['channel_id'] = Variable<String>(channelId);
+    if (!nullToAbsent || conversationId != null) {
+      map['channel_id'] = Variable<String>(conversationId);
     }
     map['last_cursor'] = Variable<int>(lastCursor);
     if (!nullToAbsent || failedOverAt != null) {
@@ -2583,9 +2600,9 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
       keypairBytes: Value(keypairBytes),
       serverEndpoint: Value(serverEndpoint),
       expiresAt: Value(expiresAt),
-      channelId: channelId == null && nullToAbsent
+      conversationId: conversationId == null && nullToAbsent
           ? const Value.absent()
-          : Value(channelId),
+          : Value(conversationId),
       lastCursor: Value(lastCursor),
       failedOverAt: failedOverAt == null && nullToAbsent
           ? const Value.absent()
@@ -2604,7 +2621,7 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
       keypairBytes: serializer.fromJson<Uint8List>(json['keypairBytes']),
       serverEndpoint: serializer.fromJson<String>(json['serverEndpoint']),
       expiresAt: serializer.fromJson<DateTime>(json['expiresAt']),
-      channelId: serializer.fromJson<String?>(json['channelId']),
+      conversationId: serializer.fromJson<String?>(json['conversationId']),
       lastCursor: serializer.fromJson<int>(json['lastCursor']),
       failedOverAt: serializer.fromJson<DateTime?>(json['failedOverAt']),
     );
@@ -2618,7 +2635,7 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
       'keypairBytes': serializer.toJson<Uint8List>(keypairBytes),
       'serverEndpoint': serializer.toJson<String>(serverEndpoint),
       'expiresAt': serializer.toJson<DateTime>(expiresAt),
-      'channelId': serializer.toJson<String?>(channelId),
+      'conversationId': serializer.toJson<String?>(conversationId),
       'lastCursor': serializer.toJson<int>(lastCursor),
       'failedOverAt': serializer.toJson<DateTime?>(failedOverAt),
     };
@@ -2630,7 +2647,7 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
     Uint8List? keypairBytes,
     String? serverEndpoint,
     DateTime? expiresAt,
-    Value<String?> channelId = const Value.absent(),
+    Value<String?> conversationId = const Value.absent(),
     int? lastCursor,
     Value<DateTime?> failedOverAt = const Value.absent(),
   }) => OutboundHandle(
@@ -2639,7 +2656,9 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
     keypairBytes: keypairBytes ?? this.keypairBytes,
     serverEndpoint: serverEndpoint ?? this.serverEndpoint,
     expiresAt: expiresAt ?? this.expiresAt,
-    channelId: channelId.present ? channelId.value : this.channelId,
+    conversationId: conversationId.present
+        ? conversationId.value
+        : this.conversationId,
     lastCursor: lastCursor ?? this.lastCursor,
     failedOverAt: failedOverAt.present ? failedOverAt.value : this.failedOverAt,
   );
@@ -2654,7 +2673,9 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
           ? data.serverEndpoint.value
           : this.serverEndpoint,
       expiresAt: data.expiresAt.present ? data.expiresAt.value : this.expiresAt,
-      channelId: data.channelId.present ? data.channelId.value : this.channelId,
+      conversationId: data.conversationId.present
+          ? data.conversationId.value
+          : this.conversationId,
       lastCursor: data.lastCursor.present
           ? data.lastCursor.value
           : this.lastCursor,
@@ -2672,7 +2693,7 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
           ..write('keypairBytes: $keypairBytes, ')
           ..write('serverEndpoint: $serverEndpoint, ')
           ..write('expiresAt: $expiresAt, ')
-          ..write('channelId: $channelId, ')
+          ..write('conversationId: $conversationId, ')
           ..write('lastCursor: $lastCursor, ')
           ..write('failedOverAt: $failedOverAt')
           ..write(')'))
@@ -2686,7 +2707,7 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
     $driftBlobEquality.hash(keypairBytes),
     serverEndpoint,
     expiresAt,
-    channelId,
+    conversationId,
     lastCursor,
     failedOverAt,
   );
@@ -2699,7 +2720,7 @@ class OutboundHandle extends DataClass implements Insertable<OutboundHandle> {
           $driftBlobEquality.equals(other.keypairBytes, this.keypairBytes) &&
           other.serverEndpoint == this.serverEndpoint &&
           other.expiresAt == this.expiresAt &&
-          other.channelId == this.channelId &&
+          other.conversationId == this.conversationId &&
           other.lastCursor == this.lastCursor &&
           other.failedOverAt == this.failedOverAt);
 }
@@ -2710,7 +2731,7 @@ class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
   final Value<Uint8List> keypairBytes;
   final Value<String> serverEndpoint;
   final Value<DateTime> expiresAt;
-  final Value<String?> channelId;
+  final Value<String?> conversationId;
   final Value<int> lastCursor;
   final Value<DateTime?> failedOverAt;
   const OutboundHandlesCompanion({
@@ -2719,7 +2740,7 @@ class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
     this.keypairBytes = const Value.absent(),
     this.serverEndpoint = const Value.absent(),
     this.expiresAt = const Value.absent(),
-    this.channelId = const Value.absent(),
+    this.conversationId = const Value.absent(),
     this.lastCursor = const Value.absent(),
     this.failedOverAt = const Value.absent(),
   });
@@ -2729,7 +2750,7 @@ class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
     required Uint8List keypairBytes,
     required String serverEndpoint,
     required DateTime expiresAt,
-    this.channelId = const Value.absent(),
+    this.conversationId = const Value.absent(),
     this.lastCursor = const Value.absent(),
     this.failedOverAt = const Value.absent(),
   }) : ohId = Value(ohId),
@@ -2742,7 +2763,7 @@ class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
     Expression<Uint8List>? keypairBytes,
     Expression<String>? serverEndpoint,
     Expression<DateTime>? expiresAt,
-    Expression<String>? channelId,
+    Expression<String>? conversationId,
     Expression<int>? lastCursor,
     Expression<DateTime>? failedOverAt,
   }) {
@@ -2752,7 +2773,7 @@ class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
       if (keypairBytes != null) 'keypair_bytes': keypairBytes,
       if (serverEndpoint != null) 'server_endpoint': serverEndpoint,
       if (expiresAt != null) 'expires_at': expiresAt,
-      if (channelId != null) 'channel_id': channelId,
+      if (conversationId != null) 'channel_id': conversationId,
       if (lastCursor != null) 'last_cursor': lastCursor,
       if (failedOverAt != null) 'failed_over_at': failedOverAt,
     });
@@ -2764,7 +2785,7 @@ class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
     Value<Uint8List>? keypairBytes,
     Value<String>? serverEndpoint,
     Value<DateTime>? expiresAt,
-    Value<String?>? channelId,
+    Value<String?>? conversationId,
     Value<int>? lastCursor,
     Value<DateTime?>? failedOverAt,
   }) {
@@ -2774,7 +2795,7 @@ class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
       keypairBytes: keypairBytes ?? this.keypairBytes,
       serverEndpoint: serverEndpoint ?? this.serverEndpoint,
       expiresAt: expiresAt ?? this.expiresAt,
-      channelId: channelId ?? this.channelId,
+      conversationId: conversationId ?? this.conversationId,
       lastCursor: lastCursor ?? this.lastCursor,
       failedOverAt: failedOverAt ?? this.failedOverAt,
     );
@@ -2798,8 +2819,8 @@ class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
     if (expiresAt.present) {
       map['expires_at'] = Variable<DateTime>(expiresAt.value);
     }
-    if (channelId.present) {
-      map['channel_id'] = Variable<String>(channelId.value);
+    if (conversationId.present) {
+      map['channel_id'] = Variable<String>(conversationId.value);
     }
     if (lastCursor.present) {
       map['last_cursor'] = Variable<int>(lastCursor.value);
@@ -2818,7 +2839,7 @@ class OutboundHandlesCompanion extends UpdateCompanion<OutboundHandle> {
           ..write('keypairBytes: $keypairBytes, ')
           ..write('serverEndpoint: $serverEndpoint, ')
           ..write('expiresAt: $expiresAt, ')
-          ..write('channelId: $channelId, ')
+          ..write('conversationId: $conversationId, ')
           ..write('lastCursor: $lastCursor, ')
           ..write('failedOverAt: $failedOverAt')
           ..write(')'))
@@ -2841,11 +2862,11 @@ class $SessionTagsTable extends SessionTags
     type: DriftSqlType.string,
     requiredDuringInsert: true,
   );
-  static const VerificationMeta _channelIdMeta = const VerificationMeta(
-    'channelId',
+  static const VerificationMeta _conversationIdMeta = const VerificationMeta(
+    'conversationId',
   );
   @override
-  late final GeneratedColumn<String> channelId = GeneratedColumn<String>(
+  late final GeneratedColumn<String> conversationId = GeneratedColumn<String>(
     'channel_id',
     aliasedName,
     false,
@@ -2867,7 +2888,7 @@ class $SessionTagsTable extends SessionTags
     requiredDuringInsert: true,
   );
   @override
-  List<GeneratedColumn> get $columns => [tag, channelId, createdAt];
+  List<GeneratedColumn> get $columns => [tag, conversationId, createdAt];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -2890,11 +2911,14 @@ class $SessionTagsTable extends SessionTags
     }
     if (data.containsKey('channel_id')) {
       context.handle(
-        _channelIdMeta,
-        channelId.isAcceptableOrUnknown(data['channel_id']!, _channelIdMeta),
+        _conversationIdMeta,
+        conversationId.isAcceptableOrUnknown(
+          data['channel_id']!,
+          _conversationIdMeta,
+        ),
       );
     } else if (isInserting) {
-      context.missing(_channelIdMeta);
+      context.missing(_conversationIdMeta);
     }
     if (data.containsKey('created_at')) {
       context.handle(
@@ -2917,7 +2941,7 @@ class $SessionTagsTable extends SessionTags
         DriftSqlType.string,
         data['${effectivePrefix}tag'],
       )!,
-      channelId: attachedDatabase.typeMapping.read(
+      conversationId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}channel_id'],
       )!,
@@ -2936,18 +2960,18 @@ class $SessionTagsTable extends SessionTags
 
 class SessionTag extends DataClass implements Insertable<SessionTag> {
   final String tag;
-  final String channelId;
+  final String conversationId;
   final DateTime createdAt;
   const SessionTag({
     required this.tag,
-    required this.channelId,
+    required this.conversationId,
     required this.createdAt,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
     map['tag'] = Variable<String>(tag);
-    map['channel_id'] = Variable<String>(channelId);
+    map['channel_id'] = Variable<String>(conversationId);
     map['created_at'] = Variable<DateTime>(createdAt);
     return map;
   }
@@ -2955,7 +2979,7 @@ class SessionTag extends DataClass implements Insertable<SessionTag> {
   SessionTagsCompanion toCompanion(bool nullToAbsent) {
     return SessionTagsCompanion(
       tag: Value(tag),
-      channelId: Value(channelId),
+      conversationId: Value(conversationId),
       createdAt: Value(createdAt),
     );
   }
@@ -2967,7 +2991,7 @@ class SessionTag extends DataClass implements Insertable<SessionTag> {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return SessionTag(
       tag: serializer.fromJson<String>(json['tag']),
-      channelId: serializer.fromJson<String>(json['channelId']),
+      conversationId: serializer.fromJson<String>(json['conversationId']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
     );
   }
@@ -2976,21 +3000,26 @@ class SessionTag extends DataClass implements Insertable<SessionTag> {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return <String, dynamic>{
       'tag': serializer.toJson<String>(tag),
-      'channelId': serializer.toJson<String>(channelId),
+      'conversationId': serializer.toJson<String>(conversationId),
       'createdAt': serializer.toJson<DateTime>(createdAt),
     };
   }
 
-  SessionTag copyWith({String? tag, String? channelId, DateTime? createdAt}) =>
-      SessionTag(
-        tag: tag ?? this.tag,
-        channelId: channelId ?? this.channelId,
-        createdAt: createdAt ?? this.createdAt,
-      );
+  SessionTag copyWith({
+    String? tag,
+    String? conversationId,
+    DateTime? createdAt,
+  }) => SessionTag(
+    tag: tag ?? this.tag,
+    conversationId: conversationId ?? this.conversationId,
+    createdAt: createdAt ?? this.createdAt,
+  );
   SessionTag copyWithCompanion(SessionTagsCompanion data) {
     return SessionTag(
       tag: data.tag.present ? data.tag.value : this.tag,
-      channelId: data.channelId.present ? data.channelId.value : this.channelId,
+      conversationId: data.conversationId.present
+          ? data.conversationId.value
+          : this.conversationId,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
     );
   }
@@ -2999,51 +3028,51 @@ class SessionTag extends DataClass implements Insertable<SessionTag> {
   String toString() {
     return (StringBuffer('SessionTag(')
           ..write('tag: $tag, ')
-          ..write('channelId: $channelId, ')
+          ..write('conversationId: $conversationId, ')
           ..write('createdAt: $createdAt')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode => Object.hash(tag, channelId, createdAt);
+  int get hashCode => Object.hash(tag, conversationId, createdAt);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is SessionTag &&
           other.tag == this.tag &&
-          other.channelId == this.channelId &&
+          other.conversationId == this.conversationId &&
           other.createdAt == this.createdAt);
 }
 
 class SessionTagsCompanion extends UpdateCompanion<SessionTag> {
   final Value<String> tag;
-  final Value<String> channelId;
+  final Value<String> conversationId;
   final Value<DateTime> createdAt;
   final Value<int> rowid;
   const SessionTagsCompanion({
     this.tag = const Value.absent(),
-    this.channelId = const Value.absent(),
+    this.conversationId = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   SessionTagsCompanion.insert({
     required String tag,
-    required String channelId,
+    required String conversationId,
     required DateTime createdAt,
     this.rowid = const Value.absent(),
   }) : tag = Value(tag),
-       channelId = Value(channelId),
+       conversationId = Value(conversationId),
        createdAt = Value(createdAt);
   static Insertable<SessionTag> custom({
     Expression<String>? tag,
-    Expression<String>? channelId,
+    Expression<String>? conversationId,
     Expression<DateTime>? createdAt,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
       if (tag != null) 'tag': tag,
-      if (channelId != null) 'channel_id': channelId,
+      if (conversationId != null) 'channel_id': conversationId,
       if (createdAt != null) 'created_at': createdAt,
       if (rowid != null) 'rowid': rowid,
     });
@@ -3051,13 +3080,13 @@ class SessionTagsCompanion extends UpdateCompanion<SessionTag> {
 
   SessionTagsCompanion copyWith({
     Value<String>? tag,
-    Value<String>? channelId,
+    Value<String>? conversationId,
     Value<DateTime>? createdAt,
     Value<int>? rowid,
   }) {
     return SessionTagsCompanion(
       tag: tag ?? this.tag,
-      channelId: channelId ?? this.channelId,
+      conversationId: conversationId ?? this.conversationId,
       createdAt: createdAt ?? this.createdAt,
       rowid: rowid ?? this.rowid,
     );
@@ -3069,8 +3098,8 @@ class SessionTagsCompanion extends UpdateCompanion<SessionTag> {
     if (tag.present) {
       map['tag'] = Variable<String>(tag.value);
     }
-    if (channelId.present) {
-      map['channel_id'] = Variable<String>(channelId.value);
+    if (conversationId.present) {
+      map['channel_id'] = Variable<String>(conversationId.value);
     }
     if (createdAt.present) {
       map['created_at'] = Variable<DateTime>(createdAt.value);
@@ -3085,7 +3114,7 @@ class SessionTagsCompanion extends UpdateCompanion<SessionTag> {
   String toString() {
     return (StringBuffer('SessionTagsCompanion(')
           ..write('tag: $tag, ')
-          ..write('channelId: $channelId, ')
+          ..write('conversationId: $conversationId, ')
           ..write('createdAt: $createdAt, ')
           ..write('rowid: $rowid')
           ..write(')'))
@@ -4940,11 +4969,11 @@ class $GroupInvitesTable extends GroupInvites
     type: DriftSqlType.string,
     requiredDuringInsert: true,
   );
-  static const VerificationMeta _channelIdMeta = const VerificationMeta(
-    'channelId',
+  static const VerificationMeta _conversationIdMeta = const VerificationMeta(
+    'conversationId',
   );
   @override
-  late final GeneratedColumn<String> channelId = GeneratedColumn<String>(
+  late final GeneratedColumn<String> conversationId = GeneratedColumn<String>(
     'channel_id',
     aliasedName,
     false,
@@ -4967,7 +4996,7 @@ class $GroupInvitesTable extends GroupInvites
     groupId,
     groupName,
     adminMemberId,
-    channelId,
+    conversationId,
     receivedAt,
   ];
   @override
@@ -5011,11 +5040,14 @@ class $GroupInvitesTable extends GroupInvites
     }
     if (data.containsKey('channel_id')) {
       context.handle(
-        _channelIdMeta,
-        channelId.isAcceptableOrUnknown(data['channel_id']!, _channelIdMeta),
+        _conversationIdMeta,
+        conversationId.isAcceptableOrUnknown(
+          data['channel_id']!,
+          _conversationIdMeta,
+        ),
       );
     } else if (isInserting) {
-      context.missing(_channelIdMeta);
+      context.missing(_conversationIdMeta);
     }
     if (data.containsKey('received_at')) {
       context.handle(
@@ -5046,7 +5078,7 @@ class $GroupInvitesTable extends GroupInvites
         DriftSqlType.string,
         data['${effectivePrefix}admin_member_id'],
       )!,
-      channelId: attachedDatabase.typeMapping.read(
+      conversationId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}channel_id'],
       )!,
@@ -5067,13 +5099,13 @@ class GroupInviteRow extends DataClass implements Insertable<GroupInviteRow> {
   final String groupId;
   final String groupName;
   final String adminMemberId;
-  final String channelId;
+  final String conversationId;
   final DateTime receivedAt;
   const GroupInviteRow({
     required this.groupId,
     required this.groupName,
     required this.adminMemberId,
-    required this.channelId,
+    required this.conversationId,
     required this.receivedAt,
   });
   @override
@@ -5082,7 +5114,7 @@ class GroupInviteRow extends DataClass implements Insertable<GroupInviteRow> {
     map['group_id'] = Variable<String>(groupId);
     map['group_name'] = Variable<String>(groupName);
     map['admin_member_id'] = Variable<String>(adminMemberId);
-    map['channel_id'] = Variable<String>(channelId);
+    map['channel_id'] = Variable<String>(conversationId);
     map['received_at'] = Variable<DateTime>(receivedAt);
     return map;
   }
@@ -5092,7 +5124,7 @@ class GroupInviteRow extends DataClass implements Insertable<GroupInviteRow> {
       groupId: Value(groupId),
       groupName: Value(groupName),
       adminMemberId: Value(adminMemberId),
-      channelId: Value(channelId),
+      conversationId: Value(conversationId),
       receivedAt: Value(receivedAt),
     );
   }
@@ -5106,7 +5138,7 @@ class GroupInviteRow extends DataClass implements Insertable<GroupInviteRow> {
       groupId: serializer.fromJson<String>(json['groupId']),
       groupName: serializer.fromJson<String>(json['groupName']),
       adminMemberId: serializer.fromJson<String>(json['adminMemberId']),
-      channelId: serializer.fromJson<String>(json['channelId']),
+      conversationId: serializer.fromJson<String>(json['conversationId']),
       receivedAt: serializer.fromJson<DateTime>(json['receivedAt']),
     );
   }
@@ -5117,7 +5149,7 @@ class GroupInviteRow extends DataClass implements Insertable<GroupInviteRow> {
       'groupId': serializer.toJson<String>(groupId),
       'groupName': serializer.toJson<String>(groupName),
       'adminMemberId': serializer.toJson<String>(adminMemberId),
-      'channelId': serializer.toJson<String>(channelId),
+      'conversationId': serializer.toJson<String>(conversationId),
       'receivedAt': serializer.toJson<DateTime>(receivedAt),
     };
   }
@@ -5126,13 +5158,13 @@ class GroupInviteRow extends DataClass implements Insertable<GroupInviteRow> {
     String? groupId,
     String? groupName,
     String? adminMemberId,
-    String? channelId,
+    String? conversationId,
     DateTime? receivedAt,
   }) => GroupInviteRow(
     groupId: groupId ?? this.groupId,
     groupName: groupName ?? this.groupName,
     adminMemberId: adminMemberId ?? this.adminMemberId,
-    channelId: channelId ?? this.channelId,
+    conversationId: conversationId ?? this.conversationId,
     receivedAt: receivedAt ?? this.receivedAt,
   );
   GroupInviteRow copyWithCompanion(GroupInvitesCompanion data) {
@@ -5142,7 +5174,9 @@ class GroupInviteRow extends DataClass implements Insertable<GroupInviteRow> {
       adminMemberId: data.adminMemberId.present
           ? data.adminMemberId.value
           : this.adminMemberId,
-      channelId: data.channelId.present ? data.channelId.value : this.channelId,
+      conversationId: data.conversationId.present
+          ? data.conversationId.value
+          : this.conversationId,
       receivedAt: data.receivedAt.present
           ? data.receivedAt.value
           : this.receivedAt,
@@ -5155,15 +5189,20 @@ class GroupInviteRow extends DataClass implements Insertable<GroupInviteRow> {
           ..write('groupId: $groupId, ')
           ..write('groupName: $groupName, ')
           ..write('adminMemberId: $adminMemberId, ')
-          ..write('channelId: $channelId, ')
+          ..write('conversationId: $conversationId, ')
           ..write('receivedAt: $receivedAt')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode =>
-      Object.hash(groupId, groupName, adminMemberId, channelId, receivedAt);
+  int get hashCode => Object.hash(
+    groupId,
+    groupName,
+    adminMemberId,
+    conversationId,
+    receivedAt,
+  );
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -5171,7 +5210,7 @@ class GroupInviteRow extends DataClass implements Insertable<GroupInviteRow> {
           other.groupId == this.groupId &&
           other.groupName == this.groupName &&
           other.adminMemberId == this.adminMemberId &&
-          other.channelId == this.channelId &&
+          other.conversationId == this.conversationId &&
           other.receivedAt == this.receivedAt);
 }
 
@@ -5179,14 +5218,14 @@ class GroupInvitesCompanion extends UpdateCompanion<GroupInviteRow> {
   final Value<String> groupId;
   final Value<String> groupName;
   final Value<String> adminMemberId;
-  final Value<String> channelId;
+  final Value<String> conversationId;
   final Value<DateTime> receivedAt;
   final Value<int> rowid;
   const GroupInvitesCompanion({
     this.groupId = const Value.absent(),
     this.groupName = const Value.absent(),
     this.adminMemberId = const Value.absent(),
-    this.channelId = const Value.absent(),
+    this.conversationId = const Value.absent(),
     this.receivedAt = const Value.absent(),
     this.rowid = const Value.absent(),
   });
@@ -5194,19 +5233,19 @@ class GroupInvitesCompanion extends UpdateCompanion<GroupInviteRow> {
     required String groupId,
     required String groupName,
     required String adminMemberId,
-    required String channelId,
+    required String conversationId,
     required DateTime receivedAt,
     this.rowid = const Value.absent(),
   }) : groupId = Value(groupId),
        groupName = Value(groupName),
        adminMemberId = Value(adminMemberId),
-       channelId = Value(channelId),
+       conversationId = Value(conversationId),
        receivedAt = Value(receivedAt);
   static Insertable<GroupInviteRow> custom({
     Expression<String>? groupId,
     Expression<String>? groupName,
     Expression<String>? adminMemberId,
-    Expression<String>? channelId,
+    Expression<String>? conversationId,
     Expression<DateTime>? receivedAt,
     Expression<int>? rowid,
   }) {
@@ -5214,7 +5253,7 @@ class GroupInvitesCompanion extends UpdateCompanion<GroupInviteRow> {
       if (groupId != null) 'group_id': groupId,
       if (groupName != null) 'group_name': groupName,
       if (adminMemberId != null) 'admin_member_id': adminMemberId,
-      if (channelId != null) 'channel_id': channelId,
+      if (conversationId != null) 'channel_id': conversationId,
       if (receivedAt != null) 'received_at': receivedAt,
       if (rowid != null) 'rowid': rowid,
     });
@@ -5224,7 +5263,7 @@ class GroupInvitesCompanion extends UpdateCompanion<GroupInviteRow> {
     Value<String>? groupId,
     Value<String>? groupName,
     Value<String>? adminMemberId,
-    Value<String>? channelId,
+    Value<String>? conversationId,
     Value<DateTime>? receivedAt,
     Value<int>? rowid,
   }) {
@@ -5232,7 +5271,7 @@ class GroupInvitesCompanion extends UpdateCompanion<GroupInviteRow> {
       groupId: groupId ?? this.groupId,
       groupName: groupName ?? this.groupName,
       adminMemberId: adminMemberId ?? this.adminMemberId,
-      channelId: channelId ?? this.channelId,
+      conversationId: conversationId ?? this.conversationId,
       receivedAt: receivedAt ?? this.receivedAt,
       rowid: rowid ?? this.rowid,
     );
@@ -5250,8 +5289,8 @@ class GroupInvitesCompanion extends UpdateCompanion<GroupInviteRow> {
     if (adminMemberId.present) {
       map['admin_member_id'] = Variable<String>(adminMemberId.value);
     }
-    if (channelId.present) {
-      map['channel_id'] = Variable<String>(channelId.value);
+    if (conversationId.present) {
+      map['channel_id'] = Variable<String>(conversationId.value);
     }
     if (receivedAt.present) {
       map['received_at'] = Variable<DateTime>(receivedAt.value);
@@ -5268,7 +5307,7 @@ class GroupInvitesCompanion extends UpdateCompanion<GroupInviteRow> {
           ..write('groupId: $groupId, ')
           ..write('groupName: $groupName, ')
           ..write('adminMemberId: $adminMemberId, ')
-          ..write('channelId: $channelId, ')
+          ..write('conversationId: $conversationId, ')
           ..write('receivedAt: $receivedAt, ')
           ..write('rowid: $rowid')
           ..write(')'))
@@ -5871,7 +5910,7 @@ typedef $$UsersTableProcessedTableManager =
     >;
 typedef $$ChannelsTableCreateCompanionBuilder =
     ChannelsCompanion Function({
-      required String uuid,
+      required String conversationId,
       required String label,
       required String encryptionKey,
       Value<String?> channelSecret,
@@ -5888,7 +5927,7 @@ typedef $$ChannelsTableCreateCompanionBuilder =
     });
 typedef $$ChannelsTableUpdateCompanionBuilder =
     ChannelsCompanion Function({
-      Value<String> uuid,
+      Value<String> conversationId,
       Value<String> label,
       Value<String> encryptionKey,
       Value<String?> channelSecret,
@@ -5913,14 +5952,16 @@ final class $$ChannelsTableReferences
   ) => MultiTypedResultKey.fromTable(
     db.messages,
     aliasName: $_aliasNameGenerator(
-      db.channels.uuid,
+      db.channels.conversationId,
       db.messages.conversationId,
     ),
   );
 
   $$MessagesTableProcessedTableManager get messagesRefs {
     final manager = $$MessagesTableTableManager($_db, $_db.messages).filter(
-      (f) => f.conversationId.uuid.sqlEquals($_itemColumn<String>('uuid')!),
+      (f) => f.conversationId.conversationId.sqlEquals(
+        $_itemColumn<String>('uuid')!,
+      ),
     );
 
     final cache = $_typedResult.readTableOrNull(_messagesRefsTable($_db));
@@ -5932,14 +5973,19 @@ final class $$ChannelsTableReferences
   static MultiTypedResultKey<$SessionTagsTable, List<SessionTag>>
   _sessionTagsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.sessionTags,
-    aliasName: $_aliasNameGenerator(db.channels.uuid, db.sessionTags.channelId),
+    aliasName: $_aliasNameGenerator(
+      db.channels.conversationId,
+      db.sessionTags.conversationId,
+    ),
   );
 
   $$SessionTagsTableProcessedTableManager get sessionTagsRefs {
-    final manager = $$SessionTagsTableTableManager(
-      $_db,
-      $_db.sessionTags,
-    ).filter((f) => f.channelId.uuid.sqlEquals($_itemColumn<String>('uuid')!));
+    final manager = $$SessionTagsTableTableManager($_db, $_db.sessionTags)
+        .filter(
+          (f) => f.conversationId.conversationId.sqlEquals(
+            $_itemColumn<String>('uuid')!,
+          ),
+        );
 
     final cache = $_typedResult.readTableOrNull(_sessionTagsRefsTable($_db));
     return ProcessedTableManager(
@@ -5957,8 +6003,8 @@ class $$ChannelsTableFilterComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
-  ColumnFilters<String> get uuid => $composableBuilder(
-    column: $table.uuid,
+  ColumnFilters<String> get conversationId => $composableBuilder(
+    column: $table.conversationId,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -6027,7 +6073,7 @@ class $$ChannelsTableFilterComposer
   ) {
     final $$MessagesTableFilterComposer composer = $composerBuilder(
       composer: this,
-      getCurrentColumn: (t) => t.uuid,
+      getCurrentColumn: (t) => t.conversationId,
       referencedTable: $db.messages,
       getReferencedColumn: (t) => t.conversationId,
       builder:
@@ -6052,9 +6098,9 @@ class $$ChannelsTableFilterComposer
   ) {
     final $$SessionTagsTableFilterComposer composer = $composerBuilder(
       composer: this,
-      getCurrentColumn: (t) => t.uuid,
+      getCurrentColumn: (t) => t.conversationId,
       referencedTable: $db.sessionTags,
-      getReferencedColumn: (t) => t.channelId,
+      getReferencedColumn: (t) => t.conversationId,
       builder:
           (
             joinBuilder, {
@@ -6082,8 +6128,8 @@ class $$ChannelsTableOrderingComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
-  ColumnOrderings<String> get uuid => $composableBuilder(
-    column: $table.uuid,
+  ColumnOrderings<String> get conversationId => $composableBuilder(
+    column: $table.conversationId,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -6157,8 +6203,10 @@ class $$ChannelsTableAnnotationComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
-  GeneratedColumn<String> get uuid =>
-      $composableBuilder(column: $table.uuid, builder: (column) => column);
+  GeneratedColumn<String> get conversationId => $composableBuilder(
+    column: $table.conversationId,
+    builder: (column) => column,
+  );
 
   GeneratedColumn<String> get label =>
       $composableBuilder(column: $table.label, builder: (column) => column);
@@ -6221,7 +6269,7 @@ class $$ChannelsTableAnnotationComposer
   ) {
     final $$MessagesTableAnnotationComposer composer = $composerBuilder(
       composer: this,
-      getCurrentColumn: (t) => t.uuid,
+      getCurrentColumn: (t) => t.conversationId,
       referencedTable: $db.messages,
       getReferencedColumn: (t) => t.conversationId,
       builder:
@@ -6246,9 +6294,9 @@ class $$ChannelsTableAnnotationComposer
   ) {
     final $$SessionTagsTableAnnotationComposer composer = $composerBuilder(
       composer: this,
-      getCurrentColumn: (t) => t.uuid,
+      getCurrentColumn: (t) => t.conversationId,
       referencedTable: $db.sessionTags,
-      getReferencedColumn: (t) => t.channelId,
+      getReferencedColumn: (t) => t.conversationId,
       builder:
           (
             joinBuilder, {
@@ -6295,7 +6343,7 @@ class $$ChannelsTableTableManager
               $$ChannelsTableAnnotationComposer($db: db, $table: table),
           updateCompanionCallback:
               ({
-                Value<String> uuid = const Value.absent(),
+                Value<String> conversationId = const Value.absent(),
                 Value<String> label = const Value.absent(),
                 Value<String> encryptionKey = const Value.absent(),
                 Value<String?> channelSecret = const Value.absent(),
@@ -6310,7 +6358,7 @@ class $$ChannelsTableTableManager
                 Value<String?> pendingRgb = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ChannelsCompanion(
-                uuid: uuid,
+                conversationId: conversationId,
                 label: label,
                 encryptionKey: encryptionKey,
                 channelSecret: channelSecret,
@@ -6327,7 +6375,7 @@ class $$ChannelsTableTableManager
               ),
           createCompanionCallback:
               ({
-                required String uuid,
+                required String conversationId,
                 required String label,
                 required String encryptionKey,
                 Value<String?> channelSecret = const Value.absent(),
@@ -6342,7 +6390,7 @@ class $$ChannelsTableTableManager
                 Value<String?> pendingRgb = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ChannelsCompanion.insert(
-                uuid: uuid,
+                conversationId: conversationId,
                 label: label,
                 encryptionKey: encryptionKey,
                 channelSecret: channelSecret,
@@ -6393,7 +6441,7 @@ class $$ChannelsTableTableManager
                               ).messagesRefs,
                           referencedItemsForCurrentItem:
                               (item, referencedItems) => referencedItems.where(
-                                (e) => e.conversationId == item.uuid,
+                                (e) => e.conversationId == item.conversationId,
                               ),
                           typedResults: items,
                         ),
@@ -6414,7 +6462,7 @@ class $$ChannelsTableTableManager
                               ).sessionTagsRefs,
                           referencedItemsForCurrentItem:
                               (item, referencedItems) => referencedItems.where(
-                                (e) => e.channelId == item.uuid,
+                                (e) => e.conversationId == item.conversationId,
                               ),
                           typedResults: items,
                         ),
@@ -6475,7 +6523,10 @@ final class $$MessagesTableReferences
 
   static $ChannelsTable _conversationIdTable(_$AppDatabase db) =>
       db.channels.createAlias(
-        $_aliasNameGenerator(db.messages.conversationId, db.channels.uuid),
+        $_aliasNameGenerator(
+          db.messages.conversationId,
+          db.channels.conversationId,
+        ),
       );
 
   $$ChannelsTableProcessedTableManager get conversationId {
@@ -6484,7 +6535,7 @@ final class $$MessagesTableReferences
     final manager = $$ChannelsTableTableManager(
       $_db,
       $_db.channels,
-    ).filter((f) => f.uuid.sqlEquals($_column));
+    ).filter((f) => f.conversationId.sqlEquals($_column));
     final item = $_typedResult.readTableOrNull(_conversationIdTable($_db));
     if (item == null) return manager;
     return ProcessedTableManager(
@@ -6557,7 +6608,7 @@ class $$MessagesTableFilterComposer
       composer: this,
       getCurrentColumn: (t) => t.conversationId,
       referencedTable: $db.channels,
-      getReferencedColumn: (t) => t.uuid,
+      getReferencedColumn: (t) => t.conversationId,
       builder:
           (
             joinBuilder, {
@@ -6640,7 +6691,7 @@ class $$MessagesTableOrderingComposer
       composer: this,
       getCurrentColumn: (t) => t.conversationId,
       referencedTable: $db.channels,
-      getReferencedColumn: (t) => t.uuid,
+      getReferencedColumn: (t) => t.conversationId,
       builder:
           (
             joinBuilder, {
@@ -6709,7 +6760,7 @@ class $$MessagesTableAnnotationComposer
       composer: this,
       getCurrentColumn: (t) => t.conversationId,
       referencedTable: $db.channels,
-      getReferencedColumn: (t) => t.uuid,
+      getReferencedColumn: (t) => t.conversationId,
       builder:
           (
             joinBuilder, {
@@ -6843,7 +6894,7 @@ class $$MessagesTableTableManager
                                     ._conversationIdTable(db),
                                 referencedColumn: $$MessagesTableReferences
                                     ._conversationIdTable(db)
-                                    .uuid,
+                                    .conversationId,
                               )
                               as T;
                     }
@@ -7119,7 +7170,7 @@ typedef $$OutboundHandlesTableCreateCompanionBuilder =
       required Uint8List keypairBytes,
       required String serverEndpoint,
       required DateTime expiresAt,
-      Value<String?> channelId,
+      Value<String?> conversationId,
       Value<int> lastCursor,
       Value<DateTime?> failedOverAt,
     });
@@ -7130,7 +7181,7 @@ typedef $$OutboundHandlesTableUpdateCompanionBuilder =
       Value<Uint8List> keypairBytes,
       Value<String> serverEndpoint,
       Value<DateTime> expiresAt,
-      Value<String?> channelId,
+      Value<String?> conversationId,
       Value<int> lastCursor,
       Value<DateTime?> failedOverAt,
     });
@@ -7169,8 +7220,8 @@ class $$OutboundHandlesTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
-  ColumnFilters<String> get channelId => $composableBuilder(
-    column: $table.channelId,
+  ColumnFilters<String> get conversationId => $composableBuilder(
+    column: $table.conversationId,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -7219,8 +7270,8 @@ class $$OutboundHandlesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
-  ColumnOrderings<String> get channelId => $composableBuilder(
-    column: $table.channelId,
+  ColumnOrderings<String> get conversationId => $composableBuilder(
+    column: $table.conversationId,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -7263,8 +7314,10 @@ class $$OutboundHandlesTableAnnotationComposer
   GeneratedColumn<DateTime> get expiresAt =>
       $composableBuilder(column: $table.expiresAt, builder: (column) => column);
 
-  GeneratedColumn<String> get channelId =>
-      $composableBuilder(column: $table.channelId, builder: (column) => column);
+  GeneratedColumn<String> get conversationId => $composableBuilder(
+    column: $table.conversationId,
+    builder: (column) => column,
+  );
 
   GeneratedColumn<int> get lastCursor => $composableBuilder(
     column: $table.lastCursor,
@@ -7319,7 +7372,7 @@ class $$OutboundHandlesTableTableManager
                 Value<Uint8List> keypairBytes = const Value.absent(),
                 Value<String> serverEndpoint = const Value.absent(),
                 Value<DateTime> expiresAt = const Value.absent(),
-                Value<String?> channelId = const Value.absent(),
+                Value<String?> conversationId = const Value.absent(),
                 Value<int> lastCursor = const Value.absent(),
                 Value<DateTime?> failedOverAt = const Value.absent(),
               }) => OutboundHandlesCompanion(
@@ -7328,7 +7381,7 @@ class $$OutboundHandlesTableTableManager
                 keypairBytes: keypairBytes,
                 serverEndpoint: serverEndpoint,
                 expiresAt: expiresAt,
-                channelId: channelId,
+                conversationId: conversationId,
                 lastCursor: lastCursor,
                 failedOverAt: failedOverAt,
               ),
@@ -7339,7 +7392,7 @@ class $$OutboundHandlesTableTableManager
                 required Uint8List keypairBytes,
                 required String serverEndpoint,
                 required DateTime expiresAt,
-                Value<String?> channelId = const Value.absent(),
+                Value<String?> conversationId = const Value.absent(),
                 Value<int> lastCursor = const Value.absent(),
                 Value<DateTime?> failedOverAt = const Value.absent(),
               }) => OutboundHandlesCompanion.insert(
@@ -7348,7 +7401,7 @@ class $$OutboundHandlesTableTableManager
                 keypairBytes: keypairBytes,
                 serverEndpoint: serverEndpoint,
                 expiresAt: expiresAt,
-                channelId: channelId,
+                conversationId: conversationId,
                 lastCursor: lastCursor,
                 failedOverAt: failedOverAt,
               ),
@@ -7380,14 +7433,14 @@ typedef $$OutboundHandlesTableProcessedTableManager =
 typedef $$SessionTagsTableCreateCompanionBuilder =
     SessionTagsCompanion Function({
       required String tag,
-      required String channelId,
+      required String conversationId,
       required DateTime createdAt,
       Value<int> rowid,
     });
 typedef $$SessionTagsTableUpdateCompanionBuilder =
     SessionTagsCompanion Function({
       Value<String> tag,
-      Value<String> channelId,
+      Value<String> conversationId,
       Value<DateTime> createdAt,
       Value<int> rowid,
     });
@@ -7396,19 +7449,22 @@ final class $$SessionTagsTableReferences
     extends BaseReferences<_$AppDatabase, $SessionTagsTable, SessionTag> {
   $$SessionTagsTableReferences(super.$_db, super.$_table, super.$_typedResult);
 
-  static $ChannelsTable _channelIdTable(_$AppDatabase db) =>
+  static $ChannelsTable _conversationIdTable(_$AppDatabase db) =>
       db.channels.createAlias(
-        $_aliasNameGenerator(db.sessionTags.channelId, db.channels.uuid),
+        $_aliasNameGenerator(
+          db.sessionTags.conversationId,
+          db.channels.conversationId,
+        ),
       );
 
-  $$ChannelsTableProcessedTableManager get channelId {
+  $$ChannelsTableProcessedTableManager get conversationId {
     final $_column = $_itemColumn<String>('channel_id')!;
 
     final manager = $$ChannelsTableTableManager(
       $_db,
       $_db.channels,
-    ).filter((f) => f.uuid.sqlEquals($_column));
-    final item = $_typedResult.readTableOrNull(_channelIdTable($_db));
+    ).filter((f) => f.conversationId.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_conversationIdTable($_db));
     if (item == null) return manager;
     return ProcessedTableManager(
       manager.$state.copyWith(prefetchedData: [item]),
@@ -7435,12 +7491,12 @@ class $$SessionTagsTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
-  $$ChannelsTableFilterComposer get channelId {
+  $$ChannelsTableFilterComposer get conversationId {
     final $$ChannelsTableFilterComposer composer = $composerBuilder(
       composer: this,
-      getCurrentColumn: (t) => t.channelId,
+      getCurrentColumn: (t) => t.conversationId,
       referencedTable: $db.channels,
-      getReferencedColumn: (t) => t.uuid,
+      getReferencedColumn: (t) => t.conversationId,
       builder:
           (
             joinBuilder, {
@@ -7478,12 +7534,12 @@ class $$SessionTagsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
-  $$ChannelsTableOrderingComposer get channelId {
+  $$ChannelsTableOrderingComposer get conversationId {
     final $$ChannelsTableOrderingComposer composer = $composerBuilder(
       composer: this,
-      getCurrentColumn: (t) => t.channelId,
+      getCurrentColumn: (t) => t.conversationId,
       referencedTable: $db.channels,
-      getReferencedColumn: (t) => t.uuid,
+      getReferencedColumn: (t) => t.conversationId,
       builder:
           (
             joinBuilder, {
@@ -7517,12 +7573,12 @@ class $$SessionTagsTableAnnotationComposer
   GeneratedColumn<DateTime> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
 
-  $$ChannelsTableAnnotationComposer get channelId {
+  $$ChannelsTableAnnotationComposer get conversationId {
     final $$ChannelsTableAnnotationComposer composer = $composerBuilder(
       composer: this,
-      getCurrentColumn: (t) => t.channelId,
+      getCurrentColumn: (t) => t.conversationId,
       referencedTable: $db.channels,
-      getReferencedColumn: (t) => t.uuid,
+      getReferencedColumn: (t) => t.conversationId,
       builder:
           (
             joinBuilder, {
@@ -7554,7 +7610,7 @@ class $$SessionTagsTableTableManager
           $$SessionTagsTableUpdateCompanionBuilder,
           (SessionTag, $$SessionTagsTableReferences),
           SessionTag,
-          PrefetchHooks Function({bool channelId})
+          PrefetchHooks Function({bool conversationId})
         > {
   $$SessionTagsTableTableManager(_$AppDatabase db, $SessionTagsTable table)
     : super(
@@ -7570,24 +7626,24 @@ class $$SessionTagsTableTableManager
           updateCompanionCallback:
               ({
                 Value<String> tag = const Value.absent(),
-                Value<String> channelId = const Value.absent(),
+                Value<String> conversationId = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => SessionTagsCompanion(
                 tag: tag,
-                channelId: channelId,
+                conversationId: conversationId,
                 createdAt: createdAt,
                 rowid: rowid,
               ),
           createCompanionCallback:
               ({
                 required String tag,
-                required String channelId,
+                required String conversationId,
                 required DateTime createdAt,
                 Value<int> rowid = const Value.absent(),
               }) => SessionTagsCompanion.insert(
                 tag: tag,
-                channelId: channelId,
+                conversationId: conversationId,
                 createdAt: createdAt,
                 rowid: rowid,
               ),
@@ -7599,7 +7655,7 @@ class $$SessionTagsTableTableManager
                 ),
               )
               .toList(),
-          prefetchHooksCallback: ({channelId = false}) {
+          prefetchHooksCallback: ({conversationId = false}) {
             return PrefetchHooks(
               db: db,
               explicitlyWatchedTables: [],
@@ -7619,16 +7675,16 @@ class $$SessionTagsTableTableManager
                       dynamic
                     >
                   >(state) {
-                    if (channelId) {
+                    if (conversationId) {
                       state =
                           state.withJoin(
                                 currentTable: table,
-                                currentColumn: table.channelId,
+                                currentColumn: table.conversationId,
                                 referencedTable: $$SessionTagsTableReferences
-                                    ._channelIdTable(db),
+                                    ._conversationIdTable(db),
                                 referencedColumn: $$SessionTagsTableReferences
-                                    ._channelIdTable(db)
-                                    .uuid,
+                                    ._conversationIdTable(db)
+                                    .conversationId,
                               )
                               as T;
                     }
@@ -7656,7 +7712,7 @@ typedef $$SessionTagsTableProcessedTableManager =
       $$SessionTagsTableUpdateCompanionBuilder,
       (SessionTag, $$SessionTagsTableReferences),
       SessionTag,
-      PrefetchHooks Function({bool channelId})
+      PrefetchHooks Function({bool conversationId})
     >;
 typedef $$NodeScoresTableCreateCompanionBuilder =
     NodeScoresCompanion Function({
@@ -9072,7 +9128,7 @@ typedef $$GroupInvitesTableCreateCompanionBuilder =
       required String groupId,
       required String groupName,
       required String adminMemberId,
-      required String channelId,
+      required String conversationId,
       required DateTime receivedAt,
       Value<int> rowid,
     });
@@ -9081,7 +9137,7 @@ typedef $$GroupInvitesTableUpdateCompanionBuilder =
       Value<String> groupId,
       Value<String> groupName,
       Value<String> adminMemberId,
-      Value<String> channelId,
+      Value<String> conversationId,
       Value<DateTime> receivedAt,
       Value<int> rowid,
     });
@@ -9110,8 +9166,8 @@ class $$GroupInvitesTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
-  ColumnFilters<String> get channelId => $composableBuilder(
-    column: $table.channelId,
+  ColumnFilters<String> get conversationId => $composableBuilder(
+    column: $table.conversationId,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -9145,8 +9201,8 @@ class $$GroupInvitesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
-  ColumnOrderings<String> get channelId => $composableBuilder(
-    column: $table.channelId,
+  ColumnOrderings<String> get conversationId => $composableBuilder(
+    column: $table.conversationId,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -9176,8 +9232,10 @@ class $$GroupInvitesTableAnnotationComposer
     builder: (column) => column,
   );
 
-  GeneratedColumn<String> get channelId =>
-      $composableBuilder(column: $table.channelId, builder: (column) => column);
+  GeneratedColumn<String> get conversationId => $composableBuilder(
+    column: $table.conversationId,
+    builder: (column) => column,
+  );
 
   GeneratedColumn<DateTime> get receivedAt => $composableBuilder(
     column: $table.receivedAt,
@@ -9219,14 +9277,14 @@ class $$GroupInvitesTableTableManager
                 Value<String> groupId = const Value.absent(),
                 Value<String> groupName = const Value.absent(),
                 Value<String> adminMemberId = const Value.absent(),
-                Value<String> channelId = const Value.absent(),
+                Value<String> conversationId = const Value.absent(),
                 Value<DateTime> receivedAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => GroupInvitesCompanion(
                 groupId: groupId,
                 groupName: groupName,
                 adminMemberId: adminMemberId,
-                channelId: channelId,
+                conversationId: conversationId,
                 receivedAt: receivedAt,
                 rowid: rowid,
               ),
@@ -9235,14 +9293,14 @@ class $$GroupInvitesTableTableManager
                 required String groupId,
                 required String groupName,
                 required String adminMemberId,
-                required String channelId,
+                required String conversationId,
                 required DateTime receivedAt,
                 Value<int> rowid = const Value.absent(),
               }) => GroupInvitesCompanion.insert(
                 groupId: groupId,
                 groupName: groupName,
                 adminMemberId: adminMemberId,
-                channelId: channelId,
+                conversationId: conversationId,
                 receivedAt: receivedAt,
                 rowid: rowid,
               ),

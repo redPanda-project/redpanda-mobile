@@ -54,10 +54,10 @@ void main() {
   }
 
   group('persistence round-trip', () {
-    test('save and getByChannelId', () async {
+    test('save and getByConversationId', () async {
       await repo.save(await registration(channelId: 'channel-1'));
 
-      final row = await repo.getByChannelId('channel-1');
+      final row = await repo.getByConversationId('channel-1');
       expect(row, isNotNull);
       expect(row!.serverEndpoint, equals('node-1:59558'));
       expect(row.lastCursor, equals(0));
@@ -72,7 +72,7 @@ void main() {
       await repo.updateCursor(ohIdHex, 55);
       await repo.updateExpiry(ohIdHex, newExpiry);
 
-      final row = await repo.getByChannelId('channel-1');
+      final row = await repo.getByConversationId('channel-1');
       expect(row!.lastCursor, equals(55));
       expect(
         row.expiresAt.millisecondsSinceEpoch ~/ 1000,
@@ -85,7 +85,7 @@ void main() {
       await repo.save(reg);
       await repo.updateCursor(HEX.encode(reg.ohId), 7);
 
-      final row = await repo.getByChannelId('channel-1');
+      final row = await repo.getByConversationId('channel-1');
       final restored = await repo.toRegistration(row!);
 
       expect(restored.ohId, equals(reg.ohId));
@@ -108,7 +108,7 @@ void main() {
 
       final valid = await repo.getAllValid();
       expect(valid, hasLength(1));
-      expect(valid.single.channelId, equals('fresh'));
+      expect(valid.single.conversationId, equals('fresh'));
     });
   });
 
@@ -131,7 +131,7 @@ void main() {
       final descriptor = await repo.ensureOwnDescriptor(client, 'channel-2');
 
       expect(descriptor, isNotNull);
-      expect(await repo.getByChannelId('channel-2'), isNotNull);
+      expect(await repo.getByConversationId('channel-2'), isNotNull);
     });
 
     test('returns null when registration has no server endpoint', () async {
@@ -140,7 +140,7 @@ void main() {
       final descriptor = await repo.ensureOwnDescriptor(client, 'channel-3');
 
       expect(descriptor, isNull);
-      expect(await repo.getByChannelId('channel-3'), isNull);
+      expect(await repo.getByConversationId('channel-3'), isNull);
     });
 
     test('returns null when registration throws', () async {

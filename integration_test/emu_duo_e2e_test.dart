@@ -539,11 +539,11 @@ Future<void> runAlice(WidgetTester tester) async {
   final db = container.read(dbProvider);
   final row = await (db.select(
     db.channels,
-  )..where((t) => t.uuid.equals(myChannel.id))).getSingle();
+  )..where((t) => t.conversationId.equals(myChannel.id))).getSingle();
   container
       .read(redPandaClientProvider)
       .addChannelKeys(
-        row.uuid,
+        row.conversationId,
         HEX.decode(row.encryptionKey),
         channelSecret: row.channelSecret != null
             ? HEX.decode(row.channelSecret!)

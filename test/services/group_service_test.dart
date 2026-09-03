@@ -57,7 +57,7 @@ void main() {
         .into(db.channels)
         .insert(
           ChannelsCompanion.insert(
-            uuid: channel.id,
+            conversationId: channel.id,
             label: label,
             encryptionKey: HEX.encode(channel.encryptionKey),
             authPublicKey: HEX.encode(channel.authPublicKey),

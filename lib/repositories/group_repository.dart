@@ -216,7 +216,7 @@ class GroupRepository {
     required String groupId,
     required String groupName,
     required String adminMemberId,
-    required String channelId,
+    required String conversationId,
   }) async {
     await _db
         .into(_db.groupInvites)
@@ -225,7 +225,7 @@ class GroupRepository {
             groupId: groupId,
             groupName: groupName,
             adminMemberId: adminMemberId,
-            channelId: channelId,
+            conversationId: conversationId,
             receivedAt: DateTime.now(),
           ),
           mode: drift.InsertMode.insertOrReplace,

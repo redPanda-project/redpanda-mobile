@@ -17,13 +17,13 @@ import 'package:redpanda/shared/widgets/glass_surface.dart';
 /// check, missing counterpart mailbox); red: needs attention. Details on the
 /// channel status page (info button in the chat).
 class _ChannelHealthDot extends ConsumerWidget {
-  final String channelId;
+  final String conversationId;
 
-  const _ChannelHealthDot({required this.channelId});
+  const _ChannelHealthDot({required this.conversationId});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final health = ref.watch(channelHealthProvider(channelId));
+    final health = ref.watch(channelHealthProvider(conversationId));
     final (color, label) = switch (health.level) {
       ChannelHealthLevel.healthy => (Colors.green, 'Channel healthy'),
       ChannelHealthLevel.degraded => (
@@ -301,7 +301,7 @@ class HomeScreen extends ConsumerWidget {
                         ),
                         title: Text(channel.label),
                         subtitle: const Text('Private Channel'),
-                        trailing: _ChannelHealthDot(channelId: channel.id),
+                        trailing: _ChannelHealthDot(conversationId: channel.id),
                         onTap: () {
                           context.push('/chat/${channel.id}');
                         },

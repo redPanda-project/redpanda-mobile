@@ -8,9 +8,9 @@ import 'package:redpanda_light_client/redpanda_light_client.dart' hide Channel;
 /// human-readable detail — never a silent fail. All logic lives in the light
 /// client's [RedPandaClient.runChannelDoctor]; this screen only renders.
 class ConnectionDoctorScreen extends ConsumerStatefulWidget {
-  final String channelUuid;
+  final String conversationId;
 
-  const ConnectionDoctorScreen({super.key, required this.channelUuid});
+  const ConnectionDoctorScreen({super.key, required this.conversationId});
 
   @override
   ConsumerState<ConnectionDoctorScreen> createState() =>
@@ -35,7 +35,7 @@ class _ConnectionDoctorScreenState
       _report = null;
     });
     final client = ref.read(redPandaClientProvider);
-    final report = await client.runChannelDoctor(widget.channelUuid);
+    final report = await client.runChannelDoctor(widget.conversationId);
     if (!mounted) return;
     setState(() {
       _running = false;

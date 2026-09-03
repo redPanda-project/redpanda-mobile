@@ -56,7 +56,7 @@ void main() {
         .into(db.channels)
         .insert(
           ChannelsCompanion.insert(
-            uuid: channelUuid,
+            conversationId: channelUuid,
             label: 'Test Channel',
             encryptionKey: HEX.encode(List.generate(32, (i) => i)),
             authPublicKey: HEX.encode(List.generate(32, (i) => i + 1)),
@@ -90,7 +90,7 @@ void main() {
         dbProvider.overrideWithValue(db),
         redPandaClientProvider.overrideWithValue(client),
       ],
-      child: const MaterialApp(home: ChatScreen(peerUuid: channelUuid)),
+      child: const MaterialApp(home: ChatScreen(conversationId: channelUuid)),
     );
   }
 
@@ -354,7 +354,9 @@ void main() {
             redPandaClientProvider.overrideWithValue(client),
             outboxServiceProvider.overrideWithValue(outbox),
           ],
-          child: const MaterialApp(home: ChatScreen(peerUuid: channelUuid)),
+          child: const MaterialApp(
+            home: ChatScreen(conversationId: channelUuid),
+          ),
         ),
       );
       await tester.pump();
@@ -388,7 +390,7 @@ void main() {
           .into(db.channels)
           .insert(
             ChannelsCompanion.insert(
-              uuid: 'other-channel',
+              conversationId: 'other-channel',
               label: 'Other',
               encryptionKey: HEX.encode(List.generate(32, (i) => i)),
               authPublicKey: HEX.encode(List.generate(32, (i) => i + 1)),

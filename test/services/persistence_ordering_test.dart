@@ -120,7 +120,7 @@ void main() {
         .into(db.channels)
         .insert(
           ChannelsCompanion.insert(
-            uuid: uuid,
+            conversationId: uuid,
             label: uuid,
             encryptionKey: 'aa' * 32,
             authPublicKey: 'bb' * 32,

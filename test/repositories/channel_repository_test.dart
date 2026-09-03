@@ -76,7 +76,7 @@ void main() {
       Future<void> markAsLive(String channelId) async {
         await (db.update(
           db.channels,
-        )..where((t) => t.uuid.equals(channelId))).write(
+        )..where((t) => t.conversationId.equals(channelId))).write(
           const ChannelsCompanion(
             ratchetState: drift.Value('{"rootKey":"deadbeef"}'),
             pendingRgb: drift.Value('cafe'),
@@ -102,7 +102,7 @@ void main() {
 
           final row = await (db.select(
             db.channels,
-          )..where((t) => t.uuid.equals(created.id))).getSingle();
+          )..where((t) => t.conversationId.equals(created.id))).getSingle();
           expect(row.ratchetState, equals('{"rootKey":"deadbeef"}'));
           expect(row.pendingRgb, equals('cafe'));
           expect(row.counterpartOhSet, equals('[{"ep":"node-1:59558"}]'));

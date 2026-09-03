@@ -22,7 +22,7 @@ class ChannelFetchInfo {
   const ChannelFetchInfo({this.lastOkAt, this.lastAttemptAt, this.lastError});
 }
 
-/// channelId → latest [ChannelFetchInfo], fed by the client's per-attempt
+/// conversationId → latest [ChannelFetchInfo], fed by the client's per-attempt
 /// fetch outcomes.
 class ChannelFetchInfoNotifier extends Notifier<Map<String, ChannelFetchInfo>> {
   @override
@@ -37,13 +37,13 @@ class ChannelFetchInfoNotifier extends Notifier<Map<String, ChannelFetchInfo>> {
   }
 
   void _onStatus(OhFetchStatus status) {
-    final channelId = status.channelId;
-    if (channelId == null) return;
-    final previous = state[channelId];
+    final conversationId = status.channelId;
+    if (conversationId == null) return;
+    final previous = state[conversationId];
     final at = DateTime.fromMillisecondsSinceEpoch(status.atMs);
     state = {
       ...state,
-      channelId: ChannelFetchInfo(
+      conversationId: ChannelFetchInfo(
         lastOkAt: status.success ? at : previous?.lastOkAt,
         lastAttemptAt: at,
         lastError: status.success ? null : (status.detail ?? 'failed'),
@@ -144,11 +144,11 @@ final conversationStatsProvider =
 /// expiry inserts a fresh row.
 final ownHandleProvider = StreamProvider.family<OutboundHandle?, String>((
   ref,
-  channelId,
+  conversationId,
 ) {
   final db = ref.watch(dbProvider);
   return (db.select(db.outboundHandles)
-        ..where((t) => t.channelId.equals(channelId))
+        ..where((t) => t.conversationId.equals(conversationId))
         ..orderBy([(t) => OrderingTerm.desc(t.expiresAt)])
         ..limit(1))
       .watchSingleOrNull();
@@ -157,11 +157,11 @@ final ownHandleProvider = StreamProvider.family<OutboundHandle?, String>((
 /// One channels-table row, live.
 final channelRowProvider = StreamProvider.family<Channel?, String>((
   ref,
-  channelId,
+  conversationId,
 ) {
   final db = ref.watch(dbProvider);
   return (db.select(db.channels)
-        ..where((t) => t.uuid.equals(channelId))
+        ..where((t) => t.conversationId.equals(conversationId))
         ..limit(1))
       .watchSingleOrNull();
 });
@@ -248,14 +248,14 @@ ChannelHealth computeChannelHealth({
 /// page banner.
 final channelHealthProvider = Provider.family<ChannelHealth, String>((
   ref,
-  channelId,
+  conversationId,
 ) {
   ref.watch(healthTickProvider);
   final connection = ref.watch(connectionStatusProvider).value;
-  final fetchInfo = ref.watch(channelFetchInfoProvider)[channelId];
-  final ownHandle = ref.watch(ownHandleProvider(channelId)).value;
-  final channelRow = ref.watch(channelRowProvider(channelId)).value;
-  final stats = ref.watch(conversationStatsProvider(channelId)).value;
+  final fetchInfo = ref.watch(channelFetchInfoProvider)[conversationId];
+  final ownHandle = ref.watch(ownHandleProvider(conversationId)).value;
+  final channelRow = ref.watch(channelRowProvider(conversationId)).value;
+  final stats = ref.watch(conversationStatsProvider(conversationId)).value;
   return computeChannelHealth(
     connection: connection,
     fetchInfo: fetchInfo,

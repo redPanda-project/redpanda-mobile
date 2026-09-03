@@ -36,12 +36,12 @@ class DriftChannelRepository implements ChannelRepository {
     return _db.transaction(() async {
       final existing = await (_db.select(
         _db.channels,
-      )..where((t) => t.uuid.equals(channel.id))).getSingleOrNull();
+      )..where((t) => t.conversationId.equals(channel.id))).getSingleOrNull();
 
       if (existing != null) {
         await (_db.update(
           _db.channels,
-        )..where((t) => t.uuid.equals(channel.id))).write(
+        )..where((t) => t.conversationId.equals(channel.id))).write(
           db.ChannelsCompanion(
             label: drift.Value(channel.label),
             // The counterpart descriptor is only ever added, never cleared: a
@@ -72,7 +72,7 @@ class DriftChannelRepository implements ChannelRepository {
           .into(_db.channels)
           .insert(
             db.ChannelsCompanion.insert(
-              uuid: channel.id,
+              conversationId: channel.id,
               label: channel.label,
               encryptionKey: HEX.encode(channel.encryptionKey),
               channelSecret: drift.Value(HEX.encode(channel.channelSecret)),

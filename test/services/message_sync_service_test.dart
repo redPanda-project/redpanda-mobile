@@ -51,7 +51,7 @@ void main() {
             keypairBytes: (await OHKeypair.generate()).privateKeyBytes,
             serverEndpoint: 'localhost:59558',
             expiresAt: DateTime.now().add(const Duration(days: 7)),
-            channelId: drift.Value(channelId),
+            conversationId: drift.Value(channelId),
           ),
         );
   }
@@ -65,7 +65,7 @@ void main() {
         .into(db.channels)
         .insert(
           ChannelsCompanion.insert(
-            uuid: uuid,
+            conversationId: uuid,
             label: 'Test',
             encryptionKey: HEX.encode(List.generate(32, (i) => i)),
             authPrivateKey: drift.Value(authPrivateKey),
@@ -218,11 +218,12 @@ void main() {
           .insert(
             SessionTagsCompanion.insert(
               tag: 'aa' * 16,
-              channelId: 'channel-1',
+              conversationId: 'channel-1',
               createdAt: DateTime.fromMillisecondsSinceEpoch(1700000000000),
             ),
           );
-      await (db.update(db.channels)..where((c) => c.uuid.equals('channel-1')))
+      await (db.update(db.channels)
+            ..where((c) => c.conversationId.equals('channel-1')))
           .write(ChannelsCompanion(pendingRgb: drift.Value('bb' * 40)));
 
       await service.restorePersistedState();
@@ -262,11 +263,13 @@ void main() {
           .insert(
             SessionTagsCompanion.insert(
               tag: 'aa' * 16,
-              channelId: uuid,
+              conversationId: uuid,
               createdAt: DateTime.fromMillisecondsSinceEpoch(1700000000000),
             ),
           );
-      await (db.update(db.channels)..where((c) => c.uuid.equals(uuid))).write(
+      await (db.update(
+        db.channels,
+      )..where((c) => c.conversationId.equals(uuid))).write(
         ChannelsCompanion(
           channelSecret: drift.Value(HEX.encode(List.generate(32, (i) => i))),
           pendingRgb: drift.Value('bb' * 40),

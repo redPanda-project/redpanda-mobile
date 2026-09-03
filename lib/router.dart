@@ -23,10 +23,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(path: '/', builder: (context, state) => const HomeScreen()),
       GoRoute(
-        path: '/chat/:uuid',
+        path: '/chat/:conversationId',
         builder: (context, state) {
-          final uuid = state.pathParameters['uuid']!;
-          return ChatScreen(peerUuid: uuid);
+          final conversationId = state.pathParameters['conversationId']!;
+          return ChatScreen(conversationId: conversationId);
         },
       ),
       GoRoute(
@@ -42,17 +42,17 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const JoinChannelScreen(),
       ),
       GoRoute(
-        path: '/channels/:uuid/status',
+        path: '/channels/:conversationId/status',
         builder: (context, state) {
-          final uuid = state.pathParameters['uuid']!;
-          return ChannelStatusScreen(channelUuid: uuid);
+          final conversationId = state.pathParameters['conversationId']!;
+          return ChannelStatusScreen(conversationId: conversationId);
         },
       ),
       GoRoute(
-        path: '/channels/:uuid/doctor',
+        path: '/channels/:conversationId/doctor',
         builder: (context, state) {
-          final uuid = state.pathParameters['uuid']!;
-          return ConnectionDoctorScreen(channelUuid: uuid);
+          final conversationId = state.pathParameters['conversationId']!;
+          return ConnectionDoctorScreen(conversationId: conversationId);
         },
       ),
       GoRoute(

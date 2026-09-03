@@ -15,14 +15,14 @@ class OutboundHandleRepository {
 
   OutboundHandleRepository(this._db);
 
-  /// The newest still-valid own OH for [channelId] (T42: a channel can hold
+  /// The newest still-valid own OH for [conversationId] (T42: a channel can hold
   /// more than one own mailbox now, so this returns the freshest non-expired
   /// row instead of asserting a single row).
-  Future<db.OutboundHandle?> getByChannelId(String channelId) {
+  Future<db.OutboundHandle?> getByConversationId(String conversationId) {
     return (_db.select(_db.outboundHandles)
           ..where(
             (t) =>
-                t.channelId.equals(channelId) &
+                t.conversationId.equals(conversationId) &
                 t.expiresAt.isBiggerThanValue(DateTime.now()),
           )
           ..orderBy([(t) => drift.OrderingTerm.desc(t.expiresAt)])
@@ -30,11 +30,13 @@ class OutboundHandleRepository {
         .getSingleOrNull();
   }
 
-  /// All persisted own OHs for [channelId] (T42 multi-OH).
-  Future<List<db.OutboundHandle>> getAllByChannelId(String channelId) {
+  /// All persisted own OHs for [conversationId] (T42 multi-OH).
+  Future<List<db.OutboundHandle>> getAllByConversationId(
+    String conversationId,
+  ) {
     return (_db.select(
       _db.outboundHandles,
-    )..where((t) => t.channelId.equals(channelId))).get();
+    )..where((t) => t.conversationId.equals(conversationId))).get();
   }
 
   /// All persisted OHs that have not expired yet.
@@ -69,7 +71,7 @@ class OutboundHandleRepository {
         Uint8List.fromList(row.keypairBytes),
       ),
       expiresAtMs: row.expiresAt.millisecondsSinceEpoch,
-      channelId: row.channelId,
+      channelId: row.conversationId,
       serverEndpoint: row.serverEndpoint,
       lastCursor: row.lastCursor,
     );
@@ -86,7 +88,7 @@ class OutboundHandleRepository {
             expiresAt: DateTime.fromMillisecondsSinceEpoch(
               registration.expiresAtMs,
             ),
-            channelId: drift.Value(registration.channelId),
+            conversationId: drift.Value(registration.channelId),
           ),
         );
   }
@@ -98,21 +100,21 @@ class OutboundHandleRepository {
   /// stamped as failed-over — a redundancy top-up or the very first mailbox is
   /// a normal registration, not a failover, so the channel status page must
   /// not mislabel it.
-  Future<void> replaceAllForChannel(
-    String channelId,
+  Future<void> replaceAllForConversation(
+    String conversationId,
     List<OHRegistration> registrations,
   ) async {
     await _db.transaction(() async {
       final existing = await (_db.select(
         _db.outboundHandles,
-      )..where((t) => t.channelId.equals(channelId))).get();
+      )..where((t) => t.conversationId.equals(conversationId))).get();
       final failedOverByOhId = {
         for (final row in existing)
           if (row.failedOverAt != null) row.ohId: row.failedOverAt!,
       };
       await (_db.delete(
         _db.outboundHandles,
-      )..where((t) => t.channelId.equals(channelId))).go();
+      )..where((t) => t.conversationId.equals(conversationId))).go();
       for (final registration in registrations) {
         if (registration.serverEndpoint == null) continue;
         final ohIdHex = HEX.encode(registration.ohId);
@@ -126,7 +128,7 @@ class OutboundHandleRepository {
                 expiresAt: DateTime.fromMillisecondsSinceEpoch(
                   registration.expiresAtMs,
                 ),
-                channelId: drift.Value(channelId),
+                conversationId: drift.Value(conversationId),
                 lastCursor: drift.Value(registration.lastCursor),
                 failedOverAt: drift.Value(failedOverByOhId[ohIdHex]),
               ),
@@ -135,7 +137,7 @@ class OutboundHandleRepository {
     });
   }
 
-  /// Returns our own OH descriptor for [channelId], registering a new OH via
+  /// Returns our own OH descriptor for [conversationId], registering a new OH via
   /// [client] if no valid one is persisted yet.
   ///
   /// Returns null when registration is currently not possible (e.g. no
@@ -143,9 +145,9 @@ class OutboundHandleRepository {
   /// without an `oh` field.
   Future<OHDescriptor?> ensureOwnDescriptor(
     RedPandaClient client,
-    String channelId,
+    String conversationId,
   ) async {
-    final existing = await getByChannelId(channelId);
+    final existing = await getByConversationId(conversationId);
     if (existing != null && existing.expiresAt.isAfter(DateTime.now())) {
       final keypair = await OHKeypair.fromPrivateKeyBytes(
         Uint8List.fromList(existing.keypairBytes),
@@ -159,7 +161,7 @@ class OutboundHandleRepository {
 
     try {
       final registration = await client.registerOutboundHandle(
-        channelId: channelId,
+        channelId: conversationId,
       );
       // Without a server endpoint the registration never reached a Full Node;
       // don't persist it and let the caller fall back to a v1 QR code.

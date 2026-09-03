@@ -44,6 +44,16 @@ void main() {
           'peer_oh_set',
         ]),
       );
+      expect(await columnsOf('session_tags'), contains('channel_id'));
+      expect(await columnsOf('outbound_handles'), contains('channel_id'));
+      expect(await columnsOf('group_invites'), contains('channel_id'));
+      // The conversation id was never called `conversation_id` in these
+      // tables; if a pin is lost the new spelling shows up here.
+      expect(await columnsOf('channels'), isNot(contains('conversation_id')));
+      expect(
+        await columnsOf('outbound_handles'),
+        isNot(contains('conversation_id')),
+      );
     });
 
     test('dedup is scoped per conversation: same id in two channels', () async {
@@ -262,7 +272,7 @@ void main() {
           .into(legacy.channels)
           .insert(
             ChannelsCompanion.insert(
-              uuid: 'new-id',
+              conversationId: 'new-id',
               label: 'New Channel',
               encryptionKey: 'aa' * 32,
               authPublicKey: 'bb' * 32,
@@ -294,14 +304,14 @@ void main() {
 
       // MS03b is non-destructive: existing channels and messages survive.
       final channel = await legacy.select(legacy.channels).getSingle();
-      expect(channel.uuid, equals('kept-id'));
+      expect(channel.conversationId, equals('kept-id'));
       expect(channel.ratchetState, isNull);
       final message = await legacy.select(legacy.messages).getSingle();
       expect(message.content, equals('kept msg'));
 
       // The new column is writable.
       await (legacy.update(legacy.channels)
-            ..where((c) => c.uuid.equals('kept-id')))
+            ..where((c) => c.conversationId.equals('kept-id')))
           .write(const ChannelsCompanion(ratchetState: drift.Value('{"v":1}')));
       final updated = await legacy.select(legacy.channels).getSingle();
       expect(updated.ratchetState, equals('{"v":1}'));
@@ -359,12 +369,12 @@ void main() {
 
       // MS05 is non-destructive: existing channels survive.
       final channel = await legacy.select(legacy.channels).getSingle();
-      expect(channel.uuid, equals('kept-id'));
+      expect(channel.conversationId, equals('kept-id'));
       expect(channel.pendingRgb, isNull);
 
       // The new column and table are writable.
       await (legacy.update(legacy.channels)
-            ..where((c) => c.uuid.equals('kept-id')))
+            ..where((c) => c.conversationId.equals('kept-id')))
           .write(ChannelsCompanion(pendingRgb: drift.Value('cd' * 40)));
       expect(
         (await legacy.select(legacy.channels).getSingle()).pendingRgb,
@@ -376,13 +386,13 @@ void main() {
           .insert(
             SessionTagsCompanion.insert(
               tag: 'ef' * 16,
-              channelId: 'kept-id',
+              conversationId: 'kept-id',
               createdAt: DateTime(2026, 6, 13),
             ),
           );
       final tag = await legacy.select(legacy.sessionTags).getSingle();
       expect(tag.tag, equals('ef' * 16));
-      expect(tag.channelId, equals('kept-id'));
+      expect(tag.conversationId, equals('kept-id'));
 
       await legacy.close();
     });

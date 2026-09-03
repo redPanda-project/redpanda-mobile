@@ -146,8 +146,8 @@ class GroupService {
   }
 
   /// Sends (or re-sends) an invite proposal for [groupId] over the 1:1
-  /// channel [channelId].
-  Future<void> sendInvite(String groupId, String channelId) async {
+  /// conversation [conversationId].
+  Future<void> sendInvite(String groupId, String conversationId) async {
     final group = await _groups.getGroup(groupId);
     if (group == null || !group.isAdmin) {
       throw StateError('only the group admin can invite members');
@@ -157,7 +157,7 @@ class GroupService {
       groupName: group.label,
       adminMemberIdHex: group.myMemberId,
     );
-    await _client.sendGroupHandshake(channelId, handshake.encode());
+    await _client.sendGroupHandshake(conversationId, handshake.encode());
   }
 
   /// Accepts a pending invite: generates the own group identity, registers
@@ -230,7 +230,7 @@ class GroupService {
       ohId: ownDescriptor.handleId,
       ohEndpoint: ownDescriptor.serverEndpoint,
     );
-    await _client.sendGroupHandshake(invite.channelId, accept.encode());
+    await _client.sendGroupHandshake(invite.conversationId, accept.encode());
     await _groups.deleteInvite(groupId);
   }
 
@@ -297,7 +297,7 @@ class GroupService {
         groupId: event.groupIdHex,
         groupName: event.groupName ?? 'Group',
         adminMemberId: event.adminMemberIdHex ?? '',
-        channelId: event.channelId,
+        conversationId: event.channelId,
       );
       return;
     }
@@ -339,11 +339,11 @@ class GroupService {
     await _client.rotateGroupKey(event.groupIdHex, members: infos);
   }
 
-  Future<String?> _channelLabel(String channelId) async {
+  Future<String?> _channelLabel(String conversationId) async {
     final db = _groups.database;
     final row = await (db.select(
       db.channels,
-    )..where((t) => t.uuid.equals(channelId))).getSingleOrNull();
+    )..where((t) => t.conversationId.equals(conversationId))).getSingleOrNull();
     return row?.label;
   }
 }
