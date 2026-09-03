@@ -413,7 +413,14 @@ PROBE_FIRST_BREACH_SEC=""
 
 run_probe() { # probe_cmd -> 0 when the host is reachable from Bob's guest
   local out
-  out="$(adb -s "$SERIAL_BOB" shell "$1 >/dev/null 2>&1; echo rc=\$?" 2>/dev/null | tr -d '\r')"
+  # `|| out=""` so this is a predicate in every context, not just inside an
+  # `if`/`&&`/`||` (which is where `set -e` happens to be suppressed today):
+  # with `pipefail` on, an adb hiccup would otherwise take the assignment's
+  # exit status and, from a bare call site, the whole harness with it. An adb
+  # failure reads as "not reachable" — the safe direction for the wait-for-cut
+  # loop, and a breach that adb was too busy to observe shows up on the next
+  # of the ~28 probes in the silence anyway.
+  out="$(adb -s "$SERIAL_BOB" shell "$1 >/dev/null 2>&1; echo rc=\$?" 2>/dev/null | tr -d '\r')" || out=""
   [[ "$out" == "rc=0" ]]
 }
 
