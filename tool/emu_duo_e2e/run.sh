@@ -463,6 +463,30 @@ select_probe() {
 
 bob_can_reach_host() { run_probe "$PROBE_CMD"; }
 
+# Is Bob's guest off the network by BOTH signals? They fail at different
+# moments, which is the whole point of asking two: the TCP probe answers "can
+# the app talk to the host right now", the route lookup answers "does the
+# guest have any way to reach it at all". Gate run 33778527272 showed why one
+# is not enough — `svc data disable` lost the race there, ConnectivityService
+# promoted CELLULAR/eth0 to default 5 s after the cut and kept it for 17 s,
+# and the TCP probe happened to fail through most of that promotion while the
+# default route was up the entire time. Green-lighting Alice on the TCP
+# signal alone put her message into a "silence" that still had a default
+# network in it.
+PROBE_ONLINE_VIA=""
+guest_offline() {
+  PROBE_ONLINE_VIA=""
+  if bob_can_reach_host; then
+    PROBE_ONLINE_VIA="TCP to $PROBE_HOST:$COORD_PORT still connects"
+    return 1
+  fi
+  if run_probe "ip route get $PROBE_HOST"; then
+    PROBE_ONLINE_VIA="a route to $PROBE_HOST still exists (a default network is up)"
+    return 1
+  fi
+  return 0
+}
+
 # ---------------------------------------------------------------------------
 # Preflight
 # ---------------------------------------------------------------------------
@@ -740,12 +764,32 @@ if has_scenario s4; then
   # arriving DURING the blackout (gate run 2026-08-18, reconnectDeliveryMs
   # -90661). Verify from inside Bob's guest that the host is unreachable
   # before green-lighting Alice.
-  for _ in $(seq 1 30); do
-    bob_can_reach_host || break
-    sleep 1
+  #
+  # "Unreachable once" is not enough (T119): the transports go down
+  # asynchronously, so there is a gap between Wi-Fi leaving and cellular being
+  # torn down in which a single probe reports offline and the guest is
+  # anything but. Wait for both signals to agree, three times in a row, and
+  # start the count over whenever one of them says the guest is back — the
+  # observed promotions lasted 3 s, 17 s and 18 s, and a stable-quiet
+  # requirement outlives all of them without pinning a magic number to any.
+  s4_cut_deadline=$(( $(date +%s) + 120 ))
+  s4_quiet=0
+  while [[ $(date +%s) -lt $s4_cut_deadline ]]; do
+    # `if …; then break; fi` rather than `[[ … ]] && break`: under `set -e` a
+    # false `&&` list that is not the last command of the body takes the whole
+    # script with it (verified: `if true; then false; fi` exits 1).
+    if guest_offline; then
+      s4_quiet=$(( s4_quiet + 1 ))
+      if [[ $s4_quiet -ge 3 ]]; then break; fi
+    else
+      if [[ $s4_quiet -gt 0 ]]; then log "S4: cut not stable yet — $PROBE_ONLINE_VIA"; fi
+      s4_quiet=0
+    fi
+    sleep 2
   done
-  bob_can_reach_host \
-    && { save_report; die "S4: $PROBE_HOST:$COORD_PORT still reachable from Bob's guest after 30 probe attempts — cut ineffective (T119: check whether CELLULAR/eth0 got promoted to default again, \`adb -s $SERIAL_BOB shell dumpsys connectivity | head -40\`)"; }
+  [[ $s4_quiet -ge 3 ]] \
+    || { save_report; die "S4: Bob's guest never went stably offline within 120s of the cut — last seen online because $PROBE_ONLINE_VIA (T119: check whether CELLULAR/eth0 got promoted to default again, \`adb -s $SERIAL_BOB shell dumpsys connectivity | head -40\`)"; }
+  log "S4: cut verified — guest offline by both signals for 3 consecutive checks"
   kv_put s4-net-down host
   wait_kv "sent-e2e-s4" 300
   # The silence has to outlast the node's ping timeout — see the
@@ -775,7 +819,8 @@ if has_scenario s4; then
   # line instead of a 10-minute wait_kv timeout further down.
   s4_restore_deadline=$(( $(date +%s) + 60 ))
   while [[ $(date +%s) -lt $s4_restore_deadline ]]; do
-    bob_can_reach_host && break
+    # Same `set -e` reason as the cut loop above: never `cmd && break` here.
+    if bob_can_reach_host; then break; fi
     sleep 2
   done
   bob_can_reach_host \

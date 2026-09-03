@@ -60,10 +60,18 @@ pairing foundation and always runs, even when omitted from the list.
   **while the network is still up** — a check that cannot succeed cannot
   detect a failure, which is what the old `ping 10.0.2.2` loop was: it broke
   out on its first iteration in every archived run, green and red, because
-  ICMP to the slirp gateway never answers), waits for it to fail, and then
-  keeps probing every 3 s across the whole silence. Any success is a run
-  failure naming the second it happened; the tally lands in
-  `counters.s4Probe`.
+  ICMP to the slirp gateway never answers).
+
+  Before Alice is green-lit the harness waits for the guest to be offline by
+  **two** signals — the TCP probe ("can the app talk to the host") and
+  `ip route get 10.0.2.2` ("is any default network up") — three checks in a
+  row, restarting the count whenever either says the guest is back. One
+  signal is not enough: in gate run 33778527272 the `svc data disable` lost
+  the race, cellular was promoted 5 s after the cut and held for 17 s, and
+  the TCP probe happened to fail through most of that window while the route
+  was there the whole time. Across the silence the TCP probe then runs every
+  3 s; any success fails the run and names the second the blackout ended.
+  The tally lands in `counters.s4Probe`.
 
   **The silence must outlast the node's `Settings.pingTimeout` (65 s)**
   — that is what makes S4 deterministic (T89a). Below the timeout the node
