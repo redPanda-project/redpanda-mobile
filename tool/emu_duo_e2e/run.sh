@@ -247,6 +247,12 @@ collect_counters() {
     printf '"handshakes": {"activateEncryption": %s, "firstEncryptedCommand": %s, "wedged": %s}, ' \
       "$act" "$enc" "$wedged"
     printf '"connectedSuccessfully": %s, "exceptionLines": %s}, ' "$conn" "$exc"
+    # T119: the cut verification, in the artifact. `checks: 0` means S4 never
+    # got to the silence; `method: null` means no probe was selected at all.
+    printf '"s4Probe": {"method": %s, "target": "%s:%s", "checks": %s, "breaches": %s, "firstBreachSec": %s}, ' \
+      "$([[ -n "$PROBE_CMD" ]] && printf '"%s"' "$PROBE_CMD" || echo null)" \
+      "$PROBE_HOST" "$COORD_PORT" "$PROBE_CHECKS" "$PROBE_BREACHES" \
+      "${PROBE_FIRST_BREACH_SEC:-null}"
     printf '"clients": {"alice": %s, "bob": %s}}' \
       "$(client_counters_json "$ART/alice.logcat")" \
       "$(client_counters_json "$ART/bob.logcat")"
@@ -324,16 +330,113 @@ wait_kv() { # name seconds — aborts early if either role reported failure
   die "kv '$1' never appeared within $2s"
 }
 
-# S4 network cut on Bob. `cmd connectivity airplane-mode` works on API 35
-# and drops the emulated wifi+cellular NICs, which is exactly the
-# app-visible connection loss we need (10.0.2.2 becomes unreachable).
+# ---------------------------------------------------------------------------
+# S4 network cut on Bob.
+#
+# ROOT CAUSE, T119 (gate red on main 2026-09-03): `cmd connectivity
+# airplane-mode enable` alone does NOT produce a blackout on these emulator
+# images. The API 35 google_apis image boots TWO default-capable networks:
+# WIFI (`wlan0`, AndroidWifi) and CELLULAR (`eth0`, the qemu slirp NIC, route
+# `0.0.0.0/0 -> 10.0.2.2`, APN fast.t-mobile.com). Airplane mode tears them
+# down asynchronously and NOT in lockstep: Wi-Fi goes first, and for as long as
+# the modem takes to actually power off, ConnectivityService *promotes the
+# still-connected cellular network to default* — i.e. 10.0.2.2 is fully
+# reachable again a few seconds into the supposed silence. From Bob's logcat:
+#
+#   red run 33771942708   15:13:27 airplane enable
+#                         15:13:35 [100 WIFI] disconnected
+#                         15:13:37 networkSetDefault(101)  <- CELLULAR/eth0
+#                         15:13:38 CONNECTED broadcast [101 CELLULAR]
+#                         15:13:46 node.log: new incoming connection from Bob
+#                         15:13:55 [101 CELLULAR] disconnected   (18 s late)
+#   green run 33726760277 07:22:20 airplane enable
+#                         07:22:25 [100 WIFI] disconnected
+#                         07:22:29 networkSetDefault(101)  <- same promotion
+#                         07:22:32 [101 CELLULAR] disconnected   (3 s, in time)
+#
+# So the green runs were green by 3 seconds of luck; nothing about the client
+# changed. The fix is to take both transports down explicitly instead of
+# relying on the airplane-mode teardown order, and — more importantly — to
+# verify the *effect* rather than the mechanism (see bob_can_reach_host).
+#
+# The old verification (`ping -c1 -W1 10.0.2.2` until it fails) was vacuous:
+# it broke out of its wait loop on the FIRST iteration in every run we have
+# artifacts for, green and red alike, i.e. while Wi-Fi was still up and the
+# app was still exchanging messages — ICMP to the slirp gateway simply never
+# answers here. A check that cannot succeed cannot detect a failure to cut.
+# ---------------------------------------------------------------------------
 bob_net() { # down|up
-  local mode=enable
-  [[ "$1" == up ]] && mode=disable
-  adb -s "$SERIAL_BOB" shell cmd connectivity airplane-mode "$mode" \
-    || die "airplane-mode $mode failed on $SERIAL_BOB"
-  log "S4: airplane-mode $mode -> state: $(adb -s "$SERIAL_BOB" shell cmd connectivity airplane-mode | tr -d '\r')"
+  if [[ "$1" == up ]]; then
+    # Airplane mode off FIRST: while it is on, `svc wifi/data enable` is a
+    # no-op, so the other order would leave both transports disabled.
+    adb -s "$SERIAL_BOB" shell cmd connectivity airplane-mode disable \
+      || die "airplane-mode disable failed on $SERIAL_BOB"
+    adb -s "$SERIAL_BOB" shell svc wifi enable >/dev/null 2>&1 || true
+    adb -s "$SERIAL_BOB" shell svc data enable >/dev/null 2>&1 || true
+  else
+    # Both transports explicitly, then airplane mode. `svc` failures are not
+    # fatal on purpose: airplane mode stays the primary mechanism and the
+    # probe below decides whether the cut actually happened — enforce the
+    # effect, never the mechanism.
+    adb -s "$SERIAL_BOB" shell svc data disable >/dev/null 2>&1 || true
+    adb -s "$SERIAL_BOB" shell svc wifi disable >/dev/null 2>&1 || true
+    adb -s "$SERIAL_BOB" shell cmd connectivity airplane-mode enable \
+      || die "airplane-mode enable failed on $SERIAL_BOB"
+  fi
+  log "S4: net $1 -> airplane-mode: $(adb -s "$SERIAL_BOB" shell cmd connectivity airplane-mode | tr -d '\r')"
 }
+
+# ---------------------------------------------------------------------------
+# Guest-side TCP reachability probe (T119): can Bob's guest still open a TCP
+# connection to this host? That is the one question the S4 cut is about, and
+# unlike ICMP it is answered by the same path the app uses.
+#
+# Target is the coord server port, not the node's 59558, deliberately: a bare
+# connect to the node makes it accept a peer, log `incoming connection from
+# ip: 127.0.0.1` and later evict it as undialable — which would inflate
+# `undialableEvictions.duringS4`, the very counter the T89(a) S4 precondition
+# reads. Both ports are host loopback behind the same 10.0.2.2 gateway, so
+# reachability is identical; only the side effects differ. The coord server is
+# a Dart HttpServer and logs nothing for a connect-and-close.
+# ---------------------------------------------------------------------------
+PROBE_HOST="10.0.2.2"
+# Filled by select_probe(); every candidate must exit 0 exactly when the guest
+# can reach the host. `nc` and `wget` are toybox applets and should be there on
+# any API 30+ image; the `ip route get` candidate is the belt-and-braces last
+# resort (always present, and a route to 10.0.2.2 over a live interface is
+# exactly what the promoted CELLULAR/eth0 network re-created in the T119
+# breakage), so "no probe available" cannot become a reason to run S4 blind.
+PROBE_CMD=""
+PROBE_CHECKS=0
+PROBE_BREACHES=0
+PROBE_FIRST_BREACH_SEC=""
+
+run_probe() { # probe_cmd -> 0 when the host is reachable from Bob's guest
+  local out
+  out="$(adb -s "$SERIAL_BOB" shell "$1 >/dev/null 2>&1; echo rc=\$?" 2>/dev/null | tr -d '\r')"
+  [[ "$out" == "rc=0" ]]
+}
+
+# Picks a probe that demonstrably WORKS while the network is up. Running this
+# before the cut is what keeps the check from silently going vacuous the way
+# the ping loop did: if no candidate can reach the host now, we abort instead
+# of "verifying" the cut with a command that always fails.
+select_probe() {
+  local c
+  for c in "nc -w 2 $PROBE_HOST $COORD_PORT </dev/null" \
+           "toybox nc -w 2 $PROBE_HOST $COORD_PORT </dev/null" \
+           "toybox wget -T 2 -O /dev/null http://$PROBE_HOST:$COORD_PORT/kv/scenarios" \
+           "ip route get $PROBE_HOST"; do
+    if run_probe "$c"; then
+      PROBE_CMD="$c"
+      log "S4: TCP probe in Bob's guest: '$c' (verified reachable before the cut)"
+      return 0
+    fi
+  done
+  return 1
+}
+
+bob_can_reach_host() { run_probe "$PROBE_CMD"; }
 
 # ---------------------------------------------------------------------------
 # Preflight
@@ -598,6 +701,9 @@ if has_scenario s4; then
   # than one moment late: the counters must not miss an eviction because the
   # node logged it while `bob_net down` was still returning (T89c).
   S4_NODE_MARK="$(node_log_lines)"
+  # Prove the probe works while the network is still up — see select_probe().
+  select_probe \
+    || die "S4: no working TCP probe inside Bob's guest (tried nc, toybox nc, toybox wget against $PROBE_HOST:$COORD_PORT while the network was UP) — the airplane-mode cut cannot be verified, refusing to run S4 blind"
   bob_net down
   # A fixed sleep here is a race: `airplane-mode enable` returns (and reports
   # "enabled") before the guest's network teardown has actually severed the
@@ -607,19 +713,45 @@ if has_scenario s4; then
   # -90661). Verify from inside Bob's guest that the host is unreachable
   # before green-lighting Alice.
   for _ in $(seq 1 30); do
-    adb -s "$SERIAL_BOB" shell ping -c1 -W1 10.0.2.2 >/dev/null 2>&1 || break
+    bob_can_reach_host || break
     sleep 1
   done
-  adb -s "$SERIAL_BOB" shell ping -c1 -W1 10.0.2.2 >/dev/null 2>&1 \
-    && die "S4: 10.0.2.2 still reachable 30s after airplane-mode enable — cut ineffective"
+  bob_can_reach_host \
+    && die "S4: $PROBE_HOST:$COORD_PORT still reachable from Bob's guest 30s after the cut — cut ineffective (T119: check whether CELLULAR/eth0 is still the default network, \`adb -s $SERIAL_BOB shell dumpsys connectivity | head -40\`)"
   kv_put s4-net-down host
   wait_kv "sent-e2e-s4" 300
   # The silence has to outlast the node's ping timeout — see the
   # S4_SILENCE_SEC comment at the top for why this is the whole point of S4.
-  log "S4: radio silence for ${S4_SILENCE_SEC}s (node ping timeout ${NODE_PING_TIMEOUT_SEC}s)"
-  sleep "$S4_SILENCE_SEC"
+  # T119: probing across the WHOLE silence, not just once at the start. The
+  # 2026-09-03 breakage was a transport that came back 10 s in, long after a
+  # one-shot check had already green-lit Alice.
+  log "S4: radio silence for ${S4_SILENCE_SEC}s (node ping timeout ${NODE_PING_TIMEOUT_SEC}s), probing reachability throughout"
+  s4_silence_start=$(date +%s)
+  s4_silence_end=$(( s4_silence_start + S4_SILENCE_SEC ))
+  while [[ $(date +%s) -lt $s4_silence_end ]]; do
+    PROBE_CHECKS=$(( PROBE_CHECKS + 1 ))
+    if bob_can_reach_host; then
+      PROBE_BREACHES=$(( PROBE_BREACHES + 1 ))
+      if [[ -z "$PROBE_FIRST_BREACH_SEC" ]]; then
+        PROBE_FIRST_BREACH_SEC=$(( $(date +%s) - s4_silence_start ))
+        log "S4 BREACH: $PROBE_HOST:$COORD_PORT reachable again ${PROBE_FIRST_BREACH_SEC}s into the silence — the cut did not hold (T119)"
+      fi
+    fi
+    sleep 3
+  done
+  log "S4: silence over — probe checks: $PROBE_CHECKS, breaches: $PROBE_BREACHES"
   bob_net up
   kv_put s4-net-up host
+  # The reconnect can only be measured if the network really comes back. A
+  # bounded check here turns "restore silently did not work" into one clear
+  # line instead of a 10-minute wait_kv timeout further down.
+  s4_restore_deadline=$(( $(date +%s) + 60 ))
+  while [[ $(date +%s) -lt $s4_restore_deadline ]]; do
+    bob_can_reach_host && break
+    sleep 2
+  done
+  bob_can_reach_host \
+    || die "S4: $PROBE_HOST:$COORD_PORT still unreachable from Bob's guest 60s after the restore — airplane-mode disable / svc enable did not bring the network back"
   wait_kv "recv-e2e-s4" 600
   log "S4: message delivered after reconnect"
 fi
@@ -692,6 +824,13 @@ if has_scenario s4; then
   # the connection — the scenario would not have tested a reconnect.
   if grep -qE '"reconnectDeliveryMs": -' "$ART/report.json"; then
     failures+=("S4 message arrived BEFORE the network was restored — no real disconnect")
+  fi
+  # T119: the direct statement of the same defect, from the harness side. It
+  # names the second when the blackout ended, which the delivery timestamps
+  # cannot: a breach at +10 s and a breach at +80 s look identical in
+  # reconnectDeliveryMs, and only one of them is the transport-promotion bug.
+  if [[ "$PROBE_BREACHES" -gt 0 ]]; then
+    failures+=("S4 cut did not hold (harness): Bob's guest reached $PROBE_HOST:$COORD_PORT again ${PROBE_FIRST_BREACH_SEC}s into the ${S4_SILENCE_SEC}s silence ($PROBE_BREACHES of $PROBE_CHECKS probes succeeded) — the blackout was not a blackout, see the T119 root-cause comment at bob_net()")
   fi
   # T89(a): S4 exists to exercise the reconnect *after* the node has thrown the
   # stale peer away. If no undialable peer was evicted during the silence, the

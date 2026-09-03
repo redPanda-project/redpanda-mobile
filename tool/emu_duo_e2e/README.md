@@ -38,14 +38,32 @@ pairing foundation and always runs, even when omitted from the list.
   (`s3.catchupMs` = `recv` − `s3-bob-restart`, enforced by run.sh). Proves
   the T18 restart-requeue (PR #50).
 - **S4** — airplane-mode reconnect (T24): with both apps running, the
-  harness enables airplane mode on Bob (`cmd connectivity airplane-mode
-  enable` — verified on the API 35 image to drop guest→host TCP, i.e.
-  10.0.2.2 becomes unreachable), Alice sends into the silence
-  (`RP_S4_SILENCE_SEC`, default 90 s), then airplane mode goes off again.
-  Bob must reconnect and receive; `s4.reconnectDeliveryMs` = `recv` −
-  `s4-net-up`. run.sh fails the scenario if the message arrived *before*
-  the network was restored (that would mean the disconnect never happened).
-  Proves the T15 isolate resilience + the #55 host-node fix.
+  harness cuts Bob's network (`svc data disable` + `svc wifi disable` +
+  `cmd connectivity airplane-mode enable`, in that order), Alice sends into
+  the silence (`RP_S4_SILENCE_SEC`, default 90 s), then the network goes
+  back on. Bob must reconnect and receive; `s4.reconnectDeliveryMs` =
+  `recv` − `s4-net-up`. run.sh fails the scenario if the message arrived
+  *before* the network was restored (that would mean the disconnect never
+  happened). Proves the T15 isolate resilience + the #55 host-node fix.
+
+  **Airplane mode alone is not a blackout on these images (T119).** The API
+  35 `google_apis` image boots two default-capable networks — WIFI on
+  `wlan0` and CELLULAR on `eth0` (the qemu slirp NIC, with the default route
+  to 10.0.2.2) — and airplane mode tears them down out of lockstep: Wi-Fi
+  first, and while the modem powers off ConnectivityService promotes the
+  still-connected cellular network to default. On 2026-09-03 that promotion
+  lasted 18 s, Bob redialled the node 6 s into the "silence" and fetched
+  Alice's message; in the green runs before it, the same promotion happened
+  and only lasted 3 s. Hence the two extra `svc` calls, and hence the cut is
+  now verified by *effect*: run.sh picks a guest-side reachability probe
+  (`nc` → `toybox nc` → `toybox wget` → `ip route get`, first one that works
+  **while the network is still up** — a check that cannot succeed cannot
+  detect a failure, which is what the old `ping 10.0.2.2` loop was: it broke
+  out on its first iteration in every archived run, green and red, because
+  ICMP to the slirp gateway never answers), waits for it to fail, and then
+  keeps probing every 3 s across the whole silence. Any success is a run
+  failure naming the second it happened; the tally lands in
+  `counters.s4Probe`.
 
   **The silence must outlast the node's `Settings.pingTimeout` (65 s)**
   — that is what makes S4 deterministic (T89a). Below the timeout the node
@@ -158,6 +176,7 @@ triaged as "the gate flaked" or "the gate found something" without opening a
 | Field | Reads as |
 | --- | --- |
 | `node.undialableEvictions.duringS4` | 0 ⇒ S4 never exercised the reconnect-after-eviction path (harness precondition, run fails) |
+| `s4Probe.{method,checks,breaches,firstBreachSec}` | T119 cut verification. `breaches` >0 ⇒ Bob's guest could reach the host during the silence, so the blackout was not one (run fails, `firstBreachSec` says when it came back). `method: null` ⇒ no probe was usable and S4 refused to run; `checks: 0` ⇒ the run never reached the silence. The probe targets the coord port, not 59558, so it cannot inflate `undialableEvictions.duringS4` by making the node accept and evict a peer |
 | `node.duplicateConnections.{total,duringS4}` | the T88 signature (`duplicate parallel connection from the same identity`); >0 during S4 means peer bookkeeping went out of sync again |
 | `node.handshakes.wedged` | `parsed ACTIVATE_ENCRYPTION` − `received first encrypted command`, the T80 metric; 3–4 before redpandaj#288, 0 after — anything >0 means that class is back |
 | `node.exceptionLines` | lines containing `Exception` in node.log |
