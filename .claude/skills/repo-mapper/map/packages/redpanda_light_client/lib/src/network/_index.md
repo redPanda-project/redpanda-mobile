@@ -8,4 +8,4 @@
   (`ActivePeer`). TCP-Handshake (Magic "k3gV"), Public-Key-Austausch,
   Encryption-Aktivierung (ECDH + AES/CTR), Ping/Pong-Latenzmessung,
   Peer-Listen-Austausch. Parst Protobuf-Command-Payloads (Kademlia,
-  Flaschenpost, GarlicMessage).
+  Flaschenpost, OH-Kommandos).

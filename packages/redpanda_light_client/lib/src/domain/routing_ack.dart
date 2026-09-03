@@ -44,7 +44,19 @@ class RoutingAck {
   static const int statusRejected = 3;
 
   /// Decodes a [RoutingAck] from its proto3 binary form. Unknown fields are
-  /// skipped. Throws [FormatException] on malformed input.
+  /// skipped (forward compatibility with a newer backend). Throws
+  /// [FormatException] on truncated or otherwise unparseable input.
+  ///
+  /// One deliberate behaviour change against the hand-rolled decoder this
+  /// replaced: that one threw on a *known* field carrying the wrong wire type
+  /// (e.g. `timestamp_ms` length-delimited), whereas the protobuf runtime
+  /// accepts it as a packed encoding and leaves the field at its default. That
+  /// is accepted here rather than re-hand-rolling a parser: the only producer
+  /// of R-ACK bytes is the backend `RoutingAckSender`, which emits canonical
+  /// proto3, and the milestone spec already treats an R-ACK as a routing hint
+  /// that any hop may forge or drop — so a malformed one degrading to
+  /// `statusStored` is no weaker than the forged-but-valid one that same hop
+  /// could send instead.
   factory RoutingAck.decode(List<int> bytes) {
     final outbound_pb.RoutingAck decoded;
     try {
@@ -63,8 +75,17 @@ class RoutingAck {
   Uint8List encode() => toProto().writeToBuffer();
 
   /// The generated protobuf message backing this ack.
-  outbound_pb.RoutingAck toProto() =>
-      outbound_pb.RoutingAck(timestampMs: Int64(timestampMs), status: status);
+  ///
+  /// Zero-valued fields are left unset on purpose: proto3 omits defaults on the
+  /// wire, but the generated setters mark an explicitly assigned `0` as present
+  /// and emit it. Skipping them keeps the bytes identical to what the backend
+  /// `RoutingAckSender` and the previous hand-rolled encoder produce.
+  outbound_pb.RoutingAck toProto() {
+    final message = outbound_pb.RoutingAck();
+    if (timestampMs != 0) message.timestampMs = Int64(timestampMs);
+    if (status != 0) message.status = status;
+    return message;
+  }
 }
 
 /// Routing-layer delivery feedback for one outgoing message (Frontend MS06),

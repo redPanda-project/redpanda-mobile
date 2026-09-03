@@ -12,3 +12,5 @@
 * 📄 **outbound.pb.dart** — Generierte Klassen aus `protos/outbound.proto`.
 * 📄 **outbound.pbjson.dart** — JSON-Serialisierung dazu.
 * 📄 **outbound.pbenum.dart** — `Status`-Enum.
+* 📄 **CODEGEN.lock** — sha256 je generierter Datei + protoc-/protoc_plugin-Version;
+  von `test/unit/vendored_protos_test.dart` geprüft (Handedits fallen auf).

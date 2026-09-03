@@ -76,6 +76,10 @@ milestones behind the generated code it was supposed to describe (DDD review
 | `protos/*.proto` | verbatim copies of the redpandaj schemas |
 | `protos/UPSTREAM.lock` | pinned redpandaj commit + sha256 of each vendored file |
 | `lib/src/generated/*.pb*.dart` | `protoc --dart_out` output, formatted with the pinned Dart |
+| `lib/src/generated/CODEGEN.lock` | sha256 of each generated file + the protoc/protoc_plugin versions |
+
+The vendored *set* is discovered from redpandaj, not hard-coded: a schema added
+or removed upstream shows up as drift rather than being quietly missed.
 
 ### Syncing from redpandaj
 
@@ -98,10 +102,16 @@ the protos, `UPSTREAM.lock` and the regenerated Dart in one change.
 
 ### Drift guard
 
-* `test/unit/vendored_protos_test.dart` — offline: vendored protos still match
-  `UPSTREAM.lock`, every proto has generated Dart, the lock pins a commit SHA.
+* `test/unit/vendored_protos_test.dart` — offline, so it is the half that runs
+  in CI: vendored protos still match `UPSTREAM.lock`, generated Dart still
+  matches `CODEGEN.lock`, both sets agree with their lock, and `UPSTREAM.lock`
+  pins a real commit SHA. The `CODEGEN.lock` half is the important one: the
+  pre-T107 defect was a hand-edited *generated* file, not a hand-edited proto.
 * `tool/sync_protos.sh --check` — additionally diffs against live upstream when
-  a redpandaj checkout or the GitHub API is reachable.
+  a redpandaj checkout or the GitHub API is reachable. Run from
+  `tool/pre_push_validation.sh`; it is **not** wired into
+  `.github/workflows/`, so the "is this still what redpandaj has today"
+  question is answered locally, not by CI.
 
 ## 🔬 Testing
 

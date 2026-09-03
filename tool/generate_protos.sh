@@ -7,7 +7,11 @@
 # The generated files are committed so that neither CI nor a plain
 # `flutter pub get` needs protoc. Never hand-edit them: the hand-maintained
 # copies were exactly the T107 defect (generated code three milestones ahead of
-# the .proto it claimed to come from).
+# the .proto it claimed to come from). This script therefore also writes
+# `lib/src/generated/CODEGEN.lock` (sha256 per generated file plus the tool
+# versions), which `test/unit/vendored_protos_test.dart` verifies — so a
+# hand-edit of the generated Dart fails CI the same way a hand-edit of a
+# vendored .proto does.
 #
 # Requirements:
 #   * protoc — on PATH, or $PROTOC, or ~/tools/protoc/bin/protoc.
@@ -35,6 +39,16 @@ REPO_ROOT="$(git -C "$(dirname "$SCRIPT_PATH")" rev-parse --show-toplevel)"
 PKG_DIR="$REPO_ROOT/packages/redpanda_light_client"
 PROTO_DIR="$PKG_DIR/protos"
 OUT_DIR="$PKG_DIR/lib/src/generated"
+CODEGEN_LOCK="$OUT_DIR/CODEGEN.lock"
+
+# See tool/sync_protos.sh — macOS has shasum, not sha256sum.
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256_of() { sha256sum "$@"; }
+elif command -v shasum >/dev/null 2>&1; then
+  sha256_of() { shasum -a 256 "$@"; }
+else
+  die "neither sha256sum nor shasum found — cannot write CODEGEN.lock"
+fi
 
 PROTOC="${PROTOC:-}"
 if [ -z "$PROTOC" ]; then
@@ -47,6 +61,8 @@ if [ -z "$PROTOC" ]; then
   fi
 fi
 command -v dart >/dev/null 2>&1 || die "dart not on PATH (export PATH=~/tools/flutter/bin:\$PATH)"
+
+ls "$PROTO_DIR"/*.proto >/dev/null 2>&1 || die "no vendored protos in $PROTO_DIR (run tool/sync_protos.sh)"
 
 cd "$PKG_DIR"
 dart pub get > /dev/null
@@ -62,15 +78,35 @@ PLUGIN
 chmod +x "$PLUGIN_DIR/protoc-gen-dart"
 
 mkdir -p "$OUT_DIR"
-echo "protoc: $("$PROTOC" --version)"
+# Drop the previous output first: the generated files are committed, so a
+# renamed or removed .proto would otherwise leave stale *.pb*.dart behind.
+rm -f "$OUT_DIR"/*.pb.dart "$OUT_DIR"/*.pbenum.dart "$OUT_DIR"/*.pbjson.dart \
+      "$OUT_DIR"/*.pbserver.dart "$OUT_DIR"/*.pbgrpc.dart "$CODEGEN_LOCK"
+
+PROTOC_VERSION="$("$PROTOC" --version)"
+PLUGIN_VERSION="$(awk '/^  protoc_plugin:/ { found = 1 } found && /^    version:/ { gsub(/"/, "", $2); print $2; exit }' "$PKG_DIR/pubspec.lock")"
+echo "protoc: $PROTOC_VERSION"
+echo "protoc_plugin: ${PLUGIN_VERSION:-unknown} (pubspec.lock)"
+
 PATH="$PLUGIN_DIR:$PATH" "$PROTOC" \
   --proto_path="$PROTO_DIR" \
   --dart_out="$OUT_DIR" \
   "$PROTO_DIR"/*.proto
 
 # protoc_plugin formats with its own bundled dart_style; re-format with the
-# project's pinned Dart so `dart format --set-exit-if-changed` stays green.
+# project's pinned Dart so `dart format --set-exit-if-changed` stays green and
+# the hashes below match what CI sees.
 dart format "$OUT_DIR" > /dev/null
+
+{
+  echo "# Generated protobuf Dart — DO NOT EDIT."
+  echo "# Produced by tool/generate_protos.sh from packages/redpanda_light_client/protos/."
+  echo "# Verified by test/unit/vendored_protos_test.dart: a hand-edit of the"
+  echo "# generated code fails CI, which is how the pre-T107 drift stayed invisible."
+  echo "# protoc: $PROTOC_VERSION"
+  echo "# protoc_plugin: ${PLUGIN_VERSION:-unknown}"
+  (cd "$OUT_DIR" && sha256_of $(find . -maxdepth 1 -name '*.dart' -type f -exec basename {} \; | LC_ALL=C sort))
+} > "$CODEGEN_LOCK"
 
 echo "generated:"
 ls -1 "$OUT_DIR"

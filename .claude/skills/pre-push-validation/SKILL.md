@@ -68,11 +68,13 @@ never hand-edit either. `tool/pre_push_validation.sh` runs:
 tool/sync_protos.sh --check
 ```
 
-which fails when (a) a vendored `.proto` no longer hashes to
-`protos/UPSTREAM.lock` (someone edited the copy) or (b) it no longer equals
-upstream — (b) is skipped with a notice when neither a redpandaj checkout nor
-the GitHub API is reachable. Check (a) also runs offline in CI through
-`test/unit/vendored_protos_test.dart`.
+which fails when (a) the vendored `.proto` set no longer matches
+`protos/UPSTREAM.lock` (someone edited or added a copy) or (b) it no longer
+equals upstream — (b) is skipped with a notice when neither a redpandaj
+checkout nor the GitHub API is reachable, and is therefore a *local* guard
+only. `test/unit/vendored_protos_test.dart` runs offline and so also guards CI:
+it checks (a) plus the generated Dart against
+`lib/src/generated/CODEGEN.lock`.
 
 To adopt an upstream schema change:
 
