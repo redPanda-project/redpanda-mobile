@@ -10,7 +10,7 @@ import 'package:redpanda/services/field_logging.dart';
 import 'package:redpanda/services/foreground_service.dart';
 import 'package:redpanda/services/group_service.dart';
 import 'package:redpanda/services/message_sync_service.dart';
-import 'package:redpanda/services/send_retry_queue.dart';
+import 'package:redpanda/services/outbox_service.dart';
 import 'package:redpanda/shared/providers.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
 import 'package:sentry/sentry.dart';
@@ -151,7 +151,7 @@ class _MyAppState extends ConsumerState<MyApp> {
             debugPrint('Failed to re-queue stuck messages: $e');
           }),
     );
-    ref.read(sendRetryQueueProvider).start();
+    ref.read(outboxServiceProvider).start();
 
     // T16: keep the process (and with it the network isolate) alive in the
     // background on Android once there is at least one channel to receive

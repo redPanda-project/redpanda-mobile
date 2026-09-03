@@ -1,16 +1,42 @@
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hex/hex.dart';
 import 'package:redpanda/database/database.dart';
+import 'package:redpanda/repositories/group_repository.dart';
 import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/screens/chat/chat_screen.dart';
 import 'package:redpanda/services/message_sync_service.dart';
+import 'package:redpanda/services/outbox_service.dart';
 import 'package:redpanda/shared/providers.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart' hide Channel;
 
 import '../helpers/fake_redpanda_client.dart';
 import '../helpers/test_database.dart';
+
+/// Records what the chat screen hands to the outbox and swallows the send,
+/// so the test can tell "the screen enqueued" from "the screen sent" (T112).
+class _RecordingOutbox extends OutboxService {
+  _RecordingOutbox(super.messages, super.client, super.groups);
+
+  final List<({String conversationId, String senderId, String content})>
+  enqueued = [];
+
+  @override
+  Future<int> enqueue({
+    required String conversationId,
+    required String senderId,
+    required String content,
+  }) async {
+    enqueued.add((
+      conversationId: conversationId,
+      senderId: senderId,
+      content: content,
+    ));
+    return enqueued.length;
+  }
+}
 
 void main() {
   late AppDatabase db;
@@ -307,6 +333,84 @@ void main() {
       final row = await db.select(db.messages).getSingle();
       expect(row.status, equals(MessageStatus.failed));
       expect(find.text('Message too large to deliver.'), findsOneWidget);
+
+      await unmount(tester);
+    });
+  });
+
+  group('T112: the composer only enqueues', () {
+    testWidgets('send hands the message to the outbox, it does not send', (
+      tester,
+    ) async {
+      final outbox = _RecordingOutbox(
+        MessageRepository(db),
+        client,
+        GroupRepository(db),
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            dbProvider.overrideWithValue(db),
+            redPandaClientProvider.overrideWithValue(client),
+            outboxServiceProvider.overrideWithValue(outbox),
+          ],
+          child: const MaterialApp(home: ChatScreen(peerUuid: channelUuid)),
+        ),
+      );
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextField), 'enqueue me');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      await tester.pump();
+
+      expect(outbox.enqueued, hasLength(1));
+      expect(outbox.enqueued.single.conversationId, equals(channelUuid));
+      expect(outbox.enqueued.single.senderId, equals(myUuid));
+      expect(outbox.enqueued.single.content, equals('enqueue me'));
+      expect(
+        client.sentMessages,
+        isEmpty,
+        reason:
+            'the send attempt (and its retry/backoff policy) belongs to the '
+            'outbox — the screen used to run a second implementation of it',
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('a failed RETRY of an older message shows no snackbar', (
+      tester,
+    ) async {
+      // Only the attempt the user just triggered is reported; the queue's
+      // later attempts stay silent, exactly as when the composer did its own
+      // send and the retry queue was mute.
+      client.sendError = DepositException(DepositStatus.quotaExceeded);
+      await db
+          .into(db.messages)
+          .insert(
+            MessagesCompanion.insert(
+              conversationId: channelUuid,
+              senderId: myUuid,
+              content: 'older pending',
+              timestamp: DateTime.now(),
+              status: MessageStatus.pending,
+              type: 0,
+              retryCount: const Value(1),
+            ),
+          );
+
+      await tester.pumpWidget(app());
+      await tester.pump();
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(ChatScreen)),
+      );
+      await container.read(outboxServiceProvider).runPass(ignoreBackoff: true);
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.byType(SnackBar), findsNothing);
 
       await unmount(tester);
     });

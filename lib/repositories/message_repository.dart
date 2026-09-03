@@ -1,36 +1,14 @@
 import 'package:drift/drift.dart' as drift;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:redpanda/database/database.dart';
+import 'package:redpanda/domain/message_lifecycle.dart';
 import 'package:redpanda/shared/providers.dart';
 
-/// Message status values stored in [Messages.status].
-class MessageStatus {
-  MessageStatus._();
-
-  /// Queued locally, not yet handed to the network.
-  static const int pending = 0;
-
-  /// Handed to a connected Full Node.
-  static const int sent = 1;
-
-  /// MS06: R-ACK received — the message reached the recipient's OH mailbox.
-  static const int routed = 2;
-
-  /// MS06: Channel-ACK received — the recipient's client has the message.
-  static const int delivered = 3;
-
-  /// Incoming message fetched from our OH mailbox.
-  ///
-  /// Note: the master-spec lifecycle reserves 4 for a future Read-ACK; this
-  /// app has used 4 for incoming messages since MS01. Incoming and outgoing
-  /// rows never mix status semantics (the UI only renders status icons for
-  /// own messages), so the double use is safe — a Read-ACK would need a new
-  /// value (6) if it ever lands.
-  static const int received = 4;
-
-  /// Given up after [SendRetryQueue.maxRetries] failed attempts.
-  static const int failed = 5;
-}
+// T112: the status constants and the lifecycle rule live in the domain file
+// now; re-exported here so the ~20 existing `MessageStatus` importers keep
+// working and the state machine is available wherever a status is written.
+export 'package:redpanda/domain/message_lifecycle.dart'
+    show MessageStatus, MessageLifecycle;
 
 /// Data access for chat messages: pending-send queries, retry bookkeeping
 /// and deduplicated inserts of fetched messages.
@@ -146,10 +124,52 @@ class MessageRepository {
         .write(MessagesCompanion(messageId: drift.Value(messageId)));
   }
 
-  Future<void> updateMessageStatus(int id, int status) async {
-    await (_db.update(_db.messages)..where((t) => t.id.equals(id))).write(
-      MessagesCompanion(status: drift.Value(status)),
-    );
+  /// Moves message [id] to [status], if [MessageLifecycle] allows it.
+  ///
+  /// T112: the ONE place a message's status changes by row id. It reads the
+  /// current status, checks the transition against the state machine and
+  /// writes with the SQL guard derived from the very same table — an
+  /// illegal transition is logged and skipped instead of silently
+  /// downgrading a message (a Channel-ACK landing between a successful
+  /// deposit and `markSent` used to turn `delivered` back into `sent`).
+  ///
+  /// Returns true if the row was written.
+  Future<bool> updateMessageStatus(
+    int id,
+    int status, {
+    drift.Value<DateTime?> lastRetryAt = const drift.Value.absent(),
+    drift.Value<int> retryCount = const drift.Value.absent(),
+  }) async {
+    final msg = await (_db.select(
+      _db.messages,
+    )..where((t) => t.id.equals(id))).getSingleOrNull();
+    if (msg == null) return false;
+    if (!MessageLifecycle.check(msg.status, status, 'message $id')) {
+      return false;
+    }
+    final written =
+        await (_db.update(_db.messages)..where(
+              // Second line of defence: the row may have moved on between
+              // the read above and this write (the persistence chain and a
+              // send pass run concurrently). Same rule, same table.
+              (t) =>
+                  t.id.equals(id) &
+                  t.status.isIn(MessageLifecycle.sourcesOf(status)),
+            ))
+            .write(
+              MessagesCompanion(
+                status: drift.Value(status),
+                lastRetryAt: lastRetryAt,
+                retryCount: retryCount,
+              ),
+            );
+    return written > 0;
+  }
+
+  /// Gives up on a message after [OutboxService.maxRetries] attempts (or on
+  /// a permanent rejection such as BAD_REQUEST).
+  Future<void> markFailed(int id) async {
+    await updateMessageStatus(id, MessageStatus.failed);
   }
 
   /// Marks a message `sent` and stamps [Messages.lastRetryAt] with the
@@ -159,11 +179,10 @@ class MessageRepository {
   /// never qualify for the staleness sweep. Use this instead of
   /// [updateMessageStatus] for every sent-transition.
   Future<void> markSent(int id) async {
-    await (_db.update(_db.messages)..where((t) => t.id.equals(id))).write(
-      MessagesCompanion(
-        status: const drift.Value(MessageStatus.sent),
-        lastRetryAt: drift.Value(DateTime.now()),
-      ),
+    await updateMessageStatus(
+      id,
+      MessageStatus.sent,
+      lastRetryAt: drift.Value(DateTime.now()),
     );
   }
 
@@ -185,11 +204,11 @@ class MessageRepository {
   /// Increments `retryCount` like [requeueSentByNetworkId] does, so a
   /// permanently ack-less send (e.g. a channel whose partner never has an
   /// OH) does not get resent every 3 minutes forever without backoff — once
-  /// `retryCount` climbs, [SendRetryQueue.backoffFor] pushes it out past the
+  /// `retryCount` climbs, [OutboxService.backoffFor] pushes it out past the
   /// sweep's own cadence.
   ///
   /// Deliberately does **not** touch `lastRetryAt`: the field stays at its
-  /// old (>= [olderThan] ago) value, so [SendRetryQueue.isDue] sees a stale
+  /// old (>= [olderThan] ago) value, so [OutboxService.isDue] sees a stale
   /// timestamp against the *new*, higher `retryCount` — a message with a
   /// low retryCount is still due immediately (same-pass resend, the
   /// intended fast heal), while one whose retryCount already climbed into
@@ -210,19 +229,25 @@ class MessageRepository {
             .get();
     if (stale.isEmpty) return 0;
 
+    var requeued = 0;
     await _db.transaction(() async {
       for (final msg in stale) {
-        await (_db.update(
-          _db.messages,
-        )..where((t) => t.id.equals(msg.id))).write(
-          MessagesCompanion(
-            status: const drift.Value(MessageStatus.pending),
-            retryCount: drift.Value(msg.retryCount + 1),
-          ),
-        );
+        // T112: still `sent` at write time — an ACK that landed between the
+        // select above and this write must not be pulled back to pending.
+        requeued +=
+            await (_db.update(_db.messages)..where(
+                  (t) =>
+                      t.id.equals(msg.id) & t.status.equals(MessageStatus.sent),
+                ))
+                .write(
+                  MessagesCompanion(
+                    status: const drift.Value(MessageStatus.pending),
+                    retryCount: drift.Value(msg.retryCount + 1),
+                  ),
+                );
       }
     });
-    return stale.length;
+    return requeued;
   }
 
   /// MS06: marks the outgoing message with network id [messageIdHex] in
@@ -230,6 +255,9 @@ class MessageRepository {
   /// already delivered (or failed after the ack raced the last retry) keeps
   /// its later status; failed is upgraded too, because the R-ACK proves the
   /// message reached the mailbox after all.
+  ///
+  /// T112: the `where` list is [MessageLifecycle.sourcesOf], not a
+  /// hand-written set — the "only upgrades" rule is stated once.
   Future<void> markRoutedByNetworkId(
     String conversationId,
     String messageIdHex,
@@ -238,11 +266,7 @@ class MessageRepository {
           (t) =>
               t.conversationId.equals(conversationId) &
               t.messageId.equals(messageIdHex) &
-              t.status.isIn(const [
-                MessageStatus.pending,
-                MessageStatus.sent,
-                MessageStatus.failed,
-              ]),
+              t.status.isIn(MessageLifecycle.sourcesOf(MessageStatus.routed)),
         ))
         .write(
           const MessagesCompanion(status: drift.Value(MessageStatus.routed)),
@@ -251,7 +275,9 @@ class MessageRepository {
 
   /// MS06: marks the outgoing message as delivered (Channel-ACK received).
   /// Delivered is terminal evidence the partner has the message, so every
-  /// earlier state — including failed — is upgraded.
+  /// earlier state — including failed — is upgraded (T112: again straight
+  /// from [MessageLifecycle.sourcesOf]; incoming rows are excluded because
+  /// `received` is not part of the outgoing lifecycle).
   Future<void> markDeliveredByNetworkId(
     String conversationId,
     String messageIdHex,
@@ -260,7 +286,9 @@ class MessageRepository {
           (t) =>
               t.conversationId.equals(conversationId) &
               t.messageId.equals(messageIdHex) &
-              t.status.isNotIn(const [MessageStatus.received]),
+              t.status.isIn(
+                MessageLifecycle.sourcesOf(MessageStatus.delivered),
+              ),
         ))
         .write(
           const MessagesCompanion(status: drift.Value(MessageStatus.delivered)),
@@ -272,6 +300,11 @@ class MessageRepository {
   /// retryCount and stamps lastRetryAt so the normal backoff applies;
   /// touches only messages still in `sent` — a late Channel-ACK or R-ACK
   /// must not resurrect an already confirmed message.
+  ///
+  /// T112: that `sent` guard is deliberately NARROWER than what
+  /// [MessageLifecycle] permits into `pending`. The state machine says which
+  /// transitions are legal at all; "only a message we are still waiting for
+  /// feedback on may be re-queued" is a precondition of this operation.
   Future<void> requeueSentByNetworkId(
     String conversationId,
     String messageIdHex,
@@ -288,13 +321,18 @@ class MessageRepository {
             .getSingleOrNull();
     if (msg == null) return;
 
-    await (_db.update(_db.messages)..where((t) => t.id.equals(msg.id))).write(
-      MessagesCompanion(
-        status: const drift.Value(MessageStatus.pending),
-        retryCount: drift.Value(msg.retryCount + 1),
-        lastRetryAt: drift.Value(DateTime.now()),
-      ),
-    );
+    // T112: re-check `sent` in the write, not only in the select above — an
+    // ACK arriving in between must not be downgraded to pending.
+    await (_db.update(_db.messages)..where(
+          (t) => t.id.equals(msg.id) & t.status.equals(MessageStatus.sent),
+        ))
+        .write(
+          MessagesCompanion(
+            status: const drift.Value(MessageStatus.pending),
+            retryCount: drift.Value(msg.retryCount + 1),
+            lastRetryAt: drift.Value(DateTime.now()),
+          ),
+        );
   }
 
   /// Puts a message back into the send queue for an immediate attempt,
@@ -302,12 +340,11 @@ class MessageRepository {
   /// failed/stuck messages — the user explicitly asked, so the backoff
   /// window starts over.
   Future<void> resetForImmediateRetry(int id) async {
-    await (_db.update(_db.messages)..where((t) => t.id.equals(id))).write(
-      const MessagesCompanion(
-        status: drift.Value(MessageStatus.pending),
-        retryCount: drift.Value(0),
-        lastRetryAt: drift.Value(null),
-      ),
+    await updateMessageStatus(
+      id,
+      MessageStatus.pending,
+      retryCount: const drift.Value(0),
+      lastRetryAt: const drift.Value(null),
     );
   }
 

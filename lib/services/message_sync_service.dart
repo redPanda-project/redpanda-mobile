@@ -9,6 +9,7 @@ import 'package:redpanda/database/database.dart';
 import 'package:redpanda/repositories/group_repository.dart';
 import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/repositories/outbound_handle_repository.dart';
+import 'package:redpanda/services/outbox_service.dart';
 import 'package:redpanda/shared/providers.dart';
 // `hide Channel`: the light client's domain `Channel` collides with the Drift
 // row class of the same name, and this file only ever handles the row.
@@ -21,7 +22,9 @@ import 'package:redpanda_light_client/redpanda_light_client.dart' hide Channel;
 /// - persists fetched messages (deduplicated by network message id),
 /// - persists OH fetch cursors and renewed expiries,
 /// - persists ratchet/garlic session state, own- and peer-OH sets, node
-///   scores, group state, and applies routing-/channel-ACKs,
+///   scores and group state, and routes routing-/channel-ACKs into the
+///   outbox (T112: the delivery lifecycle is owned by [OutboxService], this
+///   service only owns the subscription that carries the acks),
 /// - re-broadcasts mailbox overflow warnings for the UI,
 /// - restores persisted OH registrations and channel keys on startup.
 ///
@@ -41,6 +44,7 @@ class MessageSyncService {
   final OutboundHandleRepository _outboundHandles;
   final AppDatabase _db;
   final GroupRepository _groups;
+  final OutboxService _outbox;
 
   final _overflowController = StreamController<OhMailboxUpdate>.broadcast();
   StreamSubscription<DecryptedMessage>? _messageSub;
@@ -74,6 +78,7 @@ class MessageSyncService {
     this._outboundHandles,
     this._db,
     this._groups,
+    this._outbox,
   );
 
   /// Mailbox overflow warnings; the chat UI surfaces these to the user.
@@ -146,9 +151,10 @@ class MessageSyncService {
       case GarlicSessionUpdate():
         await handleGarlicSessionUpdate(update);
       case RoutingAckUpdate():
-        await handleRoutingAckUpdate(update);
+        // T112: delivery lifecycle transitions belong to the outbox.
+        await _outbox.onRoutingAck(update);
       case ChannelAckUpdate():
-        await handleChannelAckUpdate(update);
+        await _outbox.onChannelAck(update);
       case NodeScoreUpdate():
         await handleNodeScores(update.scores);
       case OwnOhSetUpdate():
@@ -298,121 +304,6 @@ class MessageSyncService {
     });
   }
 
-  /// Applies routing-layer delivery feedback (MS06): an R-ACK confirms the
-  /// message reached the recipient's OH mailbox (`routed`); HANDLE_EXPIRED,
-  /// MAILBOX_FULL or a timeout re-queue the message for a retry over fresh
-  /// hops (the node scorer already penalized the old ones on timeout).
-  Future<void> handleRoutingAckUpdate(RoutingAckUpdate update) async {
-    // MS08 (Decision 13): group deliveries ack per member — aggregate to
-    // `routed` only once every other member's mailbox confirmed.
-    final memberIdHex = update.memberIdHex;
-    if (memberIdHex != null) {
-      if (update.timedOut || update.status != RoutingAck.statusStored) {
-        await _messages.requeueSentByNetworkId(
-          update.channelId,
-          update.messageIdHex,
-        );
-        return;
-      }
-      await _groups.markReceipt(
-        conversationId: update.channelId,
-        messageId: update.messageIdHex,
-        memberId: memberIdHex,
-        routed: true,
-      );
-      final group = await _groups.getGroup(update.channelId);
-      if (group == null) return;
-      final complete = await _groups.allMembersConfirmed(
-        conversationId: update.channelId,
-        messageId: update.messageIdHex,
-        ownMemberId: group.myMemberId,
-        delivered: false,
-      );
-      if (complete) {
-        await _messages.markRoutedByNetworkId(
-          update.channelId,
-          update.messageIdHex,
-        );
-      }
-      return;
-    }
-
-    if (update.timedOut) {
-      debugPrint(
-        'MessageSyncService: no R-ACK for ${update.messageIdHex} — '
-        're-queueing for fresh hops',
-      );
-      await _messages.requeueSentByNetworkId(
-        update.channelId,
-        update.messageIdHex,
-      );
-      return;
-    }
-    switch (update.status) {
-      case RoutingAck.statusStored:
-        await _messages.markRoutedByNetworkId(
-          update.channelId,
-          update.messageIdHex,
-        );
-        break;
-      case RoutingAck.statusMailboxFull:
-        // Reject-new (MS02b): retrying immediately cannot succeed; the
-        // normal backoff applies via the re-queue.
-        debugPrint(
-          'MessageSyncService: recipient mailbox full for '
-          '${update.messageIdHex}',
-        );
-        await _messages.requeueSentByNetworkId(
-          update.channelId,
-          update.messageIdHex,
-        );
-        break;
-      case RoutingAck.statusHandleExpired:
-      case RoutingAck.statusRejected:
-      default:
-        debugPrint(
-          'MessageSyncService: deposit failed for ${update.messageIdHex} '
-          '(status ${update.status})',
-        );
-        await _messages.requeueSentByNetworkId(
-          update.channelId,
-          update.messageIdHex,
-        );
-        break;
-    }
-  }
-
-  /// Applies an application-layer delivery confirmation (Channel-ACK, MS06).
-  Future<void> handleChannelAckUpdate(ChannelAckUpdate update) async {
-    // MS08 (Decision 13): group acks aggregate per member — `delivered`
-    // only once ALL other members confirmed. Acks are broadcast, so this
-    // also fires for messages we merely received; those rows are excluded
-    // by markDeliveredByNetworkId (status `received`).
-    final memberIdHex = update.memberIdHex;
-    if (memberIdHex != null) {
-      await _groups.markReceipt(
-        conversationId: update.channelId,
-        messageId: update.messageIdHex,
-        memberId: memberIdHex,
-        routed: true,
-        delivered: true,
-      );
-      final group = await _groups.getGroup(update.channelId);
-      if (group == null) return;
-      final complete = await _groups.allMembersConfirmed(
-        conversationId: update.channelId,
-        messageId: update.messageIdHex,
-        ownMemberId: group.myMemberId,
-        delivered: true,
-      );
-      if (!complete) return;
-    }
-    await _messages.markDeliveredByNetworkId(
-      update.channelId,
-      update.messageIdHex,
-    );
-  }
-
   /// Persists a node-score snapshot (MS06) so hop selection keeps its
   /// R-ACK history across app restarts.
   Future<void> handleNodeScores(List<NodeScore> scores) async {
@@ -538,6 +429,7 @@ final messageSyncServiceProvider = Provider<MessageSyncService>((ref) {
     ref.watch(outboundHandleRepositoryProvider),
     ref.watch(dbProvider),
     ref.watch(groupRepositoryProvider),
+    ref.watch(outboxServiceProvider),
   );
 });
 

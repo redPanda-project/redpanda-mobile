@@ -5,6 +5,7 @@ import 'package:redpanda/repositories/group_repository.dart';
 import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/repositories/outbound_handle_repository.dart';
 import 'package:redpanda/services/message_sync_service.dart';
+import 'package:redpanda/services/outbox_service.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
 
 import '../helpers/fake_redpanda_client.dart';
@@ -25,12 +26,16 @@ void main() {
     db = createTestDatabase();
     client = FakeRedPandaClient();
     messages = MessageRepository(db);
+    final groups = GroupRepository(db);
+    // T112: the sync service routes ACK updates into the outbox, which owns
+    // the transitions — these tests drive the whole path from the wire event.
     service = MessageSyncService(
       client,
       messages,
       OutboundHandleRepository(db),
       db,
-      GroupRepository(db),
+      groups,
+      OutboxService(messages, client, groups),
     );
     service.start();
   });

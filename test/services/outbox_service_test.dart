@@ -1,11 +1,19 @@
+import 'dart:async';
+
 import 'package:drift/drift.dart' as drift;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:redpanda/database/database.dart';
 import 'package:redpanda/repositories/group_repository.dart';
 import 'package:redpanda/repositories/message_repository.dart';
-import 'package:redpanda/services/send_retry_queue.dart';
+import 'package:redpanda/services/outbox_service.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart'
-    show DepositException, DepositStatus, UnknownPeerException;
+    show
+        ChannelAckUpdate,
+        DepositException,
+        DepositStatus,
+        RoutingAck,
+        RoutingAckUpdate,
+        UnknownPeerException;
 
 import '../helpers/fake_redpanda_client.dart';
 import '../helpers/test_database.dart';
@@ -14,17 +22,17 @@ void main() {
   late AppDatabase db;
   late MessageRepository repo;
   late FakeRedPandaClient client;
-  late SendRetryQueue queue;
+  late OutboxService outbox;
 
   setUp(() {
     db = createTestDatabase();
     repo = MessageRepository(db);
     client = FakeRedPandaClient();
-    queue = SendRetryQueue(repo, client, GroupRepository(db));
+    outbox = OutboxService(repo, client, GroupRepository(db));
   });
 
   tearDown(() async {
-    queue.stop();
+    await outbox.dispose();
     await client.disconnect();
     await db.close();
   });
@@ -56,11 +64,11 @@ void main() {
     return (db.select(db.messages)..where((t) => t.id.equals(id))).getSingle();
   }
 
-  group('SendRetryQueue.retryPending', () {
+  group('OutboxService.runPass', () {
     test('successful retry marks the message as sent', () async {
       final id = await insertPending(content: 'retry me');
 
-      await queue.retryPending();
+      await outbox.runPass();
 
       expect(client.sentMessages, hasLength(1));
       expect(client.sentMessages.single.content, equals('retry me'));
@@ -73,7 +81,7 @@ void main() {
         client.sendError = StateError('no active peer');
         final id = await insertPending();
 
-        await queue.retryPending();
+        await outbox.runPass();
 
         final msg = await messageById(id);
         expect(msg.status, equals(MessageStatus.pending));
@@ -83,9 +91,9 @@ void main() {
     );
 
     test('message is marked failed after maxRetries attempts', () async {
-      final id = await insertPending(retryCount: SendRetryQueue.maxRetries);
+      final id = await insertPending(retryCount: OutboxService.maxRetries);
 
-      await queue.retryPending();
+      await outbox.runPass();
 
       expect((await messageById(id)).status, equals(MessageStatus.failed));
       expect(client.sentMessages, isEmpty);
@@ -95,7 +103,7 @@ void main() {
       // Last attempt just now with 3 failures → due again in 2 minutes.
       await insertPending(retryCount: 3, lastRetryAt: DateTime.now());
 
-      await queue.retryPending();
+      await outbox.runPass();
 
       expect(client.sentMessages, isEmpty);
     });
@@ -106,7 +114,7 @@ void main() {
         lastRetryAt: DateTime.now().subtract(const Duration(minutes: 9)),
       );
 
-      await queue.retryPending();
+      await outbox.runPass();
 
       expect(client.sentMessages, hasLength(1));
       expect((await messageById(id)).status, equals(MessageStatus.sent));
@@ -115,7 +123,7 @@ void main() {
     test('first send persists the network message id on the row', () async {
       final id = await insertPending(content: 'first send');
 
-      await queue.retryPending();
+      await outbox.runPass();
 
       // The fake mints "fake-1" when no id is supplied; it must be stored.
       expect(client.sentMessages.single.messageId, isNull);
@@ -130,7 +138,7 @@ void main() {
         messageId: 'stable-net-id',
       );
 
-      await queue.retryPending();
+      await outbox.runPass();
 
       expect(client.sentMessages, hasLength(1));
       expect(client.sentMessages.single.messageId, equals('stable-net-id'));
@@ -143,7 +151,7 @@ void main() {
       client.sendError = DepositException(DepositStatus.badRequest);
       final id = await insertPending();
 
-      await queue.retryPending();
+      await outbox.runPass();
 
       expect((await messageById(id)).status, equals(MessageStatus.failed));
     });
@@ -153,11 +161,11 @@ void main() {
       client.sendError = DepositException(DepositStatus.quotaExceeded);
       final id = await insertPending();
 
-      await queue.retryPending();
+      await outbox.runPass();
 
       final msg = await messageById(id);
       expect(msg.status, equals(MessageStatus.pending));
-      expect(msg.retryCount, equals(SendRetryQueue.quotaExceededPenalty));
+      expect(msg.retryCount, equals(OutboxService.quotaExceededPenalty));
       expect(msg.lastRetryAt, isNotNull);
     });
 
@@ -166,7 +174,7 @@ void main() {
       client.sendError = DepositException(DepositStatus.notFound);
       final id = await insertPending();
 
-      await queue.retryPending();
+      await outbox.runPass();
 
       final msg = await messageById(id);
       expect(msg.status, equals(MessageStatus.pending));
@@ -182,7 +190,7 @@ void main() {
       client.sendError = UnknownPeerException('channel-1');
       final id = await insertPending();
 
-      await queue.retryPending();
+      await outbox.runPass();
 
       final msg = await messageById(id);
       expect(msg.status, equals(MessageStatus.pending));
@@ -198,7 +206,7 @@ void main() {
         lastRetryAt: DateTime.now().subtract(const Duration(minutes: 9)),
       );
 
-      await queue.retryPending();
+      await outbox.runPass();
       expect((await messageById(id)).status, equals(MessageStatus.pending));
       expect(client.sentMessages, isEmpty);
 
@@ -214,7 +222,7 @@ void main() {
         ),
       );
 
-      await queue.retryPending();
+      await outbox.runPass();
 
       expect(client.sentMessages, hasLength(1));
       expect((await messageById(id)).status, equals(MessageStatus.sent));
@@ -226,7 +234,7 @@ void main() {
       final failedId = await insertPending(content: 'already failed');
       await repo.updateMessageStatus(failedId, MessageStatus.failed);
 
-      await queue.retryPending();
+      await outbox.runPass();
 
       expect(client.sentMessages, isEmpty);
     });
@@ -241,7 +249,7 @@ void main() {
       // budget: sendMessage() returns normally, so the row is marked sent,
       // but no AckTagStore entry (and hence no timeout requeue) ever
       // exists for it.
-      await queue.retryPending();
+      await outbox.runPass();
       expect((await messageById(id)).status, equals(MessageStatus.sent));
       expect(client.sentMessages, hasLength(1));
 
@@ -252,13 +260,13 @@ void main() {
         MessagesCompanion(
           lastRetryAt: drift.Value(
             DateTime.now().subtract(
-              SendRetryQueue.staleSentThreshold + const Duration(seconds: 1),
+              OutboxService.staleSentThreshold + const Duration(seconds: 1),
             ),
           ),
         ),
       );
 
-      await queue.retryPending();
+      await outbox.runPass();
 
       expect(
         client.sentMessages,
@@ -290,7 +298,7 @@ void main() {
         ),
       );
 
-      await queue.retryPending();
+      await outbox.runPass();
 
       expect(
         client.sentMessages,
@@ -309,42 +317,262 @@ void main() {
     test('TD002/T51: a sent message still within the ack-timeout window is '
         'left alone by the stale-sent sweep', () async {
       final id = await insertPending(content: 'freshly sent');
-      await queue.retryPending();
+      await outbox.runPass();
       expect(client.sentMessages, hasLength(1));
 
       // Immediately re-run the sweep: lastRetryAt is only seconds old, far
       // below staleSentThreshold — must not be touched (would otherwise
       // race the normal R-ACK-timeout requeue and duplicate-send).
-      await queue.retryPending();
+      await outbox.runPass();
 
       expect(client.sentMessages, hasLength(1));
       expect((await messageById(id)).status, equals(MessageStatus.sent));
     });
   });
 
-  group('SendRetryQueue backoff', () {
+  group('OutboxService.enqueue (T112: the UI only enqueues)', () {
+    test('inserts a pending row and sends it in the same breath', () async {
+      final rowId = await outbox.enqueue(
+        conversationId: 'channel-1',
+        senderId: 'me',
+        content: 'hello',
+      );
+
+      // enqueue() returns as soon as the row exists; the attempt itself runs
+      // on the outbox's own pass.
+      await outbox.settled;
+
+      expect(client.sentMessages.single.content, equals('hello'));
+      final msg = await messageById(rowId);
+      expect(msg.status, equals(MessageStatus.sent));
+      expect(msg.messageId, equals('fake-1'));
+    });
+
+    test('a message enqueued while a pass is running still goes out '
+        'immediately (rerun instead of drop)', () async {
+      // Block the first pass inside the send so the second enqueue lands
+      // while _passInProgress is set.
+      final gate = Completer<void>();
+      client.beforeSend = () => gate.future;
+      await insertPending(content: 'slow one');
+      final pass = outbox.runPass();
+      await pumpEventQueue();
+
+      client.beforeSend = null;
+      await outbox.enqueue(
+        conversationId: 'channel-1',
+        senderId: 'me',
+        content: 'while busy',
+      );
+      gate.complete();
+      await pass;
+      await outbox.settled;
+
+      expect(
+        client.sentMessages.map((m) => m.content),
+        containsAll(<String>['slow one', 'while busy']),
+        reason:
+            'the composer used to bypass the queue to get this latency; '
+            'the rerun is what replaces that',
+      );
+    });
+
+    test('QUOTA_EXCEEDED on the FIRST attempt gets the same penalty as on a '
+        'retry (one policy, T112)', () async {
+      // The chat screen used to apply plain markRetryAttempt() here, so a
+      // composer send into a full mailbox retried after 10 s instead of the
+      // 4 min the queue would have waited.
+      client.sendError = DepositException(DepositStatus.quotaExceeded);
+
+      final rowId = await outbox.enqueue(
+        conversationId: 'channel-1',
+        senderId: 'me',
+        content: 'mailbox full',
+      );
+      await outbox.settled;
+
+      final msg = await messageById(rowId);
+      expect(msg.status, equals(MessageStatus.pending));
+      expect(msg.retryCount, equals(OutboxService.quotaExceededPenalty));
+    });
+
+    test('retryNow clears the backoff and attempts immediately', () async {
+      final id = await insertPending(
+        retryCount: 7,
+        lastRetryAt: DateTime.now(),
+      );
+
+      await outbox.retryNow(id);
+      await outbox.settled;
+
+      expect(client.sentMessages, hasLength(1));
+      final msg = await messageById(id);
+      expect(msg.status, equals(MessageStatus.sent));
+    });
+  });
+
+  group('OutboxService.attempts (T112 DeliveryAttempt)', () {
+    test(
+      'reports the outcome of every attempt with its attempt number',
+      () async {
+        final seen = <DeliveryAttempt>[];
+        final sub = outbox.attempts.listen(seen.add);
+
+        client.sendError = DepositException(DepositStatus.notFound);
+        final id = await insertPending(content: 'attempt me');
+        await outbox.runPass();
+
+        client.sendError = null;
+        await outbox.runPass(ignoreBackoff: true);
+        await pumpEventQueue();
+        await sub.cancel();
+
+        expect(seen, hasLength(2));
+        expect(seen.first.messageRowId, equals(id));
+        expect(seen.first.conversationId, equals('channel-1'));
+        expect(seen.first.attempt, equals(1));
+        expect(seen.first.failure, equals(DeliveryFailure.depositRejected));
+        expect(seen.first.succeeded, isFalse);
+        expect(seen.last.attempt, equals(2));
+        expect(seen.last.succeeded, isTrue);
+      },
+    );
+
+    test(
+      'an unreachable counterpart is reported as its own failure kind',
+      () async {
+        final seen = <DeliveryAttempt>[];
+        final sub = outbox.attempts.listen(seen.add);
+        client.sendError = UnknownPeerException('channel-1');
+        await insertPending();
+
+        await outbox.runPass();
+        await pumpEventQueue();
+        await sub.cancel();
+
+        expect(seen.single.failure, equals(DeliveryFailure.unknownCounterpart));
+      },
+    );
+  });
+
+  group('OutboxService ack transitions (T112: one owner)', () {
+    test('a stored R-ACK moves the message to routed', () async {
+      final id = await insertPending(messageId: 'net-1');
+      await outbox.runPass();
+      expect((await messageById(id)).status, equals(MessageStatus.sent));
+
+      await outbox.onRoutingAck(
+        const RoutingAckUpdate.ack(
+          channelId: 'channel-1',
+          messageIdHex: 'net-1',
+          status: RoutingAck.statusStored,
+          latencyMs: 12,
+        ),
+      );
+
+      expect((await messageById(id)).status, equals(MessageStatus.routed));
+    });
+
+    test('an R-ACK timeout re-queues the message for fresh hops', () async {
+      final id = await insertPending(messageId: 'net-1');
+      await outbox.runPass();
+
+      await outbox.onRoutingAck(
+        const RoutingAckUpdate.timeout(
+          channelId: 'channel-1',
+          messageIdHex: 'net-1',
+        ),
+      );
+
+      final msg = await messageById(id);
+      expect(msg.status, equals(MessageStatus.pending));
+      expect(msg.retryCount, equals(1));
+    });
+
+    test('a Channel-ACK moves the message to delivered', () async {
+      final id = await insertPending(messageId: 'net-1');
+      await outbox.runPass();
+
+      await outbox.onChannelAck(
+        const ChannelAckUpdate(
+          channelId: 'channel-1',
+          messageIdHex: 'net-1',
+          timestampMs: 1,
+        ),
+      );
+
+      expect((await messageById(id)).status, equals(MessageStatus.delivered));
+    });
+
+    test('a late R-ACK never downgrades a delivered message', () async {
+      final id = await insertPending(messageId: 'net-1');
+      await outbox.runPass();
+      await outbox.onChannelAck(
+        const ChannelAckUpdate(
+          channelId: 'channel-1',
+          messageIdHex: 'net-1',
+          timestampMs: 1,
+        ),
+      );
+
+      await outbox.onRoutingAck(
+        const RoutingAckUpdate.ack(
+          channelId: 'channel-1',
+          messageIdHex: 'net-1',
+          status: RoutingAck.statusStored,
+          latencyMs: 12,
+        ),
+      );
+
+      expect((await messageById(id)).status, equals(MessageStatus.delivered));
+    });
+
+    test('a Channel-ACK that lands between the deposit and markSent is not '
+        'downgraded to sent (lifecycle guard, T112)', () async {
+      // The real race: sendMessage() has returned, the ack for the very same
+      // message arrives while the outbox is still writing the row. Before
+      // T112 markSent() was an unguarded write and turned `delivered` back
+      // into `sent`, hiding the double check from the user forever.
+      final id = await insertPending(messageId: 'net-1');
+      client.beforeSend = () async {
+        await outbox.onChannelAck(
+          const ChannelAckUpdate(
+            channelId: 'channel-1',
+            messageIdHex: 'net-1',
+            timestampMs: 1,
+          ),
+        );
+      };
+
+      await outbox.runPass();
+
+      expect((await messageById(id)).status, equals(MessageStatus.delivered));
+    });
+  });
+
+  group('OutboxService backoff', () {
     test('fast early retries then exponential tail', () {
       // retryCount 0/1 fire within seconds so a dropped first attempt
       // re-sends quickly; from retryCount 2 the tail doubles per step.
-      expect(SendRetryQueue.backoffFor(0), const Duration(seconds: 10));
-      expect(SendRetryQueue.backoffFor(1), const Duration(seconds: 30));
-      expect(SendRetryQueue.backoffFor(2), const Duration(minutes: 1));
-      expect(SendRetryQueue.backoffFor(3), const Duration(minutes: 2));
-      expect(SendRetryQueue.backoffFor(4), const Duration(minutes: 4));
-      expect(SendRetryQueue.backoffFor(5), const Duration(minutes: 8));
-      expect(SendRetryQueue.backoffFor(6), const Duration(minutes: 16));
+      expect(OutboxService.backoffFor(0), const Duration(seconds: 10));
+      expect(OutboxService.backoffFor(1), const Duration(seconds: 30));
+      expect(OutboxService.backoffFor(2), const Duration(minutes: 1));
+      expect(OutboxService.backoffFor(3), const Duration(minutes: 2));
+      expect(OutboxService.backoffFor(4), const Duration(minutes: 4));
+      expect(OutboxService.backoffFor(5), const Duration(minutes: 8));
+      expect(OutboxService.backoffFor(6), const Duration(minutes: 16));
     });
 
     test('is capped at 30 minutes', () {
-      expect(SendRetryQueue.backoffFor(7), const Duration(minutes: 30));
-      expect(SendRetryQueue.backoffFor(12), const Duration(minutes: 30));
+      expect(OutboxService.backoffFor(7), const Duration(minutes: 30));
+      expect(OutboxService.backoffFor(12), const Duration(minutes: 30));
     });
 
     test('QUOTA_EXCEEDED penalty still backs off at least 4 minutes', () {
       // The mailbox-full penalty must not shrink to a few-second early
       // window: backoffFor(quotaExceededPenalty) must stay >= 4 minutes.
       expect(
-        SendRetryQueue.backoffFor(SendRetryQueue.quotaExceededPenalty),
+        OutboxService.backoffFor(OutboxService.quotaExceededPenalty),
         greaterThanOrEqualTo(const Duration(minutes: 4)),
       );
     });
@@ -352,7 +580,7 @@ void main() {
     test('a message with no previous attempt is immediately due', () async {
       final id = await insertPending();
       final msg = await messageById(id);
-      expect(SendRetryQueue.isDue(msg, DateTime.now()), isTrue);
+      expect(OutboxService.isDue(msg, DateTime.now()), isTrue);
     });
   });
 }
