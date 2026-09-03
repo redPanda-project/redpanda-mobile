@@ -11,7 +11,7 @@ import 'package:redpanda_light_client/src/crypto/message_crypto_v3.dart';
 import 'package:redpanda_light_client/src/domain/channel.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:hex/hex.dart';
-import 'package:redpanda_light_client/src/generated/commands.pb.dart';
+import 'package:redpanda_light_client/src/generated/outbound.pb.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
 import 'package:redpanda_light_client/src/peer_repository.dart';

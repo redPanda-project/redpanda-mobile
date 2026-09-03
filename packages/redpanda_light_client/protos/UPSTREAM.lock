@@ -1,0 +1,7 @@
+# Vendored protobuf schemas — DO NOT EDIT.
+# Source of truth: redPanda-project/redpandaj src/main/proto/
+# Sync: tool/sync_protos.sh   Verify: tool/sync_protos.sh --check
+# Codegen after a sync: tool/generate_protos.sh
+# upstream-commit: 079359e48b3e51b288bfad0bebcf36cf01c7b91c
+3e7f440f87b9502c6bc54f15e630b158dc5ec3942eed7c0176e2ac3261fc86ab  commands.proto
+2590692e06bc0b8710aa4fb0c1d68413f17a191f0ec05baf33cb61ea7871b1d4  outbound.proto
