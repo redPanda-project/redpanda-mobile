@@ -1,0 +1,12 @@
+# Generated protobuf Dart — DO NOT EDIT.
+# Produced by tool/generate_protos.sh from packages/redpanda_light_client/protos/.
+# Verified by test/unit/vendored_protos_test.dart: a hand-edit of the
+# generated code fails CI, which is how the pre-T107 drift stayed invisible.
+# protoc: libprotoc 25.1
+# protoc_plugin: 25.0.0
+58a44cb8e9075376d793ebafcbfc01fd603e72a94631306867b250ab808ce63a  commands.pb.dart
+6fc2bc83c5c48c35da977de635468d58fc4d799b3fb463c184f1d8a66b0a92b8  commands.pbenum.dart
+a295b59265a793b9c9060b3016dd6f15e09e75b78d1e1cc5717cc5b115c99091  commands.pbjson.dart
+3f599b0b43e6734721f74a51dee34972770698c6564cfe1757462a93c5cccbb5  outbound.pb.dart
+d42f8c5f831732f31feb6355748722b4b57bc405d5ce70e6b6afb54cbb82fb06  outbound.pbenum.dart
+8e51478948a9b8dcf9ffdf5bda285cfd9b9607d860d90623cea8cc9627dbb230  outbound.pbjson.dart

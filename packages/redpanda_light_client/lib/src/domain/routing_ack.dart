@@ -1,11 +1,17 @@
 import 'dart:typed_data';
 
+import 'package:fixnum/fixnum.dart';
+import 'package:protobuf/protobuf.dart' as pb;
 import 'package:redpanda_light_client/src/domain/state_update.dart';
+import 'package:redpanda_light_client/src/generated/outbound.pb.dart'
+    as outbound_pb;
 
 /// The R-ACK payload deposited into the sender's OH mailbox (Frontend MS06).
 ///
-/// Wire format (master spec, Decisions Backend-MS06, Decision 3 — mirrors the
-/// backend `outbound.proto` `RoutingAck`):
+/// Wire format is owned by the vendored backend schema
+/// (`protos/outbound.proto`, message `RoutingAck`) — this class is a thin,
+/// `int`-typed view over the generated `outbound_pb.RoutingAck` so that call
+/// sites do not have to deal with `Int64`:
 ///
 /// ```
 /// RoutingAck {
@@ -16,10 +22,7 @@ import 'package:redpanda_light_client/src/domain/state_update.dart';
 ///
 /// There is deliberately **no** `message_id`: the mailbox UUID is created
 /// server-side and means nothing to the sender — correlation runs over the
-/// `ack_session_tag` that arrives as `MailItem.session_tag` on the R-ACK
-/// item. Hand-rolled proto3 decoding for the same reason as
-/// `ChannelMessage`: the committed generated protobuf files are
-/// hand-post-processed and not regenerable here.
+/// `ack_session_tag` that arrives as `MailItem.session_tag` on the R-ACK item.
 class RoutingAck {
   /// Deposit decision timestamp on the acking node (its clock).
   final int timestampMs;
@@ -42,101 +45,47 @@ class RoutingAck {
   static const int statusRejected = 3;
 
   /// Decodes a [RoutingAck] from its proto3 binary form. Unknown fields are
-  /// skipped. Throws [FormatException] on malformed input.
+  /// skipped (forward compatibility with a newer backend). Throws
+  /// [FormatException] on truncated or otherwise unparseable input.
+  ///
+  /// One deliberate behaviour change against the hand-rolled decoder this
+  /// replaced: that one threw on a *known* field carrying the wrong wire type
+  /// (e.g. `timestamp_ms` length-delimited), whereas the protobuf runtime
+  /// accepts it as a packed encoding and leaves the field at its default. That
+  /// is accepted here rather than re-hand-rolling a parser: the only producer
+  /// of R-ACK bytes is the backend `RoutingAckSender`, which emits canonical
+  /// proto3, and the milestone spec already treats an R-ACK as a routing hint
+  /// that any hop may forge or drop — so a malformed one degrading to
+  /// `statusStored` is no weaker than the forged-but-valid one that same hop
+  /// could send instead.
   factory RoutingAck.decode(List<int> bytes) {
-    final data = Uint8List.fromList(bytes);
-    var offset = 0;
-
-    int timestampMs = 0;
-    int status = 0;
-
-    int readVarint() {
-      var result = 0;
-      var shift = 0;
-      while (true) {
-        if (offset >= data.length) {
-          throw const FormatException('RoutingAck: truncated varint');
-        }
-        final b = data[offset++];
-        result |= (b & 0x7F) << shift;
-        if ((b & 0x80) == 0) break;
-        shift += 7;
-        if (shift > 63) {
-          throw const FormatException('RoutingAck: varint too long');
-        }
-      }
-      return result;
+    final outbound_pb.RoutingAck decoded;
+    try {
+      decoded = outbound_pb.RoutingAck.fromBuffer(bytes);
+    } on pb.InvalidProtocolBufferException catch (e) {
+      throw FormatException('RoutingAck: ${e.message}');
     }
-
-    while (offset < data.length) {
-      final tag = readVarint();
-      final fieldNumber = tag >> 3;
-      final wireType = tag & 0x7;
-
-      switch (fieldNumber) {
-        case 1: // timestamp_ms
-          if (wireType != 0) {
-            throw const FormatException('RoutingAck: bad wire type for #1');
-          }
-          timestampMs = readVarint();
-          break;
-        case 2: // status
-          if (wireType != 0) {
-            throw const FormatException('RoutingAck: bad wire type for #2');
-          }
-          status = readVarint();
-          break;
-        default:
-          switch (wireType) {
-            case 0:
-              readVarint();
-              break;
-            case 1:
-              offset += 8;
-              break;
-            case 2:
-              final len = readVarint();
-              offset += len;
-              break;
-            case 5:
-              offset += 4;
-              break;
-            default:
-              throw FormatException('RoutingAck: unknown wire type $wireType');
-          }
-          break;
-      }
-    }
-
-    return RoutingAck(timestampMs: timestampMs, status: status);
+    return RoutingAck(
+      timestampMs: decoded.timestampMs.toInt(),
+      status: decoded.status,
+    );
   }
 
   /// Encodes this ack to proto3 binary form (used by tests; the reference
   /// producer is the backend `RoutingAckSender`).
-  Uint8List encode() {
-    final out = BytesBuilder();
-    if (timestampMs != 0) {
-      out.addByte(0x08); // (1 << 3) | 0
-      _writeVarint(out, timestampMs);
-    }
-    if (status != 0) {
-      out.addByte(0x10); // (2 << 3) | 0
-      _writeVarint(out, status);
-    }
-    return out.toBytes();
-  }
+  Uint8List encode() => toProto().writeToBuffer();
 
-  static void _writeVarint(BytesBuilder out, int value) {
-    var v = value;
-    while (true) {
-      final byte = v & 0x7F;
-      v = v >>> 7;
-      if (v == 0) {
-        out.addByte(byte);
-        break;
-      }
-      out.addByte(byte | 0x80);
-    }
+  /// The generated protobuf message backing this ack.
+  ///
+  /// Zero-valued fields are left unset on purpose: proto3 omits defaults on the
+  /// wire, but the generated setters mark an explicitly assigned `0` as present
+  /// and emit it. Skipping them keeps the bytes identical to what the backend
+  /// `RoutingAckSender` and the previous hand-rolled encoder produce.
+  outbound_pb.RoutingAck toProto() {
+    final message = outbound_pb.RoutingAck();
+    if (timestampMs != 0) message.timestampMs = Int64(timestampMs);
+    if (status != 0) message.status = status;
+    return message;
   }
 }
 

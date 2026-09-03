@@ -59,6 +59,60 @@ The client follows a facade-based architecture:
 - `ActivePeer`: Handles individual TCP connections, framing, and encryption status.
 - `EncryptionManager`: Manages cryptographic handshakes and packet encryption/decryption.
 
+## 🧬 Protobuf Schemas & Codegen
+
+The wire schemas are **owned by the backend**, `redPanda-project/redpandaj`
+(`src/main/proto/{commands,outbound}.proto`). The files in `protos/` here are
+vendored copies and `lib/src/generated/` is machine-generated from them — both
+are committed so that CI and `flutter pub get` never need `protoc`.
+
+**Never hand-edit `protos/*.proto` or `lib/src/generated/*.pb*.dart`.** A
+hand-maintained copy is exactly how the old `commands.proto` ended up three
+milestones behind the generated code it was supposed to describe (DDD review
+2026-08-31 §6 P0, task T107).
+
+| File | Meaning |
+|---|---|
+| `protos/*.proto` | verbatim copies of the redpandaj schemas |
+| `protos/UPSTREAM.lock` | pinned redpandaj commit + sha256 of each vendored file |
+| `lib/src/generated/*.pb*.dart` | `protoc --dart_out` output, formatted with the pinned Dart |
+| `lib/src/generated/CODEGEN.lock` | sha256 of each generated file + the protoc/protoc_plugin versions |
+
+The vendored *set* is discovered from redpandaj, not hard-coded: a schema added
+or removed upstream shows up as drift rather than being quietly missed.
+
+### Syncing from redpandaj
+
+```bash
+tool/sync_protos.sh                    # local checkout: --source, $REDPANDAJ_DIR, ../redpandaj
+tool/sync_protos.sh --ref v1.2.3       # or straight from GitHub at a tag/branch/commit
+tool/sync_protos.sh --check            # verify only (used by tool/pre_push_validation.sh)
+```
+
+### Regenerating the Dart code
+
+```bash
+export PATH=~/tools/flutter/bin:$PATH   # dart/flutter
+tool/generate_protos.sh                 # protoc from $PROTOC, PATH, or ~/tools/protoc
+```
+
+`protoc_plugin` is a `dev_dependency` of this package, so the generator version
+is pinned by `pubspec.lock`; only `protoc` itself has to be installed. Commit
+the protos, `UPSTREAM.lock` and the regenerated Dart in one change.
+
+### Drift guard
+
+* `test/unit/vendored_protos_test.dart` — offline, so it is the half that runs
+  in CI: vendored protos still match `UPSTREAM.lock`, generated Dart still
+  matches `CODEGEN.lock`, both sets agree with their lock, and `UPSTREAM.lock`
+  pins a real commit SHA. The `CODEGEN.lock` half is the important one: the
+  pre-T107 defect was a hand-edited *generated* file, not a hand-edited proto.
+* `tool/sync_protos.sh --check` — additionally diffs against live upstream when
+  a redpandaj checkout or the GitHub API is reachable. Run from
+  `tool/pre_push_validation.sh`; it is **not** wired into
+  `.github/workflows/`, so the "is this still what redpandaj has today"
+  question is answered locally, not by CI.
+
 ## 🔬 Testing
 
 The package includes a comprehensive unit and E2E test suite. E2E tests can interact with a local Java-based RedPanda full node launcher.

@@ -42,6 +42,8 @@ import 'package:redpanda_light_client/src/garlic/rgb_builder.dart';
 import 'package:redpanda_light_client/src/streams/seeded_stream.dart';
 import 'package:redpanda_light_client/src/garlic/session_tag_store.dart';
 import 'package:redpanda_light_client/src/generated/commands.pb.dart';
+import 'package:redpanda_light_client/src/generated/outbound.pb.dart'
+    hide RoutingAck;
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';

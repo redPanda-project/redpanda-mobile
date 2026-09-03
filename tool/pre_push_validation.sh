@@ -124,6 +124,15 @@ if [ "$WITH_E2E" -eq 1 ]; then
   echo "NOTE: CI always uses the LATEST redpandaj release; make sure this JAR is current."
 fi
 
+# The wire schemas live in redpandaj; the copies under
+# packages/redpanda_light_client/protos are vendored artefacts (T107). This
+# checks (a) that they still hash to protos/UPSTREAM.lock and (b) — when a
+# redpandaj checkout or the GitHub API is reachable — that they still equal
+# upstream. (a) is additionally enforced offline by
+# test/unit/vendored_protos_test.dart, which is what guards CI.
+step "0b. vendored protos in sync with redpandaj (T107)"
+"$REPO_ROOT/tool/sync_protos.sh" --check
+
 TREE_BEFORE="$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no)"
 
 # --- Light client package ---------------------------------------------------

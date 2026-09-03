@@ -155,6 +155,33 @@ void main() {
     test('rejects truncated input', () {
       expect(() => RoutingAck.decode([0x08]), throwsFormatException);
     });
+
+    test('encode omits default-valued fields, exactly like proto3', () {
+      // The backend RoutingAckSender emits canonical proto3, so an all-default
+      // ack is the empty buffer — not [08 00 10 00]. Regression guard for the
+      // T107 move onto generated code, whose setters would mark an explicitly
+      // assigned 0 as present and serialize it.
+      expect(const RoutingAck(timestampMs: 0, status: 0).encode(), isEmpty);
+      expect(const RoutingAck(timestampMs: 12345, status: 0).encode(), [
+        0x08,
+        0xB9,
+        0x60,
+      ]);
+      expect(const RoutingAck(timestampMs: 12345, status: 2).encode(), [
+        0x08,
+        0xB9,
+        0x60,
+        0x10,
+        0x02,
+      ]);
+    });
+
+    test('unknown fields from a newer backend are ignored', () {
+      // field 3, varint 7 — must not break decoding of fields 1 and 2.
+      final decoded = RoutingAck.decode([0x08, 0x05, 0x10, 0x01, 0x18, 0x07]);
+      expect(decoded.timestampMs, 5);
+      expect(decoded.status, RoutingAck.statusMailboxFull);
+    });
   });
 
   group('AckTagStore', () {
