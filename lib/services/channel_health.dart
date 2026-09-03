@@ -72,7 +72,7 @@ class ConversationStats {
   /// Earliest time the retry queue will attempt a pending message again.
   final DateTime? nextRetryAt;
 
-  /// Newest own message confirmed at least `routed` (reached the peer's
+  /// Newest own message confirmed at least `routed` (reached the counterpart's
   /// mailbox). Timestamps are creation times — good enough as "last time
   /// sending demonstrably worked".
   final DateTime? lastConfirmedAt;
@@ -189,7 +189,7 @@ ChannelHealth computeChannelHealth({
   required ConnectionStatus? connection,
   required ChannelFetchInfo? fetchInfo,
   required OutboundHandle? ownHandle,
-  required bool peerOhKnown,
+  required bool counterpartOhKnown,
   required ConversationStats? stats,
   required DateTime now,
 }) {
@@ -216,8 +216,8 @@ ChannelHealth computeChannelHealth({
     }
   }
 
-  if (!peerOhKnown) {
-    degradations.add("Peer mailbox unknown — scan the peer's QR code");
+  if (!counterpartOhKnown) {
+    degradations.add("Recipient's mailbox unknown — scan their QR code");
   }
 
   if (stats != null) {
@@ -260,7 +260,7 @@ final channelHealthProvider = Provider.family<ChannelHealth, String>((
     connection: connection,
     fetchInfo: fetchInfo,
     ownHandle: ownHandle,
-    peerOhKnown: channelRow?.peerOhId != null,
+    counterpartOhKnown: channelRow?.counterpartOhId != null,
     stats: stats,
     now: DateTime.now(),
   );

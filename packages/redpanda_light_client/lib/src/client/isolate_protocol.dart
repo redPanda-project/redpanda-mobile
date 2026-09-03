@@ -93,15 +93,15 @@ class CmdAddChannelKeys extends IsolateCommand {
   /// T44: our display name to advertise in the rendezvous record.
   final String? ownDisplayName;
 
-  final List<int>? peerOhId;
+  final List<int>? counterpartOhId;
 
-  /// MS04: host:port of the node hosting the peer's OH; kept out of the
+  /// MS04: host:port of the node hosting the counterpart's OH; kept out of the
   /// garlic hop path.
-  final String? peerOhEndpoint;
+  final String? counterpartOhEndpoint;
 
-  /// T42: the full persisted peer OH set to restore (multi-OH). Applied only
+  /// T42: the full persisted counterpart OH set to restore (multi-OH). Applied only
   /// when no richer set is live yet.
-  final List<OhDescriptorData>? peerOhSet;
+  final List<OhDescriptorData>? counterpartOhSet;
 
   /// MS03b: true only on the device that generated the channel; decides the
   /// channel ratchet role.
@@ -123,9 +123,9 @@ class CmdAddChannelKeys extends IsolateCommand {
     this.encryptionKey, {
     this.channelSecret,
     this.ownDisplayName,
-    this.peerOhId,
-    this.peerOhEndpoint,
-    this.peerOhSet,
+    this.counterpartOhId,
+    this.counterpartOhEndpoint,
+    this.counterpartOhSet,
     required this.isChannelCreator,
     this.ratchetState,
     this.sessionTags,
@@ -368,7 +368,7 @@ class EventGroupOpDone extends IsolateEvent {
 
 /// The ONE state event (see [StateUpdate]): every one-way state change the
 /// worker publishes — ratchet, garlic session, OH mailbox/fetch/own-set/
-/// peer-set, ACKs, node scores, group state and handshakes — crosses the
+/// counterpart-set, ACKs, node scores, group state and handshakes — crosses
 /// isolate boundary inside this envelope. A new state event needs no new
 /// protocol class, no `_handleEvent` branch and no controller here.
 ///

@@ -132,7 +132,7 @@ void main() async {
         // Reconstruct from QR (async in v4); both sides derive the same id.
         final scannedChannel = await Channel.fromJson(qrJson);
         expect(scannedChannel.id, channel.id);
-        expect(scannedChannel.peerOhDescriptor, isNull);
+        expect(scannedChannel.counterpartOhDescriptor, isNull);
 
         // Alice registers channel keys and sends message. Bob's OH is
         // discovered out of band (rendezvous DHT) — here passed directly.
@@ -140,8 +140,8 @@ void main() async {
           channel.id,
           channel.encryptionKey,
           channelSecret: channel.channelSecret,
-          peerOhId: bobOH.ohId,
-          peerOhEndpoint: bobDescriptor.serverEndpoint,
+          counterpartOhId: bobOH.ohId,
+          counterpartOhEndpoint: bobDescriptor.serverEndpoint,
           isChannelCreator: true,
         );
 
@@ -181,8 +181,8 @@ void main() async {
         aliceChannel.id,
         aliceChannel.encryptionKey,
         channelSecret: aliceChannel.channelSecret,
-        peerOhId: bobDescriptor.handleId,
-        peerOhEndpoint: bobDescriptor.serverEndpoint,
+        counterpartOhId: bobDescriptor.handleId,
+        counterpartOhEndpoint: bobDescriptor.serverEndpoint,
         isChannelCreator: false,
       );
 

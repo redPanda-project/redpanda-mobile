@@ -438,7 +438,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 icon: const Icon(Icons.qr_code),
                 onPressed: () {
                   // QR v4 (T44): the code carries only the 32-byte channel
-                  // secret; the peer derives k_enc, the identity and the
+                  // secret; the counterpart derives k_enc, the identity and the
                   // rendezvous keys from it, and discovers our OH via the
                   // rendezvous DHT record (no OH is embedded in the QR).
                   final jsonString = jsonEncode(<String, dynamic>{

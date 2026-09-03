@@ -22,6 +22,30 @@ void main() {
       expect(db.schemaVersion, equals(17));
     });
 
+    // T114 renamed the Dart-side names of these columns (peer* → counterpart*,
+    // the conversation id onto one name) WITHOUT touching the database. The
+    // physical names are pinned with `named(...)`; if one of those pins is
+    // dropped, drift silently generates a differently spelled column and every
+    // existing install loses the data in it on the next open. This test is the
+    // guard: it asserts the on-disk spelling, not the Dart spelling.
+    test('T114: renamed columns keep their historical SQL names', () async {
+      Future<Set<String>> columnsOf(String table) async {
+        final rows = await db.customSelect('PRAGMA table_info($table)').get();
+        return {for (final row in rows) row.read<String>('name')};
+      }
+
+      expect(
+        await columnsOf('channels'),
+        containsAll(<String>[
+          'uuid',
+          'peer_oh_endpoint',
+          'peer_oh_id',
+          'peer_oh_public_key',
+          'peer_oh_set',
+        ]),
+      );
+    });
+
     test('dedup is scoped per conversation: same id in two channels', () async {
       await db
           .into(db.messages)

@@ -128,7 +128,7 @@ void main() {
   /// [hopCount] relay candidates (returned with their private keys).
   Future<(RedPandaLightClient, ScriptedSocket, List<TestHop>)> setupClient({
     int hopCount = 3,
-    String? peerOhEndpoint,
+    String? counterpartOhEndpoint,
     TestHop? ohHostHop,
   }) async {
     final hops = <TestHop>[];
@@ -142,9 +142,9 @@ void main() {
         encryptionPublicKey: HEX.encode(hop.keys.publicKey),
       );
     }
-    if (ohHostHop != null && peerOhEndpoint != null) {
+    if (ohHostHop != null && counterpartOhEndpoint != null) {
       repo.updatePeer(
-        peerOhEndpoint,
+        counterpartOhEndpoint,
         nodeId: HEX.encode(ohHostHop.nodeId),
         encryptionPublicKey: HEX.encode(ohHostHop.keys.publicKey),
       );
@@ -177,14 +177,14 @@ void main() {
 
   Future<Channel> channelWithKeys(
     RedPandaLightClient client, {
-    String? peerOhEndpoint,
+    String? counterpartOhEndpoint,
   }) async {
     final channel = await Channel.generate('MS04');
     client.addChannelKeys(
       channel.id,
       channel.encryptionKey,
-      peerOhId: ohId,
-      peerOhEndpoint: peerOhEndpoint,
+      counterpartOhId: ohId,
+      counterpartOhEndpoint: counterpartOhEndpoint,
       isChannelCreator: true,
     );
     return channel;
@@ -263,7 +263,7 @@ void main() {
       final ohHost = await TestHop.generate(99);
       final (client, socket, regularHops) = await setupClient(
         hopCount: 3,
-        peerOhEndpoint: '10.9.9.9:5000',
+        counterpartOhEndpoint: '10.9.9.9:5000',
         ohHostHop: ohHost,
       );
       addTearDown(client.disconnect);
@@ -275,7 +275,7 @@ void main() {
 
       final channel = await channelWithKeys(
         client,
-        peerOhEndpoint: '10.9.9.9:5000',
+        counterpartOhEndpoint: '10.9.9.9:5000',
       );
 
       // The hop pool holds 3 regular relays + the OH host. Across several
@@ -371,7 +371,7 @@ void main() {
       expect(frames, isEmpty, reason: 'nothing must be sent');
     });
 
-    test('REDPANDAJ-2DR: without a known peer OH, sendMessage refuses the '
+    test('REDPANDAJ-2DR: without a known counterpart OH, sendMessage refuses the '
         'direct deposit instead of sending an empty oh_id', () async {
       final (client, socket, _) = await setupClient(hopCount: 0);
       addTearDown(client.disconnect);
@@ -379,7 +379,7 @@ void main() {
       final frames = <int>[];
       socket.onCommandFrame = (cmd, _) => frames.add(cmd);
 
-      // No peerOhId passed at all: _channelPeerOhIds[channelId] stays null.
+      // No counterpartOhId passed at all: _channelCounterpartOhIds[channelId] stays null.
       final channel = await Channel.generate('MS04-no-oh');
       client.addChannelKeys(
         channel.id,
@@ -389,7 +389,7 @@ void main() {
 
       await expectLater(
         client.sendMessage(channel.id, 'Hello into the void'),
-        throwsA(isA<UnknownPeerException>()),
+        throwsA(isA<UnknownCounterpartException>()),
       );
       expect(
         frames,
@@ -397,33 +397,36 @@ void main() {
         reason:
             'a FlaschenpostPut with an empty oh_id would be misparsed by '
             'the node as a GMAck frame (REDPANDAJ-2DR) — nothing may be '
-            'sent when the peer OH is unknown',
+            'sent when the counterpart OH is unknown',
       );
     });
 
-    test('REDPANDAJ-2DR: a malformed (wrong-length) peer OH is treated the '
-        'same as unknown — no direct deposit is sent', () async {
-      final (client, socket, _) = await setupClient(hopCount: 0);
-      addTearDown(client.disconnect);
+    test(
+      'REDPANDAJ-2DR: a malformed (wrong-length) counterpart OH is treated the '
+      'same as unknown — no direct deposit is sent',
+      () async {
+        final (client, socket, _) = await setupClient(hopCount: 0);
+        addTearDown(client.disconnect);
 
-      final frames = <int>[];
-      socket.onCommandFrame = (cmd, _) => frames.add(cmd);
+        final frames = <int>[];
+        socket.onCommandFrame = (cmd, _) => frames.add(cmd);
 
-      final channel = await Channel.generate('MS04-bad-oh');
-      client.addChannelKeys(
-        channel.id,
-        channel.encryptionKey,
-        // Wrong length (nodeIdLength is 20): must not be trusted as a real
-        // destination.
-        peerOhId: [1, 2, 3],
-        isChannelCreator: true,
-      );
+        final channel = await Channel.generate('MS04-bad-oh');
+        client.addChannelKeys(
+          channel.id,
+          channel.encryptionKey,
+          // Wrong length (nodeIdLength is 20): must not be trusted as a real
+          // destination.
+          counterpartOhId: [1, 2, 3],
+          isChannelCreator: true,
+        );
 
-      await expectLater(
-        client.sendMessage(channel.id, 'Hello'),
-        throwsA(isA<UnknownPeerException>()),
-      );
-      expect(frames, isEmpty);
-    });
+        await expectLater(
+          client.sendMessage(channel.id, 'Hello'),
+          throwsA(isA<UnknownCounterpartException>()),
+        );
+        expect(frames, isEmpty);
+      },
+    );
   });
 }

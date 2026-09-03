@@ -26,22 +26,31 @@ class Channels extends Table {
 
   // Ed25519 channel identity keypair (T44: derived from channelSecret). The
   // private seed exists only on the device that generated the channel — it is
-  // the local role marker (creator vs joiner); peers joining via QR hold only
-  // the public key.
+  // the local role marker (creator vs joiner); a device joining via QR holds
+  // only the public key.
   TextColumn get authPrivateKey => text().nullable()(); // HEX encoded
   TextColumn get authPublicKey => text()(); // HEX encoded, 32 bytes
 
-  // OH Descriptor of the peer's PRIMARY mailbox (for sending messages to
-  // them). Mirrors the first entry of peerOhSet below.
-  TextColumn get peerOhEndpoint => text().nullable()();
-  TextColumn get peerOhId => text().nullable()(); // HEX encoded
-  TextColumn get peerOhPublicKey => text().nullable()(); // HEX encoded
+  // OH descriptor of the COUNTERPART's PRIMARY mailbox (for sending messages
+  // to them). Mirrors the first entry of counterpartOhSet below.
+  //
+  // T114: the Dart names say "counterpart" (the human on the other side of
+  // this conversation) instead of "peer", which in the light client means a
+  // full node. The SQL column names are pinned with `named(...)` to the
+  // historical `peer_oh_*` spelling, so this is a pure code-level rename with
+  // no migration and no risk to existing databases.
+  TextColumn get counterpartOhEndpoint =>
+      text().nullable().named('peer_oh_endpoint')();
+  TextColumn get counterpartOhId =>
+      text().nullable().named('peer_oh_id')(); // HEX encoded
+  TextColumn get counterpartOhPublicKey =>
+      text().nullable().named('peer_oh_public_key')(); // HEX encoded
 
-  // T42 multi-OH: the partner's FULL known mailbox set as a JSON array of
+  // T42 multi-OH: the counterpart's FULL known mailbox set as a JSON array of
   // OHDescriptor maps ({ep,id,pk}). A send deposits into every entry; the
   // receiver deduplicates by message id. Grown/replaced by the in-band
   // `oh_update` announce. Null until the first announce arrives.
-  TextColumn get peerOhSet => text().nullable()();
+  TextColumn get counterpartOhSet => text().nullable().named('peer_oh_set')();
 
   // Metadata
   DateTimeColumn get lastSeen => dateTime().nullable()(); // Last message time?
@@ -300,9 +309,9 @@ class AppDatabase extends _$AppDatabase {
         if (from < 6) {
           // Add OH columns to Channels and create OutboundHandles table
           try {
-            await m.addColumn(channels, channels.peerOhEndpoint);
-            await m.addColumn(channels, channels.peerOhId);
-            await m.addColumn(channels, channels.peerOhPublicKey);
+            await m.addColumn(channels, channels.counterpartOhEndpoint);
+            await m.addColumn(channels, channels.counterpartOhId);
+            await m.addColumn(channels, channels.counterpartOhPublicKey);
           } catch (e) {
             // Columns might already exist if channels was recreated in step 5
           }
@@ -342,7 +351,7 @@ class AppDatabase extends _$AppDatabase {
           // key model v3). Old channels (shared-secret K_auth, old channel-id
           // scheme), their messages and the brainpool OH keypairs are
           // incompatible with the new protocol — destructive recreation
-          // (testnet, spec section 7). Both peers re-create channels via a
+          // (testnet, spec section 7). Both sides re-create channels via a
           // fresh v3 QR code.
           for (final table in <TableInfo>[
             messages,
@@ -409,9 +418,9 @@ class AppDatabase extends _$AppDatabase {
           }
         }
         if (from < 16 && to >= 16) {
-          // T42 multi-OH: full peer mailbox set (JSON array). Non-destructive.
+          // T42 multi-OH: full counterpart mailbox set (JSON array). Non-destructive.
           if (from >= 2) {
-            await m.addColumn(channels, channels.peerOhSet);
+            await m.addColumn(channels, channels.counterpartOhSet);
           }
         }
         if (from < 17 && to >= 17) {
@@ -419,7 +428,7 @@ class AppDatabase extends _$AppDatabase {
           // is now the source of truth (k_enc, identity and rendezvous keys are
           // derived from it). QR v3 is invalid without a migration path
           // (spec Decision 1) — existing channels cannot be upgraded and are
-          // dropped so peers re-pair with a fresh v4 QR. Destructive by design.
+          // dropped so both sides re-pair with a fresh v4 QR. Destructive by design.
           for (final table in <TableInfo>[
             messages,
             channels,

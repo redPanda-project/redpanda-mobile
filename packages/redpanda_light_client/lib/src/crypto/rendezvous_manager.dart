@@ -15,7 +15,7 @@ import 'package:redpanda_light_client/src/generated/commands.pb.dart';
 /// newest-known entry per participant (the merge state). It builds the signed
 /// record to publish (own fresh entry merged with the known peer entries, so
 /// the newest surviving KadContent carries everyone) and, on a resolved record,
-/// merges it in and surfaces the peer's current OH list.
+/// merges it in and surfaces the counterpart's current OH list.
 class RendezvousManager {
   final Map<String, _ChannelRendezvousState> _states = {};
 
@@ -143,10 +143,10 @@ class RendezvousManager {
 
   /// Applies a resolved record to [channelId]: verifies the self-certifying
   /// signature and TTL, decrypts, merges the entries per participant
-  /// (newest-wins) and returns the peer's current OH list if it advanced —
-  /// i.e. the fresh peer mailbox set to adopt on recovery. Returns null when
+  /// (newest-wins) and returns the counterpart's current OH list if it advanced —
+  /// i.e. the fresh counterpart mailbox set to adopt on recovery. Returns null when
   /// the record is invalid/stale, undecryptable, or carries nothing newer for
-  /// the peer.
+  /// the counterpart.
   Future<List<OHDescriptor>?> applyResolvedRecord(
     String channelId,
     SignedRendezvousRecord record,
@@ -193,7 +193,7 @@ class RendezvousManager {
     final after = state.knownEntries[peerIdHex];
     if (after == null) return null;
     if (before != null && after.entryTs <= before.entryTs) {
-      return null; // nothing newer for the peer
+      return null; // nothing newer for the counterpart
     }
     return after.ohs;
   }

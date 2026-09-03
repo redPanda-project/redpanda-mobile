@@ -166,7 +166,7 @@ void main() {
       await unmount(tester);
     });
 
-    testWidgets('received messages from the peer show no status icon', (
+    testWidgets('received messages from the counterpart show no status icon', (
       tester,
     ) async {
       await db
@@ -174,7 +174,7 @@ void main() {
           .insert(
             MessagesCompanion.insert(
               conversationId: channelUuid,
-              senderId: channelUuid, // sent by the peer
+              senderId: channelUuid, // sent by the counterpart
               content: 'their msg',
               timestamp: DateTime.now(),
               status: MessageStatus.received,

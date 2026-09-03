@@ -290,15 +290,15 @@ Future<void> runAlice(WidgetTester tester) async {
     throw StateError('Bob QR is for a different channel');
   }
 
-  // Attach the peer OH that rendezvous discovery contributes. Since #82
+  // Attach the counterpart OH that rendezvous discovery contributes. Since #82
   // addChannel updates an existing row in place instead of INSERT OR REPLACE,
   // so it preserves the ratchet state and our creator role marker — the normal
   // repository path, no direct DB write needed.
   final container = containerOf(tester);
   await container
       .read(channelRepositoryProvider)
-      .addChannel(myChannel.copyWith(peerOhDescriptor: desc));
-  // Re-register the channel keys with the peer OH — same call the app makes
+      .addChannel(myChannel.copyWith(counterpartOhDescriptor: desc));
+  // Re-register the channel keys with the counterpart OH — same call the app makes
   // on startup when restoring persisted state.
   final db = container.read(dbProvider);
   final row = await (db.select(
@@ -312,8 +312,8 @@ Future<void> runAlice(WidgetTester tester) async {
         channelSecret: row.channelSecret != null
             ? HEX.decode(row.channelSecret!)
             : null,
-        peerOhId: HEX.decode(row.peerOhId!),
-        peerOhEndpoint: row.peerOhEndpoint,
+        counterpartOhId: HEX.decode(row.counterpartOhId!),
+        counterpartOhEndpoint: row.counterpartOhEndpoint,
         isChannelCreator: row.authPrivateKey != null,
         ratchetState: row.ratchetState,
       );
@@ -354,11 +354,11 @@ Future<void> runBob(WidgetTester tester) async {
 
   // Same code path as the QR scanner (join screen), minus the camera. QR v4
   // carries only the secret; Alice's OH arrives out of band and is attached
-  // as the peer descriptor.
+  // as the counterpart descriptor.
   final aliceDesc = OHDescriptor.fromJson(aliceOhJson);
   final channel = (await Channel.fromJson(
     aliceQr,
-  )).copyWith(peerOhDescriptor: aliceDesc);
+  )).copyWith(counterpartOhDescriptor: aliceDesc);
   final container = containerOf(tester);
   await container.read(channelRepositoryProvider).addChannel(channel);
   log('joined channel from Alice QR');

@@ -17,7 +17,7 @@ import '../helpers/test_database.dart';
 ///
 /// Before T110 the sync service held four separate future chains (ratchet,
 /// garlic, node scores, group state) plus fire-and-forget writes for mailbox,
-/// own-OH, peer-OH and ACK updates. The chains are now ONE, which must
+/// own-OH, counterpart-OH and ACK updates. The chains are now ONE, which must
 /// guarantee at least what they guaranteed before:
 ///
 /// * **I1** same-kind writes are applied in emission order (a slow earlier

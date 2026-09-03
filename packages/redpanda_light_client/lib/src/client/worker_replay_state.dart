@@ -3,7 +3,7 @@ import 'package:redpanda_light_client/src/client/isolate_protocol.dart';
 import 'package:redpanda_light_client/src/crypto/ratchet.dart';
 import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
-import 'package:redpanda_light_client/src/domain/peer_oh_update.dart';
+import 'package:redpanda_light_client/src/domain/counterpart_oh_update.dart';
 import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/garlic/node_scorer.dart';
 
@@ -47,20 +47,27 @@ class WorkerReplayState {
       _channels[cmd.channelId] = cmd;
       return;
     }
-    // The peer mailbox and the garlic session are patched from live state
-    // (`PeerOhUpdate` / `GarlicSessionUpdate`), so once either is known at
+    // The counterpart mailbox and the garlic session are patched from live state
+    // (`CounterpartOhUpdate` / `GarlicSessionUpdate`), so once either is known at
     // all it must survive a partial re-register untouched — including a
     // pending RGB that a live update legitimately set back to null.
-    final knowsPeerOh = old.peerOhSet != null || old.peerOhId != null;
+    final knowsCounterpartOh =
+        old.counterpartOhSet != null || old.counterpartOhId != null;
     final knowsGarlic = old.sessionTags != null || old.pendingRgbHex != null;
     _channels[cmd.channelId] = CmdAddChannelKeys(
       old.channelId,
       old.encryptionKey,
       channelSecret: old.channelSecret ?? cmd.channelSecret,
       ownDisplayName: old.ownDisplayName ?? cmd.ownDisplayName,
-      peerOhId: knowsPeerOh ? old.peerOhId : cmd.peerOhId,
-      peerOhEndpoint: knowsPeerOh ? old.peerOhEndpoint : cmd.peerOhEndpoint,
-      peerOhSet: knowsPeerOh ? old.peerOhSet : cmd.peerOhSet,
+      counterpartOhId: knowsCounterpartOh
+          ? old.counterpartOhId
+          : cmd.counterpartOhId,
+      counterpartOhEndpoint: knowsCounterpartOh
+          ? old.counterpartOhEndpoint
+          : cmd.counterpartOhEndpoint,
+      counterpartOhSet: knowsCounterpartOh
+          ? old.counterpartOhSet
+          : cmd.counterpartOhSet,
       isChannelCreator: old.isChannelCreator,
       ratchetState: old.ratchetState ?? cmd.ratchetState,
       sessionTags: knowsGarlic ? old.sessionTags : cmd.sessionTags,
@@ -94,16 +101,16 @@ class WorkerReplayState {
           pendingRgbHex: pendingRgbHex,
           patchGarlic: true,
         );
-      case PeerOhUpdate(:final channelId, :final descriptors):
+      case CounterpartOhUpdate(:final channelId, :final descriptors):
         // T42: the partner announced a new mailbox set — keep the cached
         // primary in sync so a respawned worker sends to the current mailbox.
         if (descriptors.isEmpty) return;
         final primary = descriptors.first;
         _patchChannel(
           channelId,
-          peerOhId: primary.handleId,
-          peerOhEndpoint: primary.serverEndpoint,
-          peerOhSet: [
+          counterpartOhId: primary.handleId,
+          counterpartOhEndpoint: primary.serverEndpoint,
+          counterpartOhSet: [
             for (final d in descriptors)
               OhDescriptorData(
                 endpoint: d.serverEndpoint,
@@ -111,7 +118,7 @@ class WorkerReplayState {
                 authPublicKey: d.authPublicKey,
               ),
           ],
-          patchPeerOh: true,
+          patchCounterpartOh: true,
         );
       case OhMailboxUpdate(:final ohId, :final lastCursor, :final expiresAtMs):
         final key = HEX.encode(ohId);
@@ -179,10 +186,10 @@ class WorkerReplayState {
     Map<String, int>? sessionTags,
     String? pendingRgbHex,
     bool patchGarlic = false,
-    List<int>? peerOhId,
-    String? peerOhEndpoint,
-    List<OhDescriptorData>? peerOhSet,
-    bool patchPeerOh = false,
+    List<int>? counterpartOhId,
+    String? counterpartOhEndpoint,
+    List<OhDescriptorData>? counterpartOhSet,
+    bool patchCounterpartOh = false,
   }) {
     final old = _channels[channelId];
     if (old == null) return;
@@ -191,9 +198,15 @@ class WorkerReplayState {
       old.encryptionKey,
       channelSecret: old.channelSecret,
       ownDisplayName: old.ownDisplayName,
-      peerOhId: patchPeerOh ? peerOhId : old.peerOhId,
-      peerOhEndpoint: patchPeerOh ? peerOhEndpoint : old.peerOhEndpoint,
-      peerOhSet: patchPeerOh ? peerOhSet : old.peerOhSet,
+      counterpartOhId: patchCounterpartOh
+          ? counterpartOhId
+          : old.counterpartOhId,
+      counterpartOhEndpoint: patchCounterpartOh
+          ? counterpartOhEndpoint
+          : old.counterpartOhEndpoint,
+      counterpartOhSet: patchCounterpartOh
+          ? counterpartOhSet
+          : old.counterpartOhSet,
       isChannelCreator: old.isChannelCreator,
       ratchetState: ratchetState ?? old.ratchetState,
       sessionTags: patchGarlic ? sessionTags : old.sessionTags,

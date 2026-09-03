@@ -84,10 +84,10 @@ class MockRedPandaClient implements RedPandaClient {
         detail: 'Announced on mock-node, valid for 6 d.',
       ),
       DoctorStage(
-        name: 'Peer mailbox known',
+        name: "Recipient's mailbox known",
         status: DoctorStatus.ok,
         durationMs: 0,
-        detail: 'Peer mailbox on mock-node.',
+        detail: "Recipient's mailbox on mock-node.",
       ),
       DoctorStage(
         name: 'Last fetch success',
@@ -152,9 +152,9 @@ class MockRedPandaClient implements RedPandaClient {
     List<int> encryptionKey, {
     List<int>? channelSecret,
     String? ownDisplayName,
-    List<int>? peerOhId,
-    String? peerOhEndpoint,
-    List<OHDescriptor>? peerOhSet,
+    List<int>? counterpartOhId,
+    String? counterpartOhEndpoint,
+    List<OHDescriptor>? counterpartOhSet,
     required bool isChannelCreator,
     String? ratchetState,
     Map<String, int>? sessionTags,

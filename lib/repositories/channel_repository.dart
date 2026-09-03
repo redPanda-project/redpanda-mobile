@@ -11,7 +11,7 @@ abstract class ChannelRepository {
   ///
   /// Re-adding an existing channel is **non-destructive**: all on-device state
   /// the [Channel] value object does not carry — the ratchet state, the pending
-  /// reverse-garlic block, the known peer mailbox set and the creator role
+  /// reverse-garlic block, the known counterpart mailbox set and the creator role
   /// marker — is preserved. Callers should treat `false` as "already joined"
   /// rather than as a fresh join.
   Future<bool> addChannel(Channel channel);
@@ -29,7 +29,7 @@ class DriftChannelRepository implements ChannelRepository {
     // H8: the channel id is deterministic from `channel_sk`, so re-scanning a
     // QR code for an already-joined channel hits an existing row. This used to
     // be an `INSERT OR REPLACE`, which in SQLite *deletes* the old row — every
-    // column the companion does not set (ratchetState, pendingRgb, peerOhSet)
+    // column the companion does not set (ratchetState, pendingRgb, counterpartOhSet)
     // came back NULL and the two ratchets silently diverged. Existing rows are
     // therefore updated in place, and only with the columns the QR actually
     // carries.
@@ -44,23 +44,23 @@ class DriftChannelRepository implements ChannelRepository {
         )..where((t) => t.uuid.equals(channel.id))).write(
           db.ChannelsCompanion(
             label: drift.Value(channel.label),
-            // The peer descriptor is only ever added, never cleared: a
+            // The counterpart descriptor is only ever added, never cleared: a
             // re-scan carries no OH data and must not drop what the
             // rendezvous lookup already found. `authPrivateKey` is
             // deliberately absent — a creator re-scanning their own QR is a
             // joiner as far as `Channel.fromJson` is concerned, and losing
             // the role marker would break the ratchet asymmetry.
-            peerOhEndpoint: _valueOrAbsent(
-              channel.peerOhDescriptor?.serverEndpoint,
+            counterpartOhEndpoint: _valueOrAbsent(
+              channel.counterpartOhDescriptor?.serverEndpoint,
             ),
-            peerOhId: _valueOrAbsent(
-              channel.peerOhDescriptor != null
-                  ? HEX.encode(channel.peerOhDescriptor!.handleId)
+            counterpartOhId: _valueOrAbsent(
+              channel.counterpartOhDescriptor != null
+                  ? HEX.encode(channel.counterpartOhDescriptor!.handleId)
                   : null,
             ),
-            peerOhPublicKey: _valueOrAbsent(
-              channel.peerOhDescriptor != null
-                  ? HEX.encode(channel.peerOhDescriptor!.authPublicKey)
+            counterpartOhPublicKey: _valueOrAbsent(
+              channel.counterpartOhDescriptor != null
+                  ? HEX.encode(channel.counterpartOhDescriptor!.authPublicKey)
                   : null,
             ),
           ),
@@ -82,17 +82,17 @@ class DriftChannelRepository implements ChannelRepository {
                     : null,
               ),
               authPublicKey: HEX.encode(channel.authPublicKey),
-              peerOhEndpoint: drift.Value(
-                channel.peerOhDescriptor?.serverEndpoint,
+              counterpartOhEndpoint: drift.Value(
+                channel.counterpartOhDescriptor?.serverEndpoint,
               ),
-              peerOhId: drift.Value(
-                channel.peerOhDescriptor != null
-                    ? HEX.encode(channel.peerOhDescriptor!.handleId)
+              counterpartOhId: drift.Value(
+                channel.counterpartOhDescriptor != null
+                    ? HEX.encode(channel.counterpartOhDescriptor!.handleId)
                     : null,
               ),
-              peerOhPublicKey: drift.Value(
-                channel.peerOhDescriptor != null
-                    ? HEX.encode(channel.peerOhDescriptor!.authPublicKey)
+              counterpartOhPublicKey: drift.Value(
+                channel.counterpartOhDescriptor != null
+                    ? HEX.encode(channel.counterpartOhDescriptor!.authPublicKey)
                     : null,
               ),
               lastSeen: drift.Value(DateTime.now()),
@@ -123,13 +123,13 @@ class DriftChannelRepository implements ChannelRepository {
 
   Channel _mapToDomain(db.Channel data) {
     OHDescriptor? ohDescriptor;
-    if (data.peerOhEndpoint != null &&
-        data.peerOhId != null &&
-        data.peerOhPublicKey != null) {
+    if (data.counterpartOhEndpoint != null &&
+        data.counterpartOhId != null &&
+        data.counterpartOhPublicKey != null) {
       ohDescriptor = OHDescriptor(
-        serverEndpoint: data.peerOhEndpoint!,
-        handleId: HEX.decode(data.peerOhId!),
-        authPublicKey: HEX.decode(data.peerOhPublicKey!),
+        serverEndpoint: data.counterpartOhEndpoint!,
+        handleId: HEX.decode(data.counterpartOhId!),
+        authPublicKey: HEX.decode(data.counterpartOhPublicKey!),
       );
     }
 
@@ -145,7 +145,7 @@ class DriftChannelRepository implements ChannelRepository {
           ? HEX.decode(data.authPrivateKey!)
           : null,
       authPublicKey: HEX.decode(data.authPublicKey),
-      peerOhDescriptor: ohDescriptor,
+      counterpartOhDescriptor: ohDescriptor,
     );
   }
 }

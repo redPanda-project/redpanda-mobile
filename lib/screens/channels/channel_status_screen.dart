@@ -81,7 +81,7 @@ class ChannelStatusScreen extends ConsumerWidget {
                 subtitle: Text(
                   'The previous host node was unreachable — a new mailbox '
                   'was registered ${_relative(ownHandle.failedOverAt!, now)} '
-                  'and announced to your peer.',
+                  'and announced to your contact.',
                 ),
               ),
             ListTile(
@@ -98,20 +98,22 @@ class ChannelStatusScreen extends ConsumerWidget {
               ),
             ),
           ],
-          const _SectionHeader('Sending (to peer)'),
+          const _SectionHeader('Sending (to the recipient)'),
           ListTile(
             leading: Icon(
-              channel?.peerOhId != null ? Icons.send : Icons.help_outline,
+              channel?.counterpartOhId != null
+                  ? Icons.send
+                  : Icons.help_outline,
             ),
             title: Text(
-              channel?.peerOhId != null
-                  ? 'Peer mailbox known'
-                  : 'Peer mailbox unknown',
+              channel?.counterpartOhId != null
+                  ? "Recipient's mailbox known"
+                  : "Recipient's mailbox unknown",
             ),
             subtitle: Text(
-              channel?.peerOhId != null
-                  ? 'On ${channel!.peerOhEndpoint ?? 'unknown node'}'
-                  : "Scan the peer's QR code to enable sending.",
+              channel?.counterpartOhId != null
+                  ? 'On ${channel!.counterpartOhEndpoint ?? 'unknown node'}'
+                  : "Scan the recipient's QR code to enable sending.",
             ),
           ),
           if (stats != null) ...[

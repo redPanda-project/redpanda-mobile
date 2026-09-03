@@ -7,7 +7,7 @@ import 'package:redpanda_light_client/src/domain/state_update.dart';
 /// the authenticity check — only the partner holds the message keys); the app
 /// layer persists the whole set so the deposit fan-out survives an app
 /// restart.
-class PeerOhUpdate extends StateUpdate {
+class CounterpartOhUpdate extends StateUpdate {
   final String channelId;
 
   /// The partner's complete current mailbox set (each: endpoint, handle id,
@@ -15,5 +15,8 @@ class PeerOhUpdate extends StateUpdate {
   /// fan out to every entry; the receiver deduplicates by message id.
   final List<OHDescriptor> descriptors;
 
-  const PeerOhUpdate({required this.channelId, required this.descriptors});
+  const CounterpartOhUpdate({
+    required this.channelId,
+    required this.descriptors,
+  });
 }

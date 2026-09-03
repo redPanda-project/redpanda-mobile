@@ -39,7 +39,7 @@ class ChannelRendezvous {
 
   /// SHA-256 domain tag for the per-role participant id (the merge key). A
   /// channel is 2-party; the creator and the joiner get distinct, derivable
-  /// ids (`H(tag || sk || role)`), so neither side needs to store the peer's
+  /// ids (`H(tag || sk || role)`), so neither side needs to store the counterpart's
   /// id — the recovering side simply looks up the opposite role.
   static const String participantTag = 'redpanda.channel.participant.v4';
 

@@ -10,7 +10,7 @@ import 'package:test/test.dart';
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/domain/channel.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
-import 'package:redpanda_light_client/src/domain/peer_oh_update.dart';
+import 'package:redpanda_light_client/src/domain/counterpart_oh_update.dart';
 import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
@@ -29,7 +29,7 @@ import 'test_helpers.dart';
 ///     node B and publishes it as an `OwnOhSetUpdate` on `stateUpdates`.
 ///  2. The replacement descriptor travels IN-BAND to Alice as a
 ///     ratchet-encrypted `oh_update` into her (still healthy) mailbox on
-///     node B; her `stateUpdates.of<PeerOhUpdate>()` fires.
+///     node B; her `stateUpdates.of<CounterpartOhUpdate>()` fires.
 ///  3. Alice's next send deposits into Bob's NEW mailbox on node B and Bob
 ///     receives it over his production poll loop.
 ///
@@ -101,15 +101,15 @@ void main() async {
       alice.addChannelKeys(
         channel.id,
         channel.encryptionKey,
-        peerOhId: bobOH.ohId,
-        peerOhEndpoint: nodeA,
+        counterpartOhId: bobOH.ohId,
+        counterpartOhEndpoint: nodeA,
         isChannelCreator: true,
       );
       bob.addChannelKeys(
         channel.id,
         channel.encryptionKey,
-        peerOhId: aliceOH.ohId,
-        peerOhEndpoint: nodeB,
+        counterpartOhId: aliceOH.ohId,
+        counterpartOhEndpoint: nodeB,
         isChannelCreator: false,
       );
 
@@ -150,11 +150,11 @@ void main() async {
         (u) => replacements.addAll(u.handles),
       );
       addTearDown(replacementSub.cancel);
-      final peerOhMoves = <PeerOhUpdate>[];
-      final peerOhSub = alice.stateUpdates.of<PeerOhUpdate>().listen(
-        peerOhMoves.add,
-      );
-      addTearDown(peerOhSub.cancel);
+      final counterpartOhMoves = <CounterpartOhUpdate>[];
+      final counterpartOhSub = alice.stateUpdates
+          .of<CounterpartOhUpdate>()
+          .listen(counterpartOhMoves.add);
+      addTearDown(counterpartOhSub.cancel);
 
       await launcherA.stop();
       // Let Bob's connection to A actually die so fetches fail fast
@@ -182,15 +182,17 @@ void main() async {
 
       // Alice learns the new mailbox in-band over her healthy mailbox.
       final moveDeadline = DateTime.now().add(const Duration(seconds: 90));
-      while (peerOhMoves.isEmpty) {
+      while (counterpartOhMoves.isEmpty) {
         if (DateTime.now().isAfter(moveDeadline)) {
           fail('Alice never received the in-band oh_update');
         }
         await Future.delayed(const Duration(milliseconds: 500));
       }
-      expect(peerOhMoves.first.channelId, channel.id);
+      expect(counterpartOhMoves.first.channelId, channel.id);
       expect(
-        peerOhMoves.first.descriptors.any((d) => d.serverEndpoint == nodeB),
+        counterpartOhMoves.first.descriptors.any(
+          (d) => d.serverEndpoint == nodeB,
+        ),
         isTrue,
       );
 

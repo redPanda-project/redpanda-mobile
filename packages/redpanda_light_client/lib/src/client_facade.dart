@@ -68,7 +68,7 @@ abstract class RedPandaClient {
 
   /// Runs the connection doctor for [channelId] (T25): a sequence of
   /// diagnostic stages — host node reachable (TCP + handshake), own OH
-  /// announced/renewed, peer OH known, last successful fetch age, and the
+  /// announced/renewed, counterpart OH known, last successful fetch age, and the
   /// loopback self-test (T20, reused) — each reported with a traffic-light
   /// [DoctorStatus], its runtime and a human-readable detail instead of a
   /// silent fail. Reuses only existing client state and the existing loopback
@@ -96,7 +96,7 @@ abstract class RedPandaClient {
 
   /// **The** state channel: every one-way state change the network layer
   /// publishes — ratchet and garlic session state (MS03b/MS05), OH mailbox
-  /// cursor/expiry and fetch outcomes, own-OH and peer-OH sets (T21/T42),
+  /// cursor/expiry and fetch outcomes, own-OH and counterpart-OH sets (T21/T42),
   /// routing- and channel-ACKs (MS06), node scores and group state (MS08).
   ///
   /// Consumers take the typed projection they care about:
@@ -113,9 +113,9 @@ abstract class RedPandaClient {
   Future<void> ensureOhRedundancy(String channelId);
 
   /// Registers channel encryption keys so [sendMessage] can encrypt outgoing
-  /// messages for [channelId]. Optionally associates a peer OH ID for routing.
+  /// messages for [channelId]. Optionally associates a counterpart OH ID for routing.
   ///
-  /// [peerOhEndpoint] is the host:port of the node hosting the peer's OH
+  /// [counterpartOhEndpoint] is the host:port of the node hosting the counterpart's OH
   /// (from the OHDescriptor). MS04 uses it to keep the destination node out
   /// of the garlic hop path.
   ///
@@ -137,9 +137,9 @@ abstract class RedPandaClient {
     List<int> encryptionKey, {
     List<int>? channelSecret,
     String? ownDisplayName,
-    List<int>? peerOhId,
-    String? peerOhEndpoint,
-    List<OHDescriptor>? peerOhSet,
+    List<int>? counterpartOhId,
+    String? counterpartOhEndpoint,
+    List<OHDescriptor>? counterpartOhSet,
     required bool isChannelCreator,
     String? ratchetState,
     Map<String, int>? sessionTags,

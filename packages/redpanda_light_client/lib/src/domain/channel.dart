@@ -26,7 +26,7 @@ import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
 /// - [channelSecret] — the QR v4 secret; the single capability that defines a
 ///   participant. Required to compute the rendezvous derivations
 ///   ([ChannelRendezvous]).
-/// - [peerOhDescriptor] — the peer's OH descriptor, learned from the rendezvous
+/// - [counterpartOhDescriptor] — the counterpart's OH descriptor, learned from the rendezvous
 ///   record (no longer carried in the QR).
 ///
 /// The channel id is `SHA256(channel_pk)` (spec Decision 1), so both sides
@@ -37,7 +37,7 @@ class Channel extends Equatable {
   final List<int> encryptionKey;
   final List<int>? authPrivateKey;
   final List<int> authPublicKey;
-  final OHDescriptor? peerOhDescriptor;
+  final OHDescriptor? counterpartOhDescriptor;
 
   const Channel({
     required this.label,
@@ -45,7 +45,7 @@ class Channel extends Equatable {
     required this.encryptionKey,
     required this.authPublicKey,
     this.authPrivateKey,
-    this.peerOhDescriptor,
+    this.counterpartOhDescriptor,
   });
 
   /// Current QR version.
@@ -61,7 +61,7 @@ class Channel extends Equatable {
     String label,
     List<int> channelSecret, {
     required bool isCreator,
-    OHDescriptor? peerOhDescriptor,
+    OHDescriptor? counterpartOhDescriptor,
   }) async {
     if (channelSecret.length != 32) {
       throw ArgumentError.value(
@@ -79,7 +79,7 @@ class Channel extends Equatable {
       encryptionKey: encKey.toList(),
       authPrivateKey: isCreator ? authKeys.privateSeed.toList() : null,
       authPublicKey: authKeys.publicKey.toList(),
-      peerOhDescriptor: peerOhDescriptor,
+      counterpartOhDescriptor: counterpartOhDescriptor,
     );
   }
 
@@ -91,14 +91,15 @@ class Channel extends Equatable {
   }
 
   /// Creates a copy of this channel with the given fields replaced.
-  Channel copyWith({OHDescriptor? peerOhDescriptor}) {
+  Channel copyWith({OHDescriptor? counterpartOhDescriptor}) {
     return Channel(
       label: label,
       channelSecret: channelSecret,
       encryptionKey: encryptionKey,
       authPrivateKey: authPrivateKey,
       authPublicKey: authPublicKey,
-      peerOhDescriptor: peerOhDescriptor ?? this.peerOhDescriptor,
+      counterpartOhDescriptor:
+          counterpartOhDescriptor ?? this.counterpartOhDescriptor,
     );
   }
 
@@ -116,7 +117,7 @@ class Channel extends Equatable {
   /// **joiner** (no role marker).
   ///
   /// v1/v2/v3 codes are rejected without a migration path (spec Decision 1:
-  /// "QR v3 is invalid without replacement"): the peers must re-pair with a
+  /// "QR v3 is invalid without replacement"): both sides must re-pair with a
   /// fresh v4 code from an updated app.
   static Future<Channel> fromJson(String jsonStr) async {
     final dynamic decoded;
@@ -164,8 +165,8 @@ class Channel extends Equatable {
   List<int> get ownParticipantId =>
       ChannelRendezvous.participantId(channelSecret, isCreator: isCreator);
 
-  /// The peer's participant id (the opposite role — what recovery looks up).
-  List<int> get peerParticipantId =>
+  /// The counterpart's participant id (the opposite role — what recovery looks up).
+  List<int> get counterpartParticipantId =>
       ChannelRendezvous.participantId(channelSecret, isCreator: !isCreator);
 
   /// Channel id: `SHA256(channel_pk)` as hex (spec Decision 1).
@@ -181,6 +182,6 @@ class Channel extends Equatable {
     encryptionKey,
     authPrivateKey,
     authPublicKey,
-    peerOhDescriptor,
+    counterpartOhDescriptor,
   ];
 }

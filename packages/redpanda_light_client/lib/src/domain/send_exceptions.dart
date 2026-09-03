@@ -43,24 +43,29 @@ class RateLimitException implements Exception {
   String toString() => 'RateLimitException(RATE_LIMIT)';
 }
 
-/// A send could not be handed to the network because the channel's partner
-/// OH mailbox id is not (yet) known.
+/// A send could not be handed to the network because the channel's
+/// counterpart OH mailbox id is not (yet) known.
 ///
-/// Without a peer OH, a direct-deposit FlaschenpostPut would have to carry an
+/// T114: "counterpart" is the human on the other side of the conversation.
+/// Everywhere else in this package "peer" means a full node, which is exactly
+/// why this exception could not keep its old name (`UnknownPeerException`) —
+/// it never had anything to do with node connectivity.
+///
+/// Without a counterpart OH, a direct-deposit FlaschenpostPut would have to carry an
 /// empty oh_id. The node's legacy garlic-parsing fallback then misparses the
 /// raw E2E-encrypted payload as a `GMAck` frame (every v4 payload starts with
 /// byte 0x04, the ACK type id) and throws, silently dropping the message
 /// instead of delivering or rejecting it (REDPANDAJ-2DR). So this exception
 /// is thrown instead of ever sending that doomed packet — the message stays
 /// (or is put back) in the app's pending/retry queue and is sent for real
-/// once the peer OH becomes known (e.g. via the partner's next channel
+/// once the counterpart OH becomes known (e.g. via the partner's next channel
 /// activity) or a garlic route becomes available.
-class UnknownPeerException implements Exception {
+class UnknownCounterpartException implements Exception {
   /// The channel whose partner OH mailbox id is not (yet) known.
   final String channelId;
 
-  UnknownPeerException(this.channelId);
+  UnknownCounterpartException(this.channelId);
 
   @override
-  String toString() => 'UnknownPeerException($channelId)';
+  String toString() => 'UnknownCounterpartException($channelId)';
 }

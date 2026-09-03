@@ -14,7 +14,7 @@ import 'package:redpanda/shared/widgets/glass_surface.dart';
 
 /// Traffic-light health indicator for one channel tile. Green: everything
 /// runs; amber: working with limitations (queued sends, stale mailbox
-/// check, missing peer mailbox); red: needs attention. Details on the
+/// check, missing counterpart mailbox); red: needs attention. Details on the
 /// channel status page (info button in the chat).
 class _ChannelHealthDot extends ConsumerWidget {
   final String channelId;

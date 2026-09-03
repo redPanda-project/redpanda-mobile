@@ -9,7 +9,7 @@ import 'package:test/test.dart';
 
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/domain/channel.dart';
-import 'package:redpanda_light_client/src/domain/peer_oh_update.dart';
+import 'package:redpanda_light_client/src/domain/counterpart_oh_update.dart';
 import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
@@ -114,15 +114,15 @@ void main() async {
       alice.addChannelKeys(
         channel.id,
         channel.encryptionKey,
-        peerOhId: bobOH1.ohId,
-        peerOhEndpoint: nodeA,
+        counterpartOhId: bobOH1.ohId,
+        counterpartOhEndpoint: nodeA,
         isChannelCreator: true,
       );
       bob.addChannelKeys(
         channel.id,
         channel.encryptionKey,
-        peerOhId: aliceOH.ohId,
-        peerOhEndpoint: nodeC,
+        counterpartOhId: aliceOH.ohId,
+        counterpartOhEndpoint: nodeC,
         isChannelCreator: false,
       );
 
@@ -137,11 +137,11 @@ void main() async {
       await waitConnected(alice, nodeB);
 
       // Alice learns Bob's full mailbox set in-band.
-      final peerOhMoves = <PeerOhUpdate>[];
-      final peerOhSub = alice.stateUpdates.of<PeerOhUpdate>().listen(
-        peerOhMoves.add,
-      );
-      addTearDown(peerOhSub.cancel);
+      final counterpartOhMoves = <CounterpartOhUpdate>[];
+      final counterpartOhSub = alice.stateUpdates
+          .of<CounterpartOhUpdate>()
+          .listen(counterpartOhMoves.add);
+      addTearDown(counterpartOhSub.cancel);
 
       // Bob tops up to the full k=3 target and announces the set. All three
       // nodes are seeded with each other, so Bob reaches every one of them
@@ -166,14 +166,17 @@ void main() async {
       expect(bobEndpoints, containsAll(<String>{nodeA, nodeB}));
 
       final announceDeadline = DateTime.now().add(const Duration(seconds: 90));
-      while (peerOhMoves.isEmpty || peerOhMoves.last.descriptors.length < 2) {
+      while (counterpartOhMoves.isEmpty ||
+          counterpartOhMoves.last.descriptors.length < 2) {
         if (DateTime.now().isAfter(announceDeadline)) {
           fail('Alice never received the two-mailbox oh_update');
         }
         await Future.delayed(const Duration(milliseconds: 500));
       }
       expect(
-        peerOhMoves.last.descriptors.map((d) => d.serverEndpoint).toSet(),
+        counterpartOhMoves.last.descriptors
+            .map((d) => d.serverEndpoint)
+            .toSet(),
         containsAll(<String>{nodeA, nodeB}),
       );
 

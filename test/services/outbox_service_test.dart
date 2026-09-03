@@ -13,7 +13,7 @@ import 'package:redpanda_light_client/redpanda_light_client.dart'
         DepositStatus,
         RoutingAck,
         RoutingAckUpdate,
-        UnknownPeerException;
+        UnknownCounterpartException;
 
 import '../helpers/fake_redpanda_client.dart';
 import '../helpers/test_database.dart';
@@ -182,52 +182,58 @@ void main() {
       expect(msg.retryCount, equals(1));
     });
 
-    test('REDPANDAJ-2DR: unknown peer OH keeps the message pending with the '
-        'normal backoff instead of a doomed empty-oh_id deposit', () async {
-      // sendMessage refuses to deposit with an empty oh_id (would be
-      // misparsed by the node as a GMAck frame) and throws
-      // UnknownPeerException instead — the message must stay queued for
-      // retry, not be marked failed or lost.
-      client.sendError = UnknownPeerException('channel-1');
-      final id = await insertPending();
+    test(
+      'REDPANDAJ-2DR: unknown counterpart OH keeps the message pending with the '
+      'normal backoff instead of a doomed empty-oh_id deposit',
+      () async {
+        // sendMessage refuses to deposit with an empty oh_id (would be
+        // misparsed by the node as a GMAck frame) and throws
+        // UnknownCounterpartException instead — the message must stay queued for
+        // retry, not be marked failed or lost.
+        client.sendError = UnknownCounterpartException('channel-1');
+        final id = await insertPending();
 
-      await outbox.runPass();
+        await outbox.runPass();
 
-      final msg = await messageById(id);
-      expect(msg.status, equals(MessageStatus.pending));
-      expect(msg.retryCount, equals(1));
-      expect(msg.lastRetryAt, isNotNull);
-    });
+        final msg = await messageById(id);
+        expect(msg.status, equals(MessageStatus.pending));
+        expect(msg.retryCount, equals(1));
+        expect(msg.lastRetryAt, isNotNull);
+      },
+    );
 
-    test('REDPANDAJ-2DR: once the peer OH becomes known, a subsequent retry '
-        'pass delivers the message', () async {
-      client.sendError = UnknownPeerException('channel-1');
-      final id = await insertPending(
-        retryCount: 3,
-        lastRetryAt: DateTime.now().subtract(const Duration(minutes: 9)),
-      );
+    test(
+      'REDPANDAJ-2DR: once the counterpart OH becomes known, a subsequent retry '
+      'pass delivers the message',
+      () async {
+        client.sendError = UnknownCounterpartException('channel-1');
+        final id = await insertPending(
+          retryCount: 3,
+          lastRetryAt: DateTime.now().subtract(const Duration(minutes: 9)),
+        );
 
-      await outbox.runPass();
-      expect((await messageById(id)).status, equals(MessageStatus.pending));
-      expect(client.sentMessages, isEmpty);
+        await outbox.runPass();
+        expect((await messageById(id)).status, equals(MessageStatus.pending));
+        expect(client.sentMessages, isEmpty);
 
-      // Peer OH is now known (e.g. the partner's handshake arrived) —
-      // sendMessage succeeds on the next due retry pass. Push lastRetryAt
-      // back far enough for the backoff window to be open again.
-      client.sendError = null;
-      await (db.update(db.messages)..where((t) => t.id.equals(id))).write(
-        MessagesCompanion(
-          lastRetryAt: drift.Value(
-            DateTime.now().subtract(const Duration(minutes: 30)),
+        // Counterpart OH is now known (e.g. the partner's handshake arrived) —
+        // sendMessage succeeds on the next due retry pass. Push lastRetryAt
+        // back far enough for the backoff window to be open again.
+        client.sendError = null;
+        await (db.update(db.messages)..where((t) => t.id.equals(id))).write(
+          MessagesCompanion(
+            lastRetryAt: drift.Value(
+              DateTime.now().subtract(const Duration(minutes: 30)),
+            ),
           ),
-        ),
-      );
+        );
 
-      await outbox.runPass();
+        await outbox.runPass();
 
-      expect(client.sentMessages, hasLength(1));
-      expect((await messageById(id)).status, equals(MessageStatus.sent));
-    });
+        expect(client.sentMessages, hasLength(1));
+        expect((await messageById(id)).status, equals(MessageStatus.sent));
+      },
+    );
 
     test('does not touch sent or failed messages', () async {
       final sentId = await insertPending(content: 'already sent');
@@ -515,7 +521,7 @@ void main() {
       () async {
         final seen = <DeliveryAttempt>[];
         final sub = outbox.attempts.listen(seen.add);
-        client.sendError = UnknownPeerException('channel-1');
+        client.sendError = UnknownCounterpartException('channel-1');
         await insertPending();
 
         await outbox.runPass();

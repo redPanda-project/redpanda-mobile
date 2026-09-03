@@ -44,10 +44,10 @@ void main() {
         detail: 'Connected to node-a (handshake verified).',
       ),
       DoctorStage(
-        name: 'Peer mailbox known',
+        name: "Recipient's mailbox known",
         status: DoctorStatus.warn,
         durationMs: 0,
-        detail: 'Peer mailbox unknown — scan the QR code.',
+        detail: "Recipient's mailbox unknown — scan the QR code.",
       ),
       DoctorStage(
         name: 'Loopback self-test',
@@ -62,7 +62,7 @@ void main() {
 
     // Stage names render.
     expect(find.text('Host node reachable'), findsOneWidget);
-    expect(find.text('Peer mailbox known'), findsOneWidget);
+    expect(find.text("Recipient's mailbox known"), findsOneWidget);
     expect(find.text('Loopback self-test'), findsOneWidget);
 
     // Failure detail is surfaced (no silent fail).

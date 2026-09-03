@@ -29,10 +29,10 @@ void main() {
       expect(channels, hasLength(1));
       expect(channels.single.label, equals('My Channel'));
       expect(channels.single.encryptionKey, equals(channel.encryptionKey));
-      expect(channels.single.peerOhDescriptor, isNull);
+      expect(channels.single.counterpartOhDescriptor, isNull);
     });
 
-    test('round-trips the peer OH descriptor', () async {
+    test('round-trips the counterpart OH descriptor', () async {
       final descriptor = OHDescriptor(
         serverEndpoint: 'node-1:59558',
         handleId: List.generate(20, (i) => i),
@@ -40,16 +40,22 @@ void main() {
       );
       final channel = (await Channel.generate(
         'With OH',
-      )).copyWith(peerOhDescriptor: descriptor);
+      )).copyWith(counterpartOhDescriptor: descriptor);
 
       await repo.addChannel(channel);
       final restored = (await repo.getChannels()).single;
 
-      expect(restored.peerOhDescriptor, isNotNull);
-      expect(restored.peerOhDescriptor!.serverEndpoint, equals('node-1:59558'));
-      expect(restored.peerOhDescriptor!.handleId, equals(descriptor.handleId));
+      expect(restored.counterpartOhDescriptor, isNotNull);
       expect(
-        restored.peerOhDescriptor!.authPublicKey,
+        restored.counterpartOhDescriptor!.serverEndpoint,
+        equals('node-1:59558'),
+      );
+      expect(
+        restored.counterpartOhDescriptor!.handleId,
+        equals(descriptor.handleId),
+      );
+      expect(
+        restored.counterpartOhDescriptor!.authPublicKey,
         equals(descriptor.authPublicKey),
       );
     });
@@ -66,7 +72,7 @@ void main() {
     // the on-device state the Channel value object does not carry.
     group('re-adding an existing channel', () {
       /// Simulates a live channel: ratchet state, a pending reverse-garlic
-      /// block and a discovered peer mailbox set on top of the stored row.
+      /// block and a discovered counterpart mailbox set on top of the stored row.
       Future<void> markAsLive(String channelId) async {
         await (db.update(
           db.channels,
@@ -74,35 +80,38 @@ void main() {
           const ChannelsCompanion(
             ratchetState: drift.Value('{"rootKey":"deadbeef"}'),
             pendingRgb: drift.Value('cafe'),
-            peerOhSet: drift.Value('[{"ep":"node-1:59558"}]'),
-            peerOhEndpoint: drift.Value('node-1:59558'),
-            peerOhId: drift.Value('aa'),
-            peerOhPublicKey: drift.Value('bb'),
+            counterpartOhSet: drift.Value('[{"ep":"node-1:59558"}]'),
+            counterpartOhEndpoint: drift.Value('node-1:59558'),
+            counterpartOhId: drift.Value('aa'),
+            counterpartOhPublicKey: drift.Value('bb'),
           ),
         );
       }
 
-      test('preserves ratchet state, pending RGB and peer OH set', () async {
-        final created = await Channel.generate('Live');
-        await repo.addChannel(created);
-        await markAsLive(created.id);
+      test(
+        'preserves ratchet state, pending RGB and counterpart OH set',
+        () async {
+          final created = await Channel.generate('Live');
+          await repo.addChannel(created);
+          await markAsLive(created.id);
 
-        // Exactly what the scanner produces from the channel's own QR code.
-        final rescanned = await Channel.fromJson(created.toJson());
-        expect(rescanned.id, equals(created.id));
-        expect(await repo.addChannel(rescanned), isFalse);
+          // Exactly what the scanner produces from the channel's own QR code.
+          final rescanned = await Channel.fromJson(created.toJson());
+          expect(rescanned.id, equals(created.id));
+          expect(await repo.addChannel(rescanned), isFalse);
 
-        final row = await (db.select(
-          db.channels,
-        )..where((t) => t.uuid.equals(created.id))).getSingle();
-        expect(row.ratchetState, equals('{"rootKey":"deadbeef"}'));
-        expect(row.pendingRgb, equals('cafe'));
-        expect(row.peerOhSet, equals('[{"ep":"node-1:59558"}]'));
-        expect(row.peerOhEndpoint, equals('node-1:59558'));
-        expect(row.peerOhId, equals('aa'));
-        expect(row.peerOhPublicKey, equals('bb'));
-        expect(await repo.getChannels(), hasLength(1));
-      });
+          final row = await (db.select(
+            db.channels,
+          )..where((t) => t.uuid.equals(created.id))).getSingle();
+          expect(row.ratchetState, equals('{"rootKey":"deadbeef"}'));
+          expect(row.pendingRgb, equals('cafe'));
+          expect(row.counterpartOhSet, equals('[{"ep":"node-1:59558"}]'));
+          expect(row.counterpartOhEndpoint, equals('node-1:59558'));
+          expect(row.counterpartOhId, equals('aa'));
+          expect(row.counterpartOhPublicKey, equals('bb'));
+          expect(await repo.getChannels(), hasLength(1));
+        },
+      );
 
       test('preserves the creator role marker', () async {
         final created = await Channel.generate('Mine');
@@ -117,24 +126,33 @@ void main() {
         expect((await repo.getChannels()).single.isCreator, isTrue);
       });
 
-      test('adopts a peer OH descriptor learned after the first add', () async {
-        final created = await Channel.generate('Late OH');
-        await repo.addChannel(created);
+      test(
+        'adopts a counterpart OH descriptor learned after the first add',
+        () async {
+          final created = await Channel.generate('Late OH');
+          await repo.addChannel(created);
 
-        final descriptor = OHDescriptor(
-          serverEndpoint: 'node-2:59558',
-          handleId: List.generate(20, (i) => i),
-          authPublicKey: List.generate(32, (i) => i),
-        );
-        final rescanned = (await Channel.fromJson(
-          created.toJson(),
-        )).copyWith(peerOhDescriptor: descriptor);
-        expect(await repo.addChannel(rescanned), isFalse);
+          final descriptor = OHDescriptor(
+            serverEndpoint: 'node-2:59558',
+            handleId: List.generate(20, (i) => i),
+            authPublicKey: List.generate(32, (i) => i),
+          );
+          final rescanned = (await Channel.fromJson(
+            created.toJson(),
+          )).copyWith(counterpartOhDescriptor: descriptor);
+          expect(await repo.addChannel(rescanned), isFalse);
 
-        final restored = (await repo.getChannels()).single;
-        expect(restored.peerOhDescriptor!.serverEndpoint, 'node-2:59558');
-        expect(restored.peerOhDescriptor!.handleId, descriptor.handleId);
-      });
+          final restored = (await repo.getChannels()).single;
+          expect(
+            restored.counterpartOhDescriptor!.serverEndpoint,
+            'node-2:59558',
+          );
+          expect(
+            restored.counterpartOhDescriptor!.handleId,
+            descriptor.handleId,
+          );
+        },
+      );
 
       test('a fresh channel is still inserted alongside', () async {
         await repo.addChannel(await Channel.generate('First'));

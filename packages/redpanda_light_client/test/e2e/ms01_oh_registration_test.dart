@@ -94,7 +94,7 @@ void main() async {
         // Deserialize (async in v4)
         final restored = await Channel.fromJson(qr);
         expect(restored.id, channel.id);
-        expect(restored.peerOhDescriptor, isNull);
+        expect(restored.counterpartOhDescriptor, isNull);
 
         // sendMessage should work without error. Bob's OH is discovered out
         // of band (rendezvous DHT) — here passed directly.
@@ -102,8 +102,8 @@ void main() async {
           channel.id,
           channel.encryptionKey,
           channelSecret: channel.channelSecret,
-          peerOhId: oh.ohId,
-          peerOhEndpoint: descriptor.serverEndpoint,
+          counterpartOhId: oh.ohId,
+          counterpartOhEndpoint: descriptor.serverEndpoint,
           isChannelCreator: true,
         );
         final msgId = await client.sendMessage(channel.id, 'Test message');

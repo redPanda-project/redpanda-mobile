@@ -9,7 +9,7 @@ import 'package:redpanda/shared/providers.dart';
 
 /// Persists our own Outbound Handle registrations (one per channel) and
 /// provides the descriptor that gets embedded into the channel QR code so
-/// peers know where to deposit messages for us.
+/// the counterpart knows where to deposit messages for us.
 class OutboundHandleRepository {
   final db.AppDatabase _db;
 

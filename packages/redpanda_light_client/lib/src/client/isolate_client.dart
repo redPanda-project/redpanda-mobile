@@ -550,9 +550,9 @@ class RedPandaIsolateClient implements RedPandaClient {
     List<int> encryptionKey, {
     List<int>? channelSecret,
     String? ownDisplayName,
-    List<int>? peerOhId,
-    String? peerOhEndpoint,
-    List<OHDescriptor>? peerOhSet,
+    List<int>? counterpartOhId,
+    String? counterpartOhEndpoint,
+    List<OHDescriptor>? counterpartOhSet,
     required bool isChannelCreator,
     String? ratchetState,
     Map<String, int>? sessionTags,
@@ -563,9 +563,9 @@ class RedPandaIsolateClient implements RedPandaClient {
       encryptionKey,
       channelSecret: channelSecret,
       ownDisplayName: ownDisplayName,
-      peerOhId: peerOhId,
-      peerOhEndpoint: peerOhEndpoint,
-      peerOhSet: peerOhSet
+      counterpartOhId: counterpartOhId,
+      counterpartOhEndpoint: counterpartOhEndpoint,
+      counterpartOhSet: counterpartOhSet
           ?.map(
             (d) => OhDescriptorData(
               endpoint: d.serverEndpoint,
@@ -878,9 +878,9 @@ void _runWorker(SendPort mainSendPort) {
           message.encryptionKey,
           channelSecret: message.channelSecret,
           ownDisplayName: message.ownDisplayName,
-          peerOhId: message.peerOhId,
-          peerOhEndpoint: message.peerOhEndpoint,
-          peerOhSet: message.peerOhSet
+          counterpartOhId: message.counterpartOhId,
+          counterpartOhEndpoint: message.counterpartOhEndpoint,
+          counterpartOhSet: message.counterpartOhSet
               ?.map(
                 (d) => OHDescriptor(
                   serverEndpoint: d.endpoint,

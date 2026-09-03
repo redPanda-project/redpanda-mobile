@@ -65,7 +65,7 @@ class _JoinChannelScreenState extends ConsumerState<JoinChannelScreen> {
       }
 
       // Register our own OH for this channel in the background so it's
-      // ready when we share our QR code with the peer later.
+      // ready when we share our QR code with the counterpart later.
       unawaited(
         ref
             .read(outboundHandleRepositoryProvider)

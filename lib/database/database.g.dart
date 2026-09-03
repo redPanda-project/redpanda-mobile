@@ -384,44 +384,44 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
     type: DriftSqlType.string,
     requiredDuringInsert: true,
   );
-  static const VerificationMeta _peerOhEndpointMeta = const VerificationMeta(
-    'peerOhEndpoint',
+  static const VerificationMeta _counterpartOhEndpointMeta =
+      const VerificationMeta('counterpartOhEndpoint');
+  @override
+  late final GeneratedColumn<String> counterpartOhEndpoint =
+      GeneratedColumn<String>(
+        'peer_oh_endpoint',
+        aliasedName,
+        true,
+        type: DriftSqlType.string,
+        requiredDuringInsert: false,
+      );
+  static const VerificationMeta _counterpartOhIdMeta = const VerificationMeta(
+    'counterpartOhId',
   );
   @override
-  late final GeneratedColumn<String> peerOhEndpoint = GeneratedColumn<String>(
-    'peer_oh_endpoint',
-    aliasedName,
-    true,
-    type: DriftSqlType.string,
-    requiredDuringInsert: false,
-  );
-  static const VerificationMeta _peerOhIdMeta = const VerificationMeta(
-    'peerOhId',
-  );
-  @override
-  late final GeneratedColumn<String> peerOhId = GeneratedColumn<String>(
+  late final GeneratedColumn<String> counterpartOhId = GeneratedColumn<String>(
     'peer_oh_id',
     aliasedName,
     true,
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
-  static const VerificationMeta _peerOhPublicKeyMeta = const VerificationMeta(
-    'peerOhPublicKey',
+  static const VerificationMeta _counterpartOhPublicKeyMeta =
+      const VerificationMeta('counterpartOhPublicKey');
+  @override
+  late final GeneratedColumn<String> counterpartOhPublicKey =
+      GeneratedColumn<String>(
+        'peer_oh_public_key',
+        aliasedName,
+        true,
+        type: DriftSqlType.string,
+        requiredDuringInsert: false,
+      );
+  static const VerificationMeta _counterpartOhSetMeta = const VerificationMeta(
+    'counterpartOhSet',
   );
   @override
-  late final GeneratedColumn<String> peerOhPublicKey = GeneratedColumn<String>(
-    'peer_oh_public_key',
-    aliasedName,
-    true,
-    type: DriftSqlType.string,
-    requiredDuringInsert: false,
-  );
-  static const VerificationMeta _peerOhSetMeta = const VerificationMeta(
-    'peerOhSet',
-  );
-  @override
-  late final GeneratedColumn<String> peerOhSet = GeneratedColumn<String>(
+  late final GeneratedColumn<String> counterpartOhSet = GeneratedColumn<String>(
     'peer_oh_set',
     aliasedName,
     true,
@@ -469,10 +469,10 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
     channelSecret,
     authPrivateKey,
     authPublicKey,
-    peerOhEndpoint,
-    peerOhId,
-    peerOhPublicKey,
-    peerOhSet,
+    counterpartOhEndpoint,
+    counterpartOhId,
+    counterpartOhPublicKey,
+    counterpartOhSet,
     lastSeen,
     ratchetState,
     pendingRgb,
@@ -547,32 +547,38 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
     }
     if (data.containsKey('peer_oh_endpoint')) {
       context.handle(
-        _peerOhEndpointMeta,
-        peerOhEndpoint.isAcceptableOrUnknown(
+        _counterpartOhEndpointMeta,
+        counterpartOhEndpoint.isAcceptableOrUnknown(
           data['peer_oh_endpoint']!,
-          _peerOhEndpointMeta,
+          _counterpartOhEndpointMeta,
         ),
       );
     }
     if (data.containsKey('peer_oh_id')) {
       context.handle(
-        _peerOhIdMeta,
-        peerOhId.isAcceptableOrUnknown(data['peer_oh_id']!, _peerOhIdMeta),
+        _counterpartOhIdMeta,
+        counterpartOhId.isAcceptableOrUnknown(
+          data['peer_oh_id']!,
+          _counterpartOhIdMeta,
+        ),
       );
     }
     if (data.containsKey('peer_oh_public_key')) {
       context.handle(
-        _peerOhPublicKeyMeta,
-        peerOhPublicKey.isAcceptableOrUnknown(
+        _counterpartOhPublicKeyMeta,
+        counterpartOhPublicKey.isAcceptableOrUnknown(
           data['peer_oh_public_key']!,
-          _peerOhPublicKeyMeta,
+          _counterpartOhPublicKeyMeta,
         ),
       );
     }
     if (data.containsKey('peer_oh_set')) {
       context.handle(
-        _peerOhSetMeta,
-        peerOhSet.isAcceptableOrUnknown(data['peer_oh_set']!, _peerOhSetMeta),
+        _counterpartOhSetMeta,
+        counterpartOhSet.isAcceptableOrUnknown(
+          data['peer_oh_set']!,
+          _counterpartOhSetMeta,
+        ),
       );
     }
     if (data.containsKey('last_seen')) {
@@ -629,19 +635,19 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
         DriftSqlType.string,
         data['${effectivePrefix}auth_public_key'],
       )!,
-      peerOhEndpoint: attachedDatabase.typeMapping.read(
+      counterpartOhEndpoint: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}peer_oh_endpoint'],
       ),
-      peerOhId: attachedDatabase.typeMapping.read(
+      counterpartOhId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}peer_oh_id'],
       ),
-      peerOhPublicKey: attachedDatabase.typeMapping.read(
+      counterpartOhPublicKey: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}peer_oh_public_key'],
       ),
-      peerOhSet: attachedDatabase.typeMapping.read(
+      counterpartOhSet: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}peer_oh_set'],
       ),
@@ -673,10 +679,10 @@ class Channel extends DataClass implements Insertable<Channel> {
   final String? channelSecret;
   final String? authPrivateKey;
   final String authPublicKey;
-  final String? peerOhEndpoint;
-  final String? peerOhId;
-  final String? peerOhPublicKey;
-  final String? peerOhSet;
+  final String? counterpartOhEndpoint;
+  final String? counterpartOhId;
+  final String? counterpartOhPublicKey;
+  final String? counterpartOhSet;
   final DateTime? lastSeen;
   final String? ratchetState;
   final String? pendingRgb;
@@ -687,10 +693,10 @@ class Channel extends DataClass implements Insertable<Channel> {
     this.channelSecret,
     this.authPrivateKey,
     required this.authPublicKey,
-    this.peerOhEndpoint,
-    this.peerOhId,
-    this.peerOhPublicKey,
-    this.peerOhSet,
+    this.counterpartOhEndpoint,
+    this.counterpartOhId,
+    this.counterpartOhPublicKey,
+    this.counterpartOhSet,
     this.lastSeen,
     this.ratchetState,
     this.pendingRgb,
@@ -708,17 +714,17 @@ class Channel extends DataClass implements Insertable<Channel> {
       map['auth_private_key'] = Variable<String>(authPrivateKey);
     }
     map['auth_public_key'] = Variable<String>(authPublicKey);
-    if (!nullToAbsent || peerOhEndpoint != null) {
-      map['peer_oh_endpoint'] = Variable<String>(peerOhEndpoint);
+    if (!nullToAbsent || counterpartOhEndpoint != null) {
+      map['peer_oh_endpoint'] = Variable<String>(counterpartOhEndpoint);
     }
-    if (!nullToAbsent || peerOhId != null) {
-      map['peer_oh_id'] = Variable<String>(peerOhId);
+    if (!nullToAbsent || counterpartOhId != null) {
+      map['peer_oh_id'] = Variable<String>(counterpartOhId);
     }
-    if (!nullToAbsent || peerOhPublicKey != null) {
-      map['peer_oh_public_key'] = Variable<String>(peerOhPublicKey);
+    if (!nullToAbsent || counterpartOhPublicKey != null) {
+      map['peer_oh_public_key'] = Variable<String>(counterpartOhPublicKey);
     }
-    if (!nullToAbsent || peerOhSet != null) {
-      map['peer_oh_set'] = Variable<String>(peerOhSet);
+    if (!nullToAbsent || counterpartOhSet != null) {
+      map['peer_oh_set'] = Variable<String>(counterpartOhSet);
     }
     if (!nullToAbsent || lastSeen != null) {
       map['last_seen'] = Variable<DateTime>(lastSeen);
@@ -744,18 +750,18 @@ class Channel extends DataClass implements Insertable<Channel> {
           ? const Value.absent()
           : Value(authPrivateKey),
       authPublicKey: Value(authPublicKey),
-      peerOhEndpoint: peerOhEndpoint == null && nullToAbsent
+      counterpartOhEndpoint: counterpartOhEndpoint == null && nullToAbsent
           ? const Value.absent()
-          : Value(peerOhEndpoint),
-      peerOhId: peerOhId == null && nullToAbsent
+          : Value(counterpartOhEndpoint),
+      counterpartOhId: counterpartOhId == null && nullToAbsent
           ? const Value.absent()
-          : Value(peerOhId),
-      peerOhPublicKey: peerOhPublicKey == null && nullToAbsent
+          : Value(counterpartOhId),
+      counterpartOhPublicKey: counterpartOhPublicKey == null && nullToAbsent
           ? const Value.absent()
-          : Value(peerOhPublicKey),
-      peerOhSet: peerOhSet == null && nullToAbsent
+          : Value(counterpartOhPublicKey),
+      counterpartOhSet: counterpartOhSet == null && nullToAbsent
           ? const Value.absent()
-          : Value(peerOhSet),
+          : Value(counterpartOhSet),
       lastSeen: lastSeen == null && nullToAbsent
           ? const Value.absent()
           : Value(lastSeen),
@@ -780,10 +786,14 @@ class Channel extends DataClass implements Insertable<Channel> {
       channelSecret: serializer.fromJson<String?>(json['channelSecret']),
       authPrivateKey: serializer.fromJson<String?>(json['authPrivateKey']),
       authPublicKey: serializer.fromJson<String>(json['authPublicKey']),
-      peerOhEndpoint: serializer.fromJson<String?>(json['peerOhEndpoint']),
-      peerOhId: serializer.fromJson<String?>(json['peerOhId']),
-      peerOhPublicKey: serializer.fromJson<String?>(json['peerOhPublicKey']),
-      peerOhSet: serializer.fromJson<String?>(json['peerOhSet']),
+      counterpartOhEndpoint: serializer.fromJson<String?>(
+        json['counterpartOhEndpoint'],
+      ),
+      counterpartOhId: serializer.fromJson<String?>(json['counterpartOhId']),
+      counterpartOhPublicKey: serializer.fromJson<String?>(
+        json['counterpartOhPublicKey'],
+      ),
+      counterpartOhSet: serializer.fromJson<String?>(json['counterpartOhSet']),
       lastSeen: serializer.fromJson<DateTime?>(json['lastSeen']),
       ratchetState: serializer.fromJson<String?>(json['ratchetState']),
       pendingRgb: serializer.fromJson<String?>(json['pendingRgb']),
@@ -799,10 +809,14 @@ class Channel extends DataClass implements Insertable<Channel> {
       'channelSecret': serializer.toJson<String?>(channelSecret),
       'authPrivateKey': serializer.toJson<String?>(authPrivateKey),
       'authPublicKey': serializer.toJson<String>(authPublicKey),
-      'peerOhEndpoint': serializer.toJson<String?>(peerOhEndpoint),
-      'peerOhId': serializer.toJson<String?>(peerOhId),
-      'peerOhPublicKey': serializer.toJson<String?>(peerOhPublicKey),
-      'peerOhSet': serializer.toJson<String?>(peerOhSet),
+      'counterpartOhEndpoint': serializer.toJson<String?>(
+        counterpartOhEndpoint,
+      ),
+      'counterpartOhId': serializer.toJson<String?>(counterpartOhId),
+      'counterpartOhPublicKey': serializer.toJson<String?>(
+        counterpartOhPublicKey,
+      ),
+      'counterpartOhSet': serializer.toJson<String?>(counterpartOhSet),
       'lastSeen': serializer.toJson<DateTime?>(lastSeen),
       'ratchetState': serializer.toJson<String?>(ratchetState),
       'pendingRgb': serializer.toJson<String?>(pendingRgb),
@@ -816,10 +830,10 @@ class Channel extends DataClass implements Insertable<Channel> {
     Value<String?> channelSecret = const Value.absent(),
     Value<String?> authPrivateKey = const Value.absent(),
     String? authPublicKey,
-    Value<String?> peerOhEndpoint = const Value.absent(),
-    Value<String?> peerOhId = const Value.absent(),
-    Value<String?> peerOhPublicKey = const Value.absent(),
-    Value<String?> peerOhSet = const Value.absent(),
+    Value<String?> counterpartOhEndpoint = const Value.absent(),
+    Value<String?> counterpartOhId = const Value.absent(),
+    Value<String?> counterpartOhPublicKey = const Value.absent(),
+    Value<String?> counterpartOhSet = const Value.absent(),
     Value<DateTime?> lastSeen = const Value.absent(),
     Value<String?> ratchetState = const Value.absent(),
     Value<String?> pendingRgb = const Value.absent(),
@@ -834,14 +848,18 @@ class Channel extends DataClass implements Insertable<Channel> {
         ? authPrivateKey.value
         : this.authPrivateKey,
     authPublicKey: authPublicKey ?? this.authPublicKey,
-    peerOhEndpoint: peerOhEndpoint.present
-        ? peerOhEndpoint.value
-        : this.peerOhEndpoint,
-    peerOhId: peerOhId.present ? peerOhId.value : this.peerOhId,
-    peerOhPublicKey: peerOhPublicKey.present
-        ? peerOhPublicKey.value
-        : this.peerOhPublicKey,
-    peerOhSet: peerOhSet.present ? peerOhSet.value : this.peerOhSet,
+    counterpartOhEndpoint: counterpartOhEndpoint.present
+        ? counterpartOhEndpoint.value
+        : this.counterpartOhEndpoint,
+    counterpartOhId: counterpartOhId.present
+        ? counterpartOhId.value
+        : this.counterpartOhId,
+    counterpartOhPublicKey: counterpartOhPublicKey.present
+        ? counterpartOhPublicKey.value
+        : this.counterpartOhPublicKey,
+    counterpartOhSet: counterpartOhSet.present
+        ? counterpartOhSet.value
+        : this.counterpartOhSet,
     lastSeen: lastSeen.present ? lastSeen.value : this.lastSeen,
     ratchetState: ratchetState.present ? ratchetState.value : this.ratchetState,
     pendingRgb: pendingRgb.present ? pendingRgb.value : this.pendingRgb,
@@ -862,14 +880,18 @@ class Channel extends DataClass implements Insertable<Channel> {
       authPublicKey: data.authPublicKey.present
           ? data.authPublicKey.value
           : this.authPublicKey,
-      peerOhEndpoint: data.peerOhEndpoint.present
-          ? data.peerOhEndpoint.value
-          : this.peerOhEndpoint,
-      peerOhId: data.peerOhId.present ? data.peerOhId.value : this.peerOhId,
-      peerOhPublicKey: data.peerOhPublicKey.present
-          ? data.peerOhPublicKey.value
-          : this.peerOhPublicKey,
-      peerOhSet: data.peerOhSet.present ? data.peerOhSet.value : this.peerOhSet,
+      counterpartOhEndpoint: data.counterpartOhEndpoint.present
+          ? data.counterpartOhEndpoint.value
+          : this.counterpartOhEndpoint,
+      counterpartOhId: data.counterpartOhId.present
+          ? data.counterpartOhId.value
+          : this.counterpartOhId,
+      counterpartOhPublicKey: data.counterpartOhPublicKey.present
+          ? data.counterpartOhPublicKey.value
+          : this.counterpartOhPublicKey,
+      counterpartOhSet: data.counterpartOhSet.present
+          ? data.counterpartOhSet.value
+          : this.counterpartOhSet,
       lastSeen: data.lastSeen.present ? data.lastSeen.value : this.lastSeen,
       ratchetState: data.ratchetState.present
           ? data.ratchetState.value
@@ -889,10 +911,10 @@ class Channel extends DataClass implements Insertable<Channel> {
           ..write('channelSecret: $channelSecret, ')
           ..write('authPrivateKey: $authPrivateKey, ')
           ..write('authPublicKey: $authPublicKey, ')
-          ..write('peerOhEndpoint: $peerOhEndpoint, ')
-          ..write('peerOhId: $peerOhId, ')
-          ..write('peerOhPublicKey: $peerOhPublicKey, ')
-          ..write('peerOhSet: $peerOhSet, ')
+          ..write('counterpartOhEndpoint: $counterpartOhEndpoint, ')
+          ..write('counterpartOhId: $counterpartOhId, ')
+          ..write('counterpartOhPublicKey: $counterpartOhPublicKey, ')
+          ..write('counterpartOhSet: $counterpartOhSet, ')
           ..write('lastSeen: $lastSeen, ')
           ..write('ratchetState: $ratchetState, ')
           ..write('pendingRgb: $pendingRgb')
@@ -908,10 +930,10 @@ class Channel extends DataClass implements Insertable<Channel> {
     channelSecret,
     authPrivateKey,
     authPublicKey,
-    peerOhEndpoint,
-    peerOhId,
-    peerOhPublicKey,
-    peerOhSet,
+    counterpartOhEndpoint,
+    counterpartOhId,
+    counterpartOhPublicKey,
+    counterpartOhSet,
     lastSeen,
     ratchetState,
     pendingRgb,
@@ -926,10 +948,10 @@ class Channel extends DataClass implements Insertable<Channel> {
           other.channelSecret == this.channelSecret &&
           other.authPrivateKey == this.authPrivateKey &&
           other.authPublicKey == this.authPublicKey &&
-          other.peerOhEndpoint == this.peerOhEndpoint &&
-          other.peerOhId == this.peerOhId &&
-          other.peerOhPublicKey == this.peerOhPublicKey &&
-          other.peerOhSet == this.peerOhSet &&
+          other.counterpartOhEndpoint == this.counterpartOhEndpoint &&
+          other.counterpartOhId == this.counterpartOhId &&
+          other.counterpartOhPublicKey == this.counterpartOhPublicKey &&
+          other.counterpartOhSet == this.counterpartOhSet &&
           other.lastSeen == this.lastSeen &&
           other.ratchetState == this.ratchetState &&
           other.pendingRgb == this.pendingRgb);
@@ -942,10 +964,10 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
   final Value<String?> channelSecret;
   final Value<String?> authPrivateKey;
   final Value<String> authPublicKey;
-  final Value<String?> peerOhEndpoint;
-  final Value<String?> peerOhId;
-  final Value<String?> peerOhPublicKey;
-  final Value<String?> peerOhSet;
+  final Value<String?> counterpartOhEndpoint;
+  final Value<String?> counterpartOhId;
+  final Value<String?> counterpartOhPublicKey;
+  final Value<String?> counterpartOhSet;
   final Value<DateTime?> lastSeen;
   final Value<String?> ratchetState;
   final Value<String?> pendingRgb;
@@ -957,10 +979,10 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     this.channelSecret = const Value.absent(),
     this.authPrivateKey = const Value.absent(),
     this.authPublicKey = const Value.absent(),
-    this.peerOhEndpoint = const Value.absent(),
-    this.peerOhId = const Value.absent(),
-    this.peerOhPublicKey = const Value.absent(),
-    this.peerOhSet = const Value.absent(),
+    this.counterpartOhEndpoint = const Value.absent(),
+    this.counterpartOhId = const Value.absent(),
+    this.counterpartOhPublicKey = const Value.absent(),
+    this.counterpartOhSet = const Value.absent(),
     this.lastSeen = const Value.absent(),
     this.ratchetState = const Value.absent(),
     this.pendingRgb = const Value.absent(),
@@ -973,10 +995,10 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     this.channelSecret = const Value.absent(),
     this.authPrivateKey = const Value.absent(),
     required String authPublicKey,
-    this.peerOhEndpoint = const Value.absent(),
-    this.peerOhId = const Value.absent(),
-    this.peerOhPublicKey = const Value.absent(),
-    this.peerOhSet = const Value.absent(),
+    this.counterpartOhEndpoint = const Value.absent(),
+    this.counterpartOhId = const Value.absent(),
+    this.counterpartOhPublicKey = const Value.absent(),
+    this.counterpartOhSet = const Value.absent(),
     this.lastSeen = const Value.absent(),
     this.ratchetState = const Value.absent(),
     this.pendingRgb = const Value.absent(),
@@ -992,10 +1014,10 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     Expression<String>? channelSecret,
     Expression<String>? authPrivateKey,
     Expression<String>? authPublicKey,
-    Expression<String>? peerOhEndpoint,
-    Expression<String>? peerOhId,
-    Expression<String>? peerOhPublicKey,
-    Expression<String>? peerOhSet,
+    Expression<String>? counterpartOhEndpoint,
+    Expression<String>? counterpartOhId,
+    Expression<String>? counterpartOhPublicKey,
+    Expression<String>? counterpartOhSet,
     Expression<DateTime>? lastSeen,
     Expression<String>? ratchetState,
     Expression<String>? pendingRgb,
@@ -1008,10 +1030,12 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
       if (channelSecret != null) 'channel_secret': channelSecret,
       if (authPrivateKey != null) 'auth_private_key': authPrivateKey,
       if (authPublicKey != null) 'auth_public_key': authPublicKey,
-      if (peerOhEndpoint != null) 'peer_oh_endpoint': peerOhEndpoint,
-      if (peerOhId != null) 'peer_oh_id': peerOhId,
-      if (peerOhPublicKey != null) 'peer_oh_public_key': peerOhPublicKey,
-      if (peerOhSet != null) 'peer_oh_set': peerOhSet,
+      if (counterpartOhEndpoint != null)
+        'peer_oh_endpoint': counterpartOhEndpoint,
+      if (counterpartOhId != null) 'peer_oh_id': counterpartOhId,
+      if (counterpartOhPublicKey != null)
+        'peer_oh_public_key': counterpartOhPublicKey,
+      if (counterpartOhSet != null) 'peer_oh_set': counterpartOhSet,
       if (lastSeen != null) 'last_seen': lastSeen,
       if (ratchetState != null) 'ratchet_state': ratchetState,
       if (pendingRgb != null) 'pending_rgb': pendingRgb,
@@ -1026,10 +1050,10 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     Value<String?>? channelSecret,
     Value<String?>? authPrivateKey,
     Value<String>? authPublicKey,
-    Value<String?>? peerOhEndpoint,
-    Value<String?>? peerOhId,
-    Value<String?>? peerOhPublicKey,
-    Value<String?>? peerOhSet,
+    Value<String?>? counterpartOhEndpoint,
+    Value<String?>? counterpartOhId,
+    Value<String?>? counterpartOhPublicKey,
+    Value<String?>? counterpartOhSet,
     Value<DateTime?>? lastSeen,
     Value<String?>? ratchetState,
     Value<String?>? pendingRgb,
@@ -1042,10 +1066,12 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
       channelSecret: channelSecret ?? this.channelSecret,
       authPrivateKey: authPrivateKey ?? this.authPrivateKey,
       authPublicKey: authPublicKey ?? this.authPublicKey,
-      peerOhEndpoint: peerOhEndpoint ?? this.peerOhEndpoint,
-      peerOhId: peerOhId ?? this.peerOhId,
-      peerOhPublicKey: peerOhPublicKey ?? this.peerOhPublicKey,
-      peerOhSet: peerOhSet ?? this.peerOhSet,
+      counterpartOhEndpoint:
+          counterpartOhEndpoint ?? this.counterpartOhEndpoint,
+      counterpartOhId: counterpartOhId ?? this.counterpartOhId,
+      counterpartOhPublicKey:
+          counterpartOhPublicKey ?? this.counterpartOhPublicKey,
+      counterpartOhSet: counterpartOhSet ?? this.counterpartOhSet,
       lastSeen: lastSeen ?? this.lastSeen,
       ratchetState: ratchetState ?? this.ratchetState,
       pendingRgb: pendingRgb ?? this.pendingRgb,
@@ -1074,17 +1100,19 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     if (authPublicKey.present) {
       map['auth_public_key'] = Variable<String>(authPublicKey.value);
     }
-    if (peerOhEndpoint.present) {
-      map['peer_oh_endpoint'] = Variable<String>(peerOhEndpoint.value);
+    if (counterpartOhEndpoint.present) {
+      map['peer_oh_endpoint'] = Variable<String>(counterpartOhEndpoint.value);
     }
-    if (peerOhId.present) {
-      map['peer_oh_id'] = Variable<String>(peerOhId.value);
+    if (counterpartOhId.present) {
+      map['peer_oh_id'] = Variable<String>(counterpartOhId.value);
     }
-    if (peerOhPublicKey.present) {
-      map['peer_oh_public_key'] = Variable<String>(peerOhPublicKey.value);
+    if (counterpartOhPublicKey.present) {
+      map['peer_oh_public_key'] = Variable<String>(
+        counterpartOhPublicKey.value,
+      );
     }
-    if (peerOhSet.present) {
-      map['peer_oh_set'] = Variable<String>(peerOhSet.value);
+    if (counterpartOhSet.present) {
+      map['peer_oh_set'] = Variable<String>(counterpartOhSet.value);
     }
     if (lastSeen.present) {
       map['last_seen'] = Variable<DateTime>(lastSeen.value);
@@ -1110,10 +1138,10 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
           ..write('channelSecret: $channelSecret, ')
           ..write('authPrivateKey: $authPrivateKey, ')
           ..write('authPublicKey: $authPublicKey, ')
-          ..write('peerOhEndpoint: $peerOhEndpoint, ')
-          ..write('peerOhId: $peerOhId, ')
-          ..write('peerOhPublicKey: $peerOhPublicKey, ')
-          ..write('peerOhSet: $peerOhSet, ')
+          ..write('counterpartOhEndpoint: $counterpartOhEndpoint, ')
+          ..write('counterpartOhId: $counterpartOhId, ')
+          ..write('counterpartOhPublicKey: $counterpartOhPublicKey, ')
+          ..write('counterpartOhSet: $counterpartOhSet, ')
           ..write('lastSeen: $lastSeen, ')
           ..write('ratchetState: $ratchetState, ')
           ..write('pendingRgb: $pendingRgb, ')
@@ -5849,10 +5877,10 @@ typedef $$ChannelsTableCreateCompanionBuilder =
       Value<String?> channelSecret,
       Value<String?> authPrivateKey,
       required String authPublicKey,
-      Value<String?> peerOhEndpoint,
-      Value<String?> peerOhId,
-      Value<String?> peerOhPublicKey,
-      Value<String?> peerOhSet,
+      Value<String?> counterpartOhEndpoint,
+      Value<String?> counterpartOhId,
+      Value<String?> counterpartOhPublicKey,
+      Value<String?> counterpartOhSet,
       Value<DateTime?> lastSeen,
       Value<String?> ratchetState,
       Value<String?> pendingRgb,
@@ -5866,10 +5894,10 @@ typedef $$ChannelsTableUpdateCompanionBuilder =
       Value<String?> channelSecret,
       Value<String?> authPrivateKey,
       Value<String> authPublicKey,
-      Value<String?> peerOhEndpoint,
-      Value<String?> peerOhId,
-      Value<String?> peerOhPublicKey,
-      Value<String?> peerOhSet,
+      Value<String?> counterpartOhEndpoint,
+      Value<String?> counterpartOhId,
+      Value<String?> counterpartOhPublicKey,
+      Value<String?> counterpartOhSet,
       Value<DateTime?> lastSeen,
       Value<String?> ratchetState,
       Value<String?> pendingRgb,
@@ -5959,23 +5987,23 @@ class $$ChannelsTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
-  ColumnFilters<String> get peerOhEndpoint => $composableBuilder(
-    column: $table.peerOhEndpoint,
+  ColumnFilters<String> get counterpartOhEndpoint => $composableBuilder(
+    column: $table.counterpartOhEndpoint,
     builder: (column) => ColumnFilters(column),
   );
 
-  ColumnFilters<String> get peerOhId => $composableBuilder(
-    column: $table.peerOhId,
+  ColumnFilters<String> get counterpartOhId => $composableBuilder(
+    column: $table.counterpartOhId,
     builder: (column) => ColumnFilters(column),
   );
 
-  ColumnFilters<String> get peerOhPublicKey => $composableBuilder(
-    column: $table.peerOhPublicKey,
+  ColumnFilters<String> get counterpartOhPublicKey => $composableBuilder(
+    column: $table.counterpartOhPublicKey,
     builder: (column) => ColumnFilters(column),
   );
 
-  ColumnFilters<String> get peerOhSet => $composableBuilder(
-    column: $table.peerOhSet,
+  ColumnFilters<String> get counterpartOhSet => $composableBuilder(
+    column: $table.counterpartOhSet,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -6084,23 +6112,23 @@ class $$ChannelsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
-  ColumnOrderings<String> get peerOhEndpoint => $composableBuilder(
-    column: $table.peerOhEndpoint,
+  ColumnOrderings<String> get counterpartOhEndpoint => $composableBuilder(
+    column: $table.counterpartOhEndpoint,
     builder: (column) => ColumnOrderings(column),
   );
 
-  ColumnOrderings<String> get peerOhId => $composableBuilder(
-    column: $table.peerOhId,
+  ColumnOrderings<String> get counterpartOhId => $composableBuilder(
+    column: $table.counterpartOhId,
     builder: (column) => ColumnOrderings(column),
   );
 
-  ColumnOrderings<String> get peerOhPublicKey => $composableBuilder(
-    column: $table.peerOhPublicKey,
+  ColumnOrderings<String> get counterpartOhPublicKey => $composableBuilder(
+    column: $table.counterpartOhPublicKey,
     builder: (column) => ColumnOrderings(column),
   );
 
-  ColumnOrderings<String> get peerOhSet => $composableBuilder(
-    column: $table.peerOhSet,
+  ColumnOrderings<String> get counterpartOhSet => $composableBuilder(
+    column: $table.counterpartOhSet,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -6155,21 +6183,25 @@ class $$ChannelsTableAnnotationComposer
     builder: (column) => column,
   );
 
-  GeneratedColumn<String> get peerOhEndpoint => $composableBuilder(
-    column: $table.peerOhEndpoint,
+  GeneratedColumn<String> get counterpartOhEndpoint => $composableBuilder(
+    column: $table.counterpartOhEndpoint,
     builder: (column) => column,
   );
 
-  GeneratedColumn<String> get peerOhId =>
-      $composableBuilder(column: $table.peerOhId, builder: (column) => column);
-
-  GeneratedColumn<String> get peerOhPublicKey => $composableBuilder(
-    column: $table.peerOhPublicKey,
+  GeneratedColumn<String> get counterpartOhId => $composableBuilder(
+    column: $table.counterpartOhId,
     builder: (column) => column,
   );
 
-  GeneratedColumn<String> get peerOhSet =>
-      $composableBuilder(column: $table.peerOhSet, builder: (column) => column);
+  GeneratedColumn<String> get counterpartOhPublicKey => $composableBuilder(
+    column: $table.counterpartOhPublicKey,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get counterpartOhSet => $composableBuilder(
+    column: $table.counterpartOhSet,
+    builder: (column) => column,
+  );
 
   GeneratedColumn<DateTime> get lastSeen =>
       $composableBuilder(column: $table.lastSeen, builder: (column) => column);
@@ -6269,10 +6301,10 @@ class $$ChannelsTableTableManager
                 Value<String?> channelSecret = const Value.absent(),
                 Value<String?> authPrivateKey = const Value.absent(),
                 Value<String> authPublicKey = const Value.absent(),
-                Value<String?> peerOhEndpoint = const Value.absent(),
-                Value<String?> peerOhId = const Value.absent(),
-                Value<String?> peerOhPublicKey = const Value.absent(),
-                Value<String?> peerOhSet = const Value.absent(),
+                Value<String?> counterpartOhEndpoint = const Value.absent(),
+                Value<String?> counterpartOhId = const Value.absent(),
+                Value<String?> counterpartOhPublicKey = const Value.absent(),
+                Value<String?> counterpartOhSet = const Value.absent(),
                 Value<DateTime?> lastSeen = const Value.absent(),
                 Value<String?> ratchetState = const Value.absent(),
                 Value<String?> pendingRgb = const Value.absent(),
@@ -6284,10 +6316,10 @@ class $$ChannelsTableTableManager
                 channelSecret: channelSecret,
                 authPrivateKey: authPrivateKey,
                 authPublicKey: authPublicKey,
-                peerOhEndpoint: peerOhEndpoint,
-                peerOhId: peerOhId,
-                peerOhPublicKey: peerOhPublicKey,
-                peerOhSet: peerOhSet,
+                counterpartOhEndpoint: counterpartOhEndpoint,
+                counterpartOhId: counterpartOhId,
+                counterpartOhPublicKey: counterpartOhPublicKey,
+                counterpartOhSet: counterpartOhSet,
                 lastSeen: lastSeen,
                 ratchetState: ratchetState,
                 pendingRgb: pendingRgb,
@@ -6301,10 +6333,10 @@ class $$ChannelsTableTableManager
                 Value<String?> channelSecret = const Value.absent(),
                 Value<String?> authPrivateKey = const Value.absent(),
                 required String authPublicKey,
-                Value<String?> peerOhEndpoint = const Value.absent(),
-                Value<String?> peerOhId = const Value.absent(),
-                Value<String?> peerOhPublicKey = const Value.absent(),
-                Value<String?> peerOhSet = const Value.absent(),
+                Value<String?> counterpartOhEndpoint = const Value.absent(),
+                Value<String?> counterpartOhId = const Value.absent(),
+                Value<String?> counterpartOhPublicKey = const Value.absent(),
+                Value<String?> counterpartOhSet = const Value.absent(),
                 Value<DateTime?> lastSeen = const Value.absent(),
                 Value<String?> ratchetState = const Value.absent(),
                 Value<String?> pendingRgb = const Value.absent(),
@@ -6316,10 +6348,10 @@ class $$ChannelsTableTableManager
                 channelSecret: channelSecret,
                 authPrivateKey: authPrivateKey,
                 authPublicKey: authPublicKey,
-                peerOhEndpoint: peerOhEndpoint,
-                peerOhId: peerOhId,
-                peerOhPublicKey: peerOhPublicKey,
-                peerOhSet: peerOhSet,
+                counterpartOhEndpoint: counterpartOhEndpoint,
+                counterpartOhId: counterpartOhId,
+                counterpartOhPublicKey: counterpartOhPublicKey,
+                counterpartOhSet: counterpartOhSet,
                 lastSeen: lastSeen,
                 ratchetState: ratchetState,
                 pendingRgb: pendingRgb,

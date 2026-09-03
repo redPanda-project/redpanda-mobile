@@ -21,7 +21,7 @@ import 'package:redpanda_light_client/redpanda_light_client.dart' hide Channel;
 ///
 /// - persists fetched messages (deduplicated by network message id),
 /// - persists OH fetch cursors and renewed expiries,
-/// - persists ratchet/garlic session state, own- and peer-OH sets, node
+/// - persists ratchet/garlic session state, own- and counterpart-OH sets, node
 ///   scores and group state, and routes routing-/channel-ACKs into the
 ///   outbox (T112: the delivery lifecycle is owned by [OutboxService], this
 ///   service only owns the subscription that carries the acks),
@@ -59,7 +59,7 @@ class MessageSyncService {
   /// The ONE persistence chain (T110): every state update is written in
   /// emission order. Replaces the four per-kind future chains (ratchet,
   /// garlic, node scores, group state) and the fire-and-forget writes for
-  /// mailbox/own-OH/peer-OH/ACK updates — a slow earlier write can no longer
+  /// mailbox/own-OH/counterpart-OH/ACK updates — a slow earlier write can no longer
   /// be overtaken by a newer one, within a kind or across kinds.
   ///
   /// Deliberate trade-off: this also serializes writes that used to run
@@ -159,8 +159,8 @@ class MessageSyncService {
         await handleNodeScores(update.scores);
       case OwnOhSetUpdate():
         await handleOhRegistrationUpdate(update);
-      case PeerOhUpdate():
-        await handlePeerOhUpdate(update);
+      case CounterpartOhUpdate():
+        await handleCounterpartOhUpdate(update);
       case GroupStateUpdate():
         await _groups.applyStateUpdate(update);
       default:
@@ -197,7 +197,7 @@ class MessageSyncService {
       messageId: msg.id,
       conversationId: channelId,
       // MS08: group messages carry their authenticated sender; 1:1 messages
-      // keep the channel id as sender (the peer).
+      // keep the channel id as sender (the counterpart).
       senderId: msg.senderMemberIdHex ?? channelId,
       content: msg.content,
       timestamp: DateTime.fromMillisecondsSinceEpoch(msg.receivedAtMs),
@@ -234,7 +234,7 @@ class MessageSyncService {
   /// Persists the partner's full mailbox set announced in-band via `oh_update`
   /// (T42 multi-OH) so the deposit fan-out keeps reaching every mailbox after
   /// a restart. The primary (first) also feeds the single-target columns.
-  Future<void> handlePeerOhUpdate(PeerOhUpdate update) async {
+  Future<void> handleCounterpartOhUpdate(CounterpartOhUpdate update) async {
     if (update.descriptors.isEmpty) return;
     final primary = update.descriptors.first;
     final setJson = jsonEncode(
@@ -244,17 +244,17 @@ class MessageSyncService {
       _db.channels,
     )..where((c) => c.uuid.equals(update.channelId))).write(
       ChannelsCompanion(
-        peerOhEndpoint: Value(primary.serverEndpoint),
-        peerOhId: Value(HEX.encode(primary.handleId)),
-        peerOhPublicKey: Value(HEX.encode(primary.authPublicKey)),
-        peerOhSet: Value(setJson),
+        counterpartOhEndpoint: Value(primary.serverEndpoint),
+        counterpartOhId: Value(HEX.encode(primary.handleId)),
+        counterpartOhPublicKey: Value(HEX.encode(primary.authPublicKey)),
+        counterpartOhSet: Value(setJson),
       ),
     );
   }
 
-  /// Decodes the persisted peer OH set JSON (T42) into descriptors, or null
+  /// Decodes the persisted counterpart OH set JSON (T42) into descriptors, or null
   /// when absent/malformed (the client then falls back to the primary OH).
-  static List<OHDescriptor>? decodePeerOhSet(String? json) {
+  static List<OHDescriptor>? decodeCounterpartOhSet(String? json) {
     if (json == null || json.isEmpty) return null;
     try {
       final decoded = jsonDecode(json);
@@ -402,11 +402,13 @@ class MessageSyncService {
       channelSecret: channel.channelSecret != null
           ? HEX.decode(channel.channelSecret!)
           : null,
-      peerOhId: channel.peerOhId != null ? HEX.decode(channel.peerOhId!) : null,
-      peerOhEndpoint: channel.peerOhEndpoint,
-      // T42: restore the full persisted peer OH set so the deposit fan-out
+      counterpartOhId: channel.counterpartOhId != null
+          ? HEX.decode(channel.counterpartOhId!)
+          : null,
+      counterpartOhEndpoint: channel.counterpartOhEndpoint,
+      // T42: restore the full persisted counterpart OH set so the deposit fan-out
       // survives a restart (the partner only re-announces on change).
-      peerOhSet: decodePeerOhSet(channel.peerOhSet),
+      counterpartOhSet: decodeCounterpartOhSet(channel.counterpartOhSet),
       // The creator is the device holding the channel auth private key;
       // a device that joined via QR code holds only the public key.
       isChannelCreator: channel.authPrivateKey != null,
