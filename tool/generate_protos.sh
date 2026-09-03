@@ -11,7 +11,8 @@
 #
 # Requirements:
 #   * protoc — on PATH, or $PROTOC, or ~/tools/protoc/bin/protoc.
-#     Any 3.x/2x.x release works; only the descriptor format matters.
+#     These are proto3 schemas, so protoc >= 3.0 is required; any current
+#     release (the 3.x line or the later 21+ versioning, e.g. 25.1) works.
 #   * protoc_plugin — already a dev_dependency of the package, invoked through
 #     `dart run protoc_plugin`, so its version is pinned by pubspec.lock.
 #   * flutter/dart on PATH (local toolchain: export PATH=~/tools/flutter/bin:$PATH)

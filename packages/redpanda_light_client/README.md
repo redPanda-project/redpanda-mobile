@@ -66,7 +66,7 @@ The wire schemas are **owned by the backend**, `redPanda-project/redpandaj`
 vendored copies and `lib/src/generated/` is machine-generated from them — both
 are committed so that CI and `flutter pub get` never need `protoc`.
 
-**Never hand-edit `protos/*.proto` or `lib/src/generated/*.pb*.dart.`** A
+**Never hand-edit `protos/*.proto` or `lib/src/generated/*.pb*.dart`.** A
 hand-maintained copy is exactly how the old `commands.proto` ended up three
 milestones behind the generated code it was supposed to describe (DDD review
 2026-08-31 §6 P0, task T107).

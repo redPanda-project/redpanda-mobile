@@ -66,19 +66,39 @@ LOCK="$VENDOR_DIR/UPSTREAM.lock"
 
 [ -d "$VENDOR_DIR" ] || die "vendor directory not found: $VENDOR_DIR"
 
+# GNU coreutils ships `sha256sum`, macOS only `shasum`. Both print
+# "<hash>  <name>"; `sha256sum -c` is deliberately NOT used because its
+# --quiet/--ignore-missing flags are GNU-only.
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256_of() { sha256sum "$@"; }
+elif command -v shasum >/dev/null 2>&1; then
+  sha256_of() { shasum -a 256 "$@"; }
+else
+  die "neither sha256sum nor shasum found — cannot hash the vendored protos"
+fi
+
+# Reads the "<sha>  <name>" lines of UPSTREAM.lock (comments skipped).
+lock_hash_of() {
+  awk -v want="$1" '
+    /^#/ { next }
+    NF >= 2 { name = $2; if (name == want) { print $1; exit } }
+  ' "$LOCK"
+}
+
 # --- (A) integrity: vendored files vs. the checked-in hashes ----------------
 check_integrity() {
   [ -f "$LOCK" ] || die "missing $LOCK — run tool/sync_protos.sh to create it"
-  local f
+  local f expected actual
   for f in "${PROTO_FILES[@]}"; do
     [ -f "$VENDOR_DIR/$f" ] || die "vendored proto missing: protos/$f"
-    grep -q "  $f\$" "$LOCK" || die "protos/$f has no entry in UPSTREAM.lock"
-  done
-  if ! (cd "$VENDOR_DIR" && sha256sum --quiet -c "$(basename "$LOCK")"); then
-    die "vendored protos do not match UPSTREAM.lock — they were edited by hand.
+    expected="$(lock_hash_of "$f")"
+    [ -n "$expected" ] || die "protos/$f has no entry in UPSTREAM.lock"
+    actual="$(cd "$VENDOR_DIR" && sha256_of "$f" | awk '{print $1}')"
+    [ "$actual" = "$expected" ] || die "protos/$f does not match UPSTREAM.lock
+     (expected $expected, got $actual) — it was edited by hand.
      The schemas are owned by $REPO; edit them there, then re-run
      tool/sync_protos.sh && tool/generate_protos.sh"
-  fi
+  done
   echo "protos: integrity OK (${#PROTO_FILES[@]} files match UPSTREAM.lock)"
 }
 
@@ -104,7 +124,9 @@ stage_from_dir() {
     UPSTREAM_COMMIT="$sha"
     SOURCE_DESC="$dir @ ${sha:0:12} ($branch)$dirty"
   else
-    UPSTREAM_COMMIT="unknown"
+    # No SHA to pin. Fine for --check (which only compares content), fatal for a
+    # sync — see the guard before write_lock below.
+    UPSTREAM_COMMIT=""
     SOURCE_DESC="$dir (not a git checkout)"
   fi
   return 0
@@ -151,7 +173,7 @@ write_lock() {
     echo "# Sync: tool/sync_protos.sh   Verify: tool/sync_protos.sh --check"
     echo "# Codegen after a sync: tool/generate_protos.sh"
     echo "# upstream-commit: $UPSTREAM_COMMIT"
-    (cd "$VENDOR_DIR" && sha256sum "${PROTO_FILES[@]}")
+    (cd "$VENDOR_DIR" && sha256_of "${PROTO_FILES[@]}")
   } > "$LOCK"
 }
 
@@ -183,6 +205,10 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
 fi
 
 resolve_source || die "no proto source found (tried --source/\$REDPANDAJ_DIR/../redpandaj/GitHub)"
+# A lock without a real commit SHA is rejected by vendored_protos_test.dart, so
+# refuse to write one instead of producing a lock that fails CI.
+[ -n "$UPSTREAM_COMMIT" ] || die "$SOURCE_DESC has no commit to pin.
+     Use a real redpandaj clone, or --ref <tag|branch|sha> to fetch from GitHub."
 changed=0
 for f in "${PROTO_FILES[@]}"; do
   if ! cmp -s "$VENDOR_DIR/$f" "$STAGE/$f" 2>/dev/null; then changed=1; fi
