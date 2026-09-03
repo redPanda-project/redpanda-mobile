@@ -339,8 +339,14 @@ class MessageRepository {
   /// clearing the retry bookkeeping. Used by the "send again" action on
   /// failed/stuck messages — the user explicitly asked, so the backoff
   /// window starts over.
-  Future<void> resetForImmediateRetry(int id) async {
-    await updateMessageStatus(
+  ///
+  /// Returns false when the message moved on in the meantime and must NOT be
+  /// re-queued: the UI decides whether to retry from a snapshot (the details
+  /// sheet), so an ACK can land between rendering the button and the tap.
+  /// Before T112 this was an unconditional write and would have re-sent a
+  /// message the recipient already had.
+  Future<bool> resetForImmediateRetry(int id) {
+    return updateMessageStatus(
       id,
       MessageStatus.pending,
       retryCount: const drift.Value(0),
@@ -381,18 +387,27 @@ class MessageRepository {
   /// exponential backoff; a larger penalty widens the next backoff window
   /// without a schema change (used for QUOTA_EXCEEDED, where an immediate
   /// retry is pointless until the recipient fetched their mailbox).
+  ///
+  /// T112: touches only a row that is still `pending`. The bookkeeping does
+  /// not change the status, but a message the recipient acknowledged while
+  /// this attempt was in flight is done — stamping a new backoff window on
+  /// a `routed`/`delivered` row would contradict "delivered is terminal"
+  /// even though the status column itself stays put.
   Future<void> markRetryAttempt(int id, {int penalty = 1}) async {
     final msg = await (_db.select(
       _db.messages,
     )..where((t) => t.id.equals(id))).getSingleOrNull();
     if (msg == null) return;
 
-    await (_db.update(_db.messages)..where((t) => t.id.equals(id))).write(
-      MessagesCompanion(
-        retryCount: drift.Value(msg.retryCount + penalty),
-        lastRetryAt: drift.Value(DateTime.now()),
-      ),
-    );
+    await (_db.update(_db.messages)..where(
+          (t) => t.id.equals(id) & t.status.equals(MessageStatus.pending),
+        ))
+        .write(
+          MessagesCompanion(
+            retryCount: drift.Value(msg.retryCount + penalty),
+            lastRetryAt: drift.Value(DateTime.now()),
+          ),
+        );
   }
 }
 

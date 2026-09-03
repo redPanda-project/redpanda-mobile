@@ -379,6 +379,45 @@ void main() {
       await unmount(tester);
     });
 
+    testWidgets('a failure in ANOTHER conversation shows no snackbar here', (
+      tester,
+    ) async {
+      // The attempt stream carries every conversation's attempts; the screen
+      // must filter to its own.
+      await db
+          .into(db.channels)
+          .insert(
+            ChannelsCompanion.insert(
+              uuid: 'other-channel',
+              label: 'Other',
+              encryptionKey: HEX.encode(List.generate(32, (i) => i)),
+              authPublicKey: HEX.encode(List.generate(32, (i) => i + 1)),
+            ),
+          );
+      client.sendError = DepositException(DepositStatus.quotaExceeded);
+
+      await tester.pumpWidget(app());
+      await tester.pump();
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(ChatScreen)),
+      );
+      await container
+          .read(outboxServiceProvider)
+          .enqueue(
+            conversationId: 'other-channel',
+            senderId: myUuid,
+            content: 'not mine',
+          );
+      await container.read(outboxServiceProvider).settled;
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.byType(SnackBar), findsNothing);
+
+      await unmount(tester);
+    });
+
     testWidgets('a failed RETRY of an older message shows no snackbar', (
       tester,
     ) async {

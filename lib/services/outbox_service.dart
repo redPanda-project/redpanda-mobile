@@ -43,7 +43,14 @@ class DeliveryAttempt {
 
   final String conversationId;
 
-  /// 1 for the first attempt (`retryCount` 0), 2 for the first retry, …
+  /// The row's backoff step at attempt time: `retryCount + 1`.
+  ///
+  /// NOT a count of network attempts — `markRetryAttempt` may advance
+  /// `retryCount` by more than one (the QUOTA_EXCEEDED penalty adds
+  /// [OutboxService.quotaExceededPenalty]), so the step after a full mailbox
+  /// jumps from 1 to 5. What it does say reliably is `attempt == 1`: the
+  /// very first attempt of a message, or the first after the user reset it
+  /// with [OutboxService.retryNow]. That is the one the composer reports.
   final int attempt;
 
   /// Null when the message was handed to the network.
@@ -190,8 +197,17 @@ class OutboxService {
     _lastSeenStatus = null;
   }
 
+  /// Stops the schedule and releases the attempt stream. Waits for a pass
+  /// that is still in flight: it holds the message repository and the
+  /// network client, and callers (tests, a torn-down provider scope) close
+  /// those right after.
   Future<void> dispose() async {
     stop();
+    try {
+      await settled;
+    } catch (e) {
+      debugPrint('OutboxService: pass failed while disposing: $e');
+    }
     await _attemptController.close();
   }
 
@@ -251,13 +267,19 @@ class OutboxService {
 
   /// "Send again now" from the UI: clears the backoff bookkeeping of a
   /// pending/failed message and attempts it immediately.
-  Future<void> retryNow(int messageRowId) async {
-    await _messages.resetForImmediateRetry(messageRowId);
+  ///
+  /// Returns false when the message was NOT re-queued because it moved on
+  /// while the user was looking at it (an ACK confirmed it) — the caller
+  /// must not claim it is sending again.
+  Future<bool> retryNow(int messageRowId) async {
+    final requeued = await _messages.resetForImmediateRetry(messageRowId);
+    if (!requeued) return false;
     unawaited(
       runPass().catchError(
         (Object e) => debugPrint('OutboxService: manual retry failed: $e'),
       ),
     );
+    return true;
   }
 
   /// One pass over all pending messages: sweeps stale `sent` rows back into
@@ -524,11 +546,15 @@ class OutboxService {
 }
 
 final outboxServiceProvider = Provider<OutboxService>((ref) {
-  return OutboxService(
+  final outbox = OutboxService(
     ref.watch(messageRepositoryProvider),
     ref.watch(redPandaClientProvider),
     ref.watch(groupRepositoryProvider),
   );
+  // The timer, the connection subscription and the attempt stream outlive
+  // nothing: when the scope goes, so do they.
+  ref.onDispose(() => unawaited(outbox.dispose()));
+  return outbox;
 });
 
 /// Delivery attempts made by the outbox; the chat UI surfaces the ones the

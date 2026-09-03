@@ -32,6 +32,7 @@ void main() {
   });
 
   tearDown(() async {
+    client.beforeSend = null;
     await outbox.dispose();
     await client.disconnect();
     await db.close();
@@ -396,6 +397,56 @@ void main() {
       expect(msg.retryCount, equals(OutboxService.quotaExceededPenalty));
     });
 
+    test('retryNow refuses to re-send a message an ACK already confirmed '
+        '(adversarial review)', () async {
+      // The details sheet offers "send again" from a SNAPSHOT of the row; an
+      // ACK can land between rendering that button and the tap. Before T112
+      // resetForImmediateRetry was an unconditional write and would have
+      // re-sent a message the recipient already had.
+      final id = await insertPending(messageId: 'net-1');
+      await outbox.runPass();
+      await outbox.onChannelAck(
+        const ChannelAckUpdate(
+          channelId: 'channel-1',
+          messageIdHex: 'net-1',
+          timestampMs: 1,
+        ),
+      );
+      final sentBefore = client.sentMessages.length;
+
+      expect(await outbox.retryNow(id), isFalse);
+      await outbox.settled;
+
+      expect(client.sentMessages, hasLength(sentBefore));
+      expect((await messageById(id)).status, equals(MessageStatus.delivered));
+    });
+
+    test('a retry attempt is not booked on a message confirmed mid-send '
+        '(adversarial review)', () async {
+      // The send fails, but while it was in flight the Channel-ACK arrived.
+      // markRetryAttempt must not stamp a fresh backoff window on a row that
+      // is done — the status column stays put either way, so only the
+      // bookkeeping shows it.
+      final id = await insertPending(messageId: 'net-1');
+      client.beforeSend = () async {
+        await outbox.onChannelAck(
+          const ChannelAckUpdate(
+            channelId: 'channel-1',
+            messageIdHex: 'net-1',
+            timestampMs: 1,
+          ),
+        );
+        throw StateError('no active peer');
+      };
+
+      await outbox.runPass();
+
+      final msg = await messageById(id);
+      expect(msg.status, equals(MessageStatus.delivered));
+      expect(msg.retryCount, equals(0));
+      expect(msg.lastRetryAt, isNull);
+    });
+
     test('retryNow clears the backoff and attempts immediately', () async {
       final id = await insertPending(
         retryCount: 7,
@@ -437,6 +488,27 @@ void main() {
         expect(seen.last.succeeded, isTrue);
       },
     );
+
+    test('the attempt number is the backoff step, which the QUOTA penalty '
+        'advances by more than one (Copilot review)', () async {
+      final seen = <DeliveryAttempt>[];
+      final sub = outbox.attempts.listen(seen.add);
+      client.sendError = DepositException(DepositStatus.quotaExceeded);
+      await insertPending();
+
+      await outbox.runPass();
+      await outbox.runPass(ignoreBackoff: true);
+      await pumpEventQueue();
+      await sub.cancel();
+
+      expect(
+        seen.map((a) => a.attempt),
+        equals([1, 1 + OutboxService.quotaExceededPenalty]),
+        reason:
+            'attempt is retryCount + 1, so it is a backoff step, not a '
+            'count of network attempts — only attempt == 1 is load-bearing',
+      );
+    });
 
     test(
       'an unreachable counterpart is reported as its own failure kind',

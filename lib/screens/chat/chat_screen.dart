@@ -246,11 +246,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _retryNow(int messageRowId) async {
-    await ref.read(outboxServiceProvider).retryNow(messageRowId);
+    // The details sheet decides whether to offer "send again" from a
+    // SNAPSHOT of the row; an ACK can land between rendering that button and
+    // the tap, in which case the outbox refuses to re-queue a message the
+    // recipient already has. Say so instead of claiming a send.
+    final requeued = await ref
+        .read(outboxServiceProvider)
+        .retryNow(messageRowId);
     if (mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Sending again…')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            requeued
+                ? 'Sending again…'
+                : 'Already confirmed — nothing to send again.',
+          ),
+        ),
+      );
     }
   }
 
