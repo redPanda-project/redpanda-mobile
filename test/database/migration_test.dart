@@ -512,5 +512,34 @@ void main() {
 
       await legacy.close();
     });
+
+    // Every other test in this file calls onUpgrade with ADJACENT versions,
+    // which is not what a real device does: a phone that has not opened the
+    // app for a while runs one onUpgrade(from, 18) covering several steps.
+    // The v18 column would then be added to a `messages` table the v17 step
+    // had just re-created from the CURRENT schema — `duplicate column name:
+    // direction`, thrown from inside onUpgrade, i.e. the database never
+    // opens and `user_version` is never bumped: a crash loop on every launch.
+    test('a multi-version jump reaches v18 without adding direction twice '
+        '(T114)', () async {
+      for (final from in [16, 17]) {
+        final legacy = createTestDatabase();
+        await legacy.customStatement(
+          'ALTER TABLE messages DROP COLUMN direction;',
+        );
+
+        await legacy.migration.onUpgrade(legacy.createMigrator(), from, 18);
+
+        final columns = await legacy
+            .customSelect('PRAGMA table_info(messages)')
+            .get();
+        expect(
+          columns.map((row) => row.read<String>('name')),
+          contains('direction'),
+          reason: 'onUpgrade($from, 18) must leave the column in place',
+        );
+        await legacy.close();
+      }
+    });
   });
 }

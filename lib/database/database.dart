@@ -473,7 +473,20 @@ class AppDatabase extends _$AppDatabase {
           //   1:1:    incoming <=> sender_id == conversation_id (the channel id
           //           stands in for "them"; own rows carry the user's uuid)
           // The union of both is safe: an outgoing row can satisfy neither.
-          await m.addColumn(messages, messages.direction);
+          // The `from < 17` step above DROPs and re-creates `messages` from
+          // the CURRENT Dart schema, which already declares `direction` — so
+          // adding it again would throw `duplicate column name: direction`
+          // and, because `user_version` is only bumped after a successful
+          // migration, put the app in a crash loop on every launch. Guarded
+          // exactly like `senderMemberId` (v14) and `failedOverAt` (v15) are
+          // guarded against their own recreate step. Verified: without the
+          // guard `onUpgrade(16, 18)` throws, with it both 16 -> 18 and
+          // 17 -> 18 pass (see migration_test).
+          if (from >= 17) {
+            await m.addColumn(messages, messages.direction);
+          }
+          // Unconditional: after a recreate the table is empty, so this is a
+          // no-op there and the ONE backfill rule stays in one place.
           await m.database.customStatement(
             'UPDATE messages SET direction = ${MessageDirection.incoming} '
             'WHERE status = ${MessageStatus.received} '
