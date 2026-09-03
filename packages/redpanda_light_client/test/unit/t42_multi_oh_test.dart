@@ -15,6 +15,7 @@ import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/domain/peer_oh_update.dart';
 import 'package:redpanda_light_client/src/domain/send_exceptions.dart';
 import 'package:hex/hex.dart';
+import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/generated/commands.pb.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
@@ -387,7 +388,7 @@ void main() {
         await client.restoreOutboundHandle(ownOh);
 
         final updates = <PeerOhUpdate>[];
-        final sub = client.peerOhUpdates.listen(updates.add);
+        final sub = client.stateUpdates.of<PeerOhUpdate>().listen(updates.add);
         addTearDown(sub.cancel);
 
         await client.fetchMessages(ownOh);

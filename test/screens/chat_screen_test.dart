@@ -178,7 +178,7 @@ void main() {
         tester.element(find.byType(ChatScreen)),
       );
       container.read(messageSyncServiceProvider).start();
-      client.updateController.add(
+      client.stateController.add(
         OhMailboxUpdate(
           ohId: List.generate(20, (i) => i),
           channelId: channelUuid,
@@ -206,7 +206,7 @@ void main() {
         tester.element(find.byType(ChatScreen)),
       );
       container.read(messageSyncServiceProvider).start();
-      client.updateController.add(
+      client.stateController.add(
         OhMailboxUpdate(
           ohId: List.generate(20, (i) => i),
           channelId: 'some-other-channel',

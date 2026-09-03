@@ -14,6 +14,7 @@ import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/domain/reverse_garlic_block.dart';
 import 'package:redpanda_light_client/src/domain/send_exceptions.dart';
+import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/garlic/garlic_builder.dart';
 import 'package:redpanda_light_client/src/generated/commands.pb.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
@@ -263,7 +264,7 @@ void main() {
       addTearDown(client.disconnect);
 
       final updates = <GarlicSessionUpdate>[];
-      client.garlicSessionUpdates.listen(updates.add);
+      client.stateUpdates.of<GarlicSessionUpdate>().listen(updates.add);
 
       final frames = <(int, Uint8List)>[];
       socket.onCommandFrame = (cmd, payload) => frames.add((cmd, payload));
@@ -364,7 +365,7 @@ void main() {
       addTearDown(client.disconnect);
 
       final updates = <GarlicSessionUpdate>[];
-      client.garlicSessionUpdates.listen(updates.add);
+      client.stateUpdates.of<GarlicSessionUpdate>().listen(updates.add);
 
       final frames = <(int, Uint8List)>[];
       socket.onCommandFrame = (cmd, payload) {
@@ -497,7 +498,7 @@ void main() {
       addTearDown(client.disconnect);
 
       final updates = <GarlicSessionUpdate>[];
-      client.garlicSessionUpdates.listen(updates.add);
+      client.stateUpdates.of<GarlicSessionUpdate>().listen(updates.add);
 
       final channel = await Channel.generate('MS05 fetch');
       const knownTagHex = 'a0a1a2a3a4a5a6a7a8a9aaabacadaeaf'; // 16 bytes hex

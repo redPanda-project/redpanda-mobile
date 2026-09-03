@@ -11,6 +11,7 @@ import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/domain/channel.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/domain/peer_oh_update.dart';
+import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
 import 'redpanda_node_launcher.dart';
@@ -25,10 +26,10 @@ import 'test_helpers.dart';
 ///
 ///  1. Bob's fetches fail host-unreachable while node B stays verified —
 ///     after the threshold his client registers a REPLACEMENT mailbox on
-///     node B and publishes it via [RedPandaLightClient.ohRegistrationUpdates].
+///     node B and publishes it as an `OwnOhSetUpdate` on `stateUpdates`.
 ///  2. The replacement descriptor travels IN-BAND to Alice as a
 ///     ratchet-encrypted `oh_update` into her (still healthy) mailbox on
-///     node B; her [RedPandaLightClient.peerOhUpdates] fires.
+///     node B; her `stateUpdates.of<PeerOhUpdate>()` fires.
 ///  3. Alice's next send deposits into Bob's NEW mailbox on node B and Bob
 ///     receives it over his production poll loop.
 ///
@@ -145,12 +146,14 @@ void main() async {
 
       // ── Node A dies. ─────────────────────────────────────────────────
       final replacements = <OHRegistration>[];
-      final replacementSub = bob.ohRegistrationUpdates.listen(
-        replacements.addAll,
+      final replacementSub = bob.stateUpdates.of<OwnOhSetUpdate>().listen(
+        (u) => replacements.addAll(u.handles),
       );
       addTearDown(replacementSub.cancel);
       final peerOhMoves = <PeerOhUpdate>[];
-      final peerOhSub = alice.peerOhUpdates.listen(peerOhMoves.add);
+      final peerOhSub = alice.stateUpdates.of<PeerOhUpdate>().listen(
+        peerOhMoves.add,
+      );
       addTearDown(peerOhSub.cancel);
 
       await launcherA.stop();

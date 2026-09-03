@@ -38,6 +38,7 @@ export 'src/domain/decrypted_message.dart';
 export 'src/domain/reverse_garlic_block.dart';
 export 'src/domain/routing_ack.dart';
 export 'src/domain/send_exceptions.dart';
+export 'src/domain/state_update.dart';
 export 'src/crypto/crypto_utils.dart';
 export 'src/crypto/oh_keypair.dart';
 export 'src/crypto/channel_message.dart';

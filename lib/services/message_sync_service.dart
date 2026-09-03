@@ -12,12 +12,21 @@ import 'package:redpanda/repositories/outbound_handle_repository.dart';
 import 'package:redpanda/shared/providers.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
 
-/// Bridges the network client and the local database:
+/// The app's persistence channel: it owns the ONE subscription to the network
+/// client's [RedPandaClient.stateUpdates] and writes every state change to the
+/// local database, plus the incoming-message stream and the startup restore.
 ///
 /// - persists fetched messages (deduplicated by network message id),
 /// - persists OH fetch cursors and renewed expiries,
+/// - persists ratchet/garlic session state, own- and peer-OH sets, node
+///   scores, group state, and applies routing-/channel-ACKs,
 /// - re-broadcasts mailbox overflow warnings for the UI,
 /// - restores persisted OH registrations and channel keys on startup.
+///
+/// T110: a new state event is handled by adding one `case` to [_persist] —
+/// there is no protocol class, isolate-client branch or facade stream to
+/// extend. State this service does NOT own stays out of [_persist]
+/// (fetch status → `channel_health`, group handshakes → `GroupService`).
 class MessageSyncService {
   final RedPandaClient _client;
   final MessageRepository _messages;
@@ -27,28 +36,23 @@ class MessageSyncService {
 
   final _overflowController = StreamController<OhMailboxUpdate>.broadcast();
   StreamSubscription<DecryptedMessage>? _messageSub;
-  StreamSubscription<OhMailboxUpdate>? _updateSub;
-  StreamSubscription<RatchetStateUpdate>? _ratchetSub;
-  StreamSubscription<GarlicSessionUpdate>? _garlicSub;
-  StreamSubscription<RoutingAckUpdate>? _routingAckSub;
-  StreamSubscription<ChannelAckUpdate>? _channelAckSub;
-  StreamSubscription<List<NodeScore>>? _nodeScoreSub;
-  StreamSubscription<GroupStateUpdate>? _groupStateSub;
-  StreamSubscription<List<OHRegistration>>? _ohRegistrationSub;
-  StreamSubscription<PeerOhUpdate>? _peerOhSub;
+  StreamSubscription<StateUpdate>? _stateSub;
 
-  /// Serializes ratchet-state DB writes so they are applied in emission
-  /// order — a slow earlier write must not overwrite a newer state.
-  Future<void> _ratchetPersistPending = Future.value();
-
-  /// Same ordering guarantee for garlic-session snapshots (MS05).
-  Future<void> _garlicPersistPending = Future.value();
-
-  /// Same ordering guarantee for node-score snapshots (MS06).
-  Future<void> _nodeScorePersistPending = Future.value();
-
-  /// Same ordering guarantee for group state snapshots (MS08).
-  Future<void> _groupStatePersistPending = Future.value();
+  /// The ONE persistence chain (T110): every state update is written in
+  /// emission order. Replaces the four per-kind future chains (ratchet,
+  /// garlic, node scores, group state) and the fire-and-forget writes for
+  /// mailbox/own-OH/peer-OH/ACK updates — a slow earlier write can no longer
+  /// be overtaken by a newer one, within a kind or across kinds.
+  ///
+  /// Deliberate trade-off: this also serializes writes that used to run
+  /// concurrently (an ACK for channel A now queues behind a garlic snapshot
+  /// for channel B). That costs little in practice — all handlers share ONE
+  /// Drift connection, and the garlic/node-score handlers already held it
+  /// exclusively inside a transaction — and it buys the ordering guarantee
+  /// that the four separate chains could not give across kinds. If a slow
+  /// write ever does hold up unrelated UI state, split this per aggregate
+  /// (channel id), not back into per-kind chains.
+  Future<void> _persistPending = Future.value();
 
   MessageSyncService(
     this._client,
@@ -73,107 +77,56 @@ class MessageSyncService {
         ),
       ),
     );
-    _updateSub ??= _client.ohMailboxUpdates.listen(
-      (update) => unawaited(
-        handleMailboxUpdate(update).catchError(
-          (Object e) => debugPrint(
-            'MessageSyncService: failed to persist mailbox update: $e',
-          ),
-        ),
-      ),
-    );
-    _ratchetSub ??= _client.ratchetStateUpdates.listen((update) {
-      _ratchetPersistPending = _ratchetPersistPending
-          .then((_) => handleRatchetStateUpdate(update))
+    // ONE subscription for every state change; the dispatch below decides
+    // what a given update persists. A new state event costs one `case` here
+    // and nothing anywhere else in the isolate/protocol/facade plumbing.
+    _stateSub ??= _client.stateUpdates.listen((update) {
+      _persistPending = _persistPending
+          .then((_) => _persist(update))
           .catchError(
             (Object e) => debugPrint(
-              'MessageSyncService: failed to persist ratchet state: $e',
-            ),
-          );
-    });
-    _garlicSub ??= _client.garlicSessionUpdates.listen((update) {
-      _garlicPersistPending = _garlicPersistPending
-          .then((_) => handleGarlicSessionUpdate(update))
-          .catchError(
-            (Object e) => debugPrint(
-              'MessageSyncService: failed to persist garlic session: $e',
-            ),
-          );
-    });
-    _routingAckSub ??= _client.routingAckUpdates.listen(
-      (update) => unawaited(
-        handleRoutingAckUpdate(update).catchError(
-          (Object e) =>
-              debugPrint('MessageSyncService: failed to apply routing ack: $e'),
-        ),
-      ),
-    );
-    _channelAckSub ??= _client.channelAckUpdates.listen(
-      (update) => unawaited(
-        handleChannelAckUpdate(update).catchError(
-          (Object e) =>
-              debugPrint('MessageSyncService: failed to apply channel ack: $e'),
-        ),
-      ),
-    );
-    _nodeScoreSub ??= _client.nodeScoreUpdates.listen((scores) {
-      _nodeScorePersistPending = _nodeScorePersistPending
-          .then((_) => handleNodeScores(scores))
-          .catchError(
-            (Object e) => debugPrint(
-              'MessageSyncService: failed to persist node scores: $e',
-            ),
-          );
-    });
-    _ohRegistrationSub ??= _client.ohRegistrationUpdates.listen(
-      (set) => unawaited(
-        handleOhRegistrationUpdate(set).catchError(
-          (Object e) => debugPrint(
-            'MessageSyncService: failed to persist own-OH set: $e',
-          ),
-        ),
-      ),
-    );
-    _peerOhSub ??= _client.peerOhUpdates.listen(
-      (update) => unawaited(
-        handlePeerOhUpdate(update).catchError(
-          (Object e) =>
-              debugPrint('MessageSyncService: failed to persist peer OH: $e'),
-        ),
-      ),
-    );
-    _groupStateSub ??= _client.groupStateUpdates.listen((update) {
-      _groupStatePersistPending = _groupStatePersistPending
-          .then((_) => _groups.applyStateUpdate(update))
-          .catchError(
-            (Object e) => debugPrint(
-              'MessageSyncService: failed to persist group state: $e',
+              'MessageSyncService: failed to persist '
+              '${update.runtimeType}: $e',
             ),
           );
     });
   }
 
+  /// Applies one state update to the local database. The single dispatch
+  /// point of the persistence channel; runs inside [_persistPending], so
+  /// writes never interleave and a failure cannot break the chain.
+  Future<void> _persist(StateUpdate update) async {
+    switch (update) {
+      case OhMailboxUpdate():
+        await handleMailboxUpdate(update);
+      case RatchetStateUpdate():
+        await handleRatchetStateUpdate(update);
+      case GarlicSessionUpdate():
+        await handleGarlicSessionUpdate(update);
+      case RoutingAckUpdate():
+        await handleRoutingAckUpdate(update);
+      case ChannelAckUpdate():
+        await handleChannelAckUpdate(update);
+      case NodeScoreUpdate():
+        await handleNodeScores(update.scores);
+      case OwnOhSetUpdate():
+        await handleOhRegistrationUpdate(update);
+      case PeerOhUpdate():
+        await handlePeerOhUpdate(update);
+      case GroupStateUpdate():
+        await _groups.applyStateUpdate(update);
+      default:
+        // Not persisted here: OhFetchStatus (UI-only, channel_health) and
+        // GroupHandshakeEvent (owned by GroupService).
+        break;
+    }
+  }
+
   Future<void> stop() async {
     await _messageSub?.cancel();
-    await _updateSub?.cancel();
-    await _ratchetSub?.cancel();
-    await _garlicSub?.cancel();
-    await _routingAckSub?.cancel();
-    await _channelAckSub?.cancel();
-    await _nodeScoreSub?.cancel();
-    await _groupStateSub?.cancel();
-    await _ohRegistrationSub?.cancel();
-    await _peerOhSub?.cancel();
+    await _stateSub?.cancel();
     _messageSub = null;
-    _updateSub = null;
-    _ratchetSub = null;
-    _garlicSub = null;
-    _routingAckSub = null;
-    _channelAckSub = null;
-    _nodeScoreSub = null;
-    _groupStateSub = null;
-    _ohRegistrationSub = null;
-    _peerOhSub = null;
+    _stateSub = null;
   }
 
   /// Persists a fetched message unless it was already stored (dedup via
@@ -212,11 +165,11 @@ class MessageSyncService {
   /// Syncs the channel's persisted own-OH rows to the current set (T42
   /// multi-OH) so the redundancy top-up and failover replacements survive an
   /// app restart. Dead mailboxes are dropped, new ones added.
-  Future<void> handleOhRegistrationUpdate(List<OHRegistration> set) async {
-    if (set.isEmpty) return;
-    final channelId = set.first.channelId;
+  Future<void> handleOhRegistrationUpdate(OwnOhSetUpdate update) async {
+    if (update.handles.isEmpty) return;
+    final channelId = update.channelId;
     if (channelId == null) return;
-    await _outboundHandles.replaceAllForChannel(channelId, set);
+    await _outboundHandles.replaceAllForChannel(channelId, update.handles);
   }
 
   /// Persists the partner's full mailbox set announced in-band via `oh_update`

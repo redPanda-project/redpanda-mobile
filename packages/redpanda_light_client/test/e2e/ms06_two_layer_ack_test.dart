@@ -11,6 +11,7 @@ import 'package:test/test.dart';
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/domain/channel.dart';
 import 'package:redpanda_light_client/src/domain/routing_ack.dart';
+import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
 import 'redpanda_node_launcher.dart';
@@ -24,7 +25,7 @@ import 'test_helpers.dart';
 /// decision builds a RoutingAck onion over those return hops and deposits it
 /// — tagged with the ack session tag — into Alice's own OH mailbox. Alice
 /// polls her mailbox, correlates the R-ACK by its tag, and her
-/// [RedPandaLightClient.routingAckUpdates] fires with status stored. Bob,
+/// [RedPandaLightClient.stateUpdates.of<RoutingAckUpdate>()] fires with status stored. Bob,
 /// having received and decrypted the message, auto-sends a Channel-ACK back
 /// over Alice's RGB, which flips her message to delivered.
 ///
@@ -159,7 +160,9 @@ void main() async {
       // auto-fetch). Alice's own poll fetches her mailbox and processes the
       // R-ACK automatically, so no explicit fetchMessages() is needed.
       final routingAcks = <RoutingAckUpdate>[];
-      final ackSub = alice.routingAckUpdates.listen(routingAcks.add);
+      final ackSub = alice.stateUpdates.of<RoutingAckUpdate>().listen(
+        routingAcks.add,
+      );
       final bobInbox = DeliveryCollector(bob);
       addTearDown(bobInbox.cancel);
 

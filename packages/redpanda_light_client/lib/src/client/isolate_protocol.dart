@@ -1,6 +1,7 @@
 import 'package:redpanda_light_client/src/domain/channel_doctor_report.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/group_state.dart';
+import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/garlic/node_scorer.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
@@ -81,24 +82,6 @@ class OhDescriptorData {
   });
 }
 
-/// Isolate-sendable form of one own [OHRegistration] (T42 multi-OH). The
-/// keypair travels as its private key bytes (in-process isolate message,
-/// never leaves the device).
-class OwnOhData {
-  final List<int> ohId;
-  final List<int> keypairPrivateBytes;
-  final int expiresAtMs;
-  final String? serverEndpoint;
-  final int lastCursor;
-  const OwnOhData({
-    required this.ohId,
-    required this.keypairPrivateBytes,
-    required this.expiresAtMs,
-    this.serverEndpoint,
-    this.lastCursor = 0,
-  });
-}
-
 class CmdAddChannelKeys extends IsolateCommand {
   final String channelId;
   final List<int> encryptionKey;
@@ -151,7 +134,7 @@ class CmdAddChannelKeys extends IsolateCommand {
 }
 
 /// Tops a channel up to the target OH redundancy (T42, k=3). Fire-and-forget:
-/// the resulting set is published via [EventOhRegistrationUpdate].
+/// the resulting set is published as an [OwnOhSetUpdate].
 class CmdEnsureOhRedundancy extends IsolateCommand {
   final String channelId;
   CmdEnsureOhRedundancy(this.channelId);
@@ -363,74 +346,6 @@ class EventOhRegisterFailed extends IsolateEvent {
   EventOhRegisterFailed(this.requestId, this.error, {this.rateLimited = false});
 }
 
-/// Advanced channel ratchet state (MS03b) forwarded from the isolate so the
-/// main isolate can persist it on-device. Carries the state as its JSON
-/// serialization to stay isolate-sendable.
-class EventRatchetStateUpdate extends IsolateEvent {
-  final String channelId;
-  final String stateJson;
-  EventRatchetStateUpdate({required this.channelId, required this.stateJson});
-}
-
-/// Reverse-garlic session state (MS05) forwarded from the isolate so the
-/// main isolate can persist outstanding session tags and the pending RGB.
-/// Carries only isolate-sendable primitives.
-class EventGarlicSessionUpdate extends IsolateEvent {
-  final String channelId;
-
-  /// Outstanding session tags: tag (hex) → createdAtMs.
-  final Map<String, int> sessionTags;
-
-  /// Serialized pending ReverseGarlicBlock (hex), or null when none.
-  final String? pendingRgbHex;
-
-  EventGarlicSessionUpdate({
-    required this.channelId,
-    required this.sessionTags,
-    this.pendingRgbHex,
-  });
-}
-
-/// Routing-layer delivery feedback (MS06) forwarded from the isolate:
-/// an R-ACK arrived for an outgoing message, or none arrived within the
-/// ack timeout. Carries only isolate-sendable primitives.
-class EventRoutingAckUpdate extends IsolateEvent {
-  final String channelId;
-  final String messageIdHex;
-
-  /// RoutingAck status; null when [timedOut].
-  final int? status;
-  final int? latencyMs;
-  final bool timedOut;
-  EventRoutingAckUpdate({
-    required this.channelId,
-    required this.messageIdHex,
-    this.status,
-    this.latencyMs,
-    this.timedOut = false,
-  });
-}
-
-/// Application-layer delivery confirmation (Channel-ACK, MS06) forwarded
-/// from the isolate.
-class EventChannelAckUpdate extends IsolateEvent {
-  final String channelId;
-  final String messageIdHex;
-  final int timestampMs;
-  EventChannelAckUpdate({
-    required this.channelId,
-    required this.messageIdHex,
-    required this.timestampMs,
-  });
-}
-
-/// Node score snapshot (MS06) forwarded from the isolate for on-device
-/// persistence into the `node_scores` table.
-class EventNodeScores extends IsolateEvent {
-  final List<NodeScore> scores;
-  EventNodeScores(this.scores);
-}
-
 /// Completion of a group operation (rotate/retry/handshake/rename, MS08).
 class EventGroupOpDone extends IsolateEvent {
   final int requestId;
@@ -451,68 +366,16 @@ class EventGroupOpDone extends IsolateEvent {
   });
 }
 
-/// Group state snapshot (MS08) forwarded for on-device persistence.
-/// [GroupStateUpdate] carries only primitives and plain data classes.
-class EventGroupStateUpdate extends IsolateEvent {
-  final GroupStateUpdate update;
-  EventGroupStateUpdate(this.update);
-}
-
-/// Group handshake received over a 1:1 channel (MS08, Decision 8).
-class EventGroupHandshake extends IsolateEvent {
-  final GroupHandshakeEvent event;
-  EventGroupHandshake(this.event);
-}
-
-/// Outcome of a single mailbox fetch attempt (success and failure) — purely
-/// informational, feeds the per-channel health display in the app.
-class EventOhFetchStatus extends IsolateEvent {
-  final List<int> ohId;
-  final String? channelId;
-  final bool success;
-  final int atMs;
-  final String? detail;
-  EventOhFetchStatus({
-    required this.ohId,
-    required this.success,
-    required this.atMs,
-    this.channelId,
-    this.detail,
-  });
-}
-
-/// The channel's current own-OH SET after a change (T21 failover / T42
-/// multi-OH top-up), forwarded from the worker so the main isolate can sync
-/// the persisted rows to exactly this set. Keypairs travel as private key
-/// bytes (in-process isolate message, never leaves the device).
-class EventOhRegistrationUpdate extends IsolateEvent {
-  final String? channelId;
-  final List<OwnOhData> handles;
-  EventOhRegistrationUpdate({required this.channelId, required this.handles});
-}
-
-/// Authenticated in-band peer mailbox-set announcement (`oh_update`, T42
-/// multi-OH) forwarded from the isolate so the main isolate can persist the
-/// partner's full current OH set.
-class EventPeerOhUpdate extends IsolateEvent {
-  final String channelId;
-  final List<OhDescriptorData> descriptors;
-  EventPeerOhUpdate({required this.channelId, required this.descriptors});
-}
-
-/// OH state change (cursor advanced, renewal, mailbox overflow) forwarded
-/// from the isolate so the main isolate can persist cursor/expiry.
-class EventOhMailboxUpdate extends IsolateEvent {
-  final List<int> ohId;
-  final String? channelId;
-  final int lastCursor;
-  final int expiresAtMs;
-  final bool mailboxOverflow;
-  EventOhMailboxUpdate({
-    required this.ohId,
-    required this.lastCursor,
-    required this.expiresAtMs,
-    this.channelId,
-    this.mailboxOverflow = false,
-  });
+/// The ONE state event (see [StateUpdate]): every one-way state change the
+/// worker publishes — ratchet, garlic session, OH mailbox/fetch/own-set/
+/// peer-set, ACKs, node scores, group state and handshakes — crosses the
+/// isolate boundary inside this envelope. A new state event needs no new
+/// protocol class, no `_handleEvent` branch and no controller here.
+///
+/// The payload is isolate-sendable by construction: [StateUpdate] subtypes
+/// are plain Dart objects (the own-OH set carries [OHRegistration]s whose
+/// keypair is just the 32-byte Ed25519 seed plus verify key).
+class EventStateUpdate extends IsolateEvent {
+  final StateUpdate update;
+  EventStateUpdate(this.update);
 }

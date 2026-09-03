@@ -14,6 +14,7 @@ import 'package:redpanda_light_client/src/crypto/crypto_utils.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/group_state.dart';
 import 'package:redpanda_light_client/src/domain/routing_ack.dart';
+import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
 import 'redpanda_node_launcher.dart';
@@ -206,8 +207,12 @@ void main() async {
       // Track epoch installs via the group state stream.
       final epochs = <String, int>{'Bob': 0, 'Carol': 0};
       final stateSubs = [
-        bob.groupStateUpdates.listen((u) => epochs['Bob'] = u.keyEpoch),
-        carol.groupStateUpdates.listen((u) => epochs['Carol'] = u.keyEpoch),
+        bob.stateUpdates.of<GroupStateUpdate>().listen(
+          (u) => epochs['Bob'] = u.keyEpoch,
+        ),
+        carol.stateUpdates.of<GroupStateUpdate>().listen(
+          (u) => epochs['Carol'] = u.keyEpoch,
+        ),
       ];
 
       // ── Step 1: Alice installs epoch 1 — sealed rotations via garlic. ──
@@ -249,8 +254,12 @@ void main() async {
       // ── Step 2: Bob fans out a group message; both others read it. ─────
       final bobAcks = <RoutingAckUpdate>[];
       final bobChannelAcks = <ChannelAckUpdate>[];
-      final ackSub = bob.routingAckUpdates.listen(bobAcks.add);
-      final channelAckSub = bob.channelAckUpdates.listen(bobChannelAcks.add);
+      final ackSub = bob.stateUpdates.of<RoutingAckUpdate>().listen(
+        bobAcks.add,
+      );
+      final channelAckSub = bob.stateUpdates.of<ChannelAckUpdate>().listen(
+        bobChannelAcks.add,
+      );
 
       bool hasContent(List<DecryptedMessage> m, String c) =>
           m.any((x) => x.content == c);

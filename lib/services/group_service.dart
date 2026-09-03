@@ -36,7 +36,7 @@ class GroupService {
   GroupService(this._client, this._groups, this._outboundHandles);
 
   void start() {
-    _handshakeSub ??= _client.groupHandshakeEvents.listen(
+    _handshakeSub ??= _client.stateUpdates.of<GroupHandshakeEvent>().listen(
       (event) => unawaited(
         _handleHandshake(event).catchError(
           (Object e) =>

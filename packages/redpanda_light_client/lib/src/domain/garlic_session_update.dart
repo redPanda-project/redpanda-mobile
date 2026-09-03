@@ -1,8 +1,10 @@
+import 'package:redpanda_light_client/src/domain/state_update.dart';
+
 /// Snapshot of a channel's reverse-garlic session state (Frontend MS05),
 /// emitted by the network layer whenever it changes so the app layer can
 /// persist it on-device and feed it back via `addChannelKeys` after a
 /// restart (same pattern as the MS03b ratchet state).
-class GarlicSessionUpdate {
+class GarlicSessionUpdate extends StateUpdate {
   final String channelId;
 
   /// Outstanding session tags issued for this channel: tag (lowercase hex)

@@ -14,6 +14,7 @@ import 'package:test/test.dart';
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/domain/channel.dart';
 import 'package:redpanda_light_client/src/domain/peer_oh_update.dart';
+import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
 import 'redpanda_node_launcher.dart';
@@ -149,7 +150,7 @@ void main() async {
         await Future.delayed(const Duration(seconds: 8));
 
         final peerOhMoves = <PeerOhUpdate>[];
-        final sub = bob.peerOhUpdates.listen(peerOhMoves.add);
+        final sub = bob.stateUpdates.of<PeerOhUpdate>().listen(peerOhMoves.add);
         addTearDown(sub.cancel);
 
         // Bob's first send finds no peer OH and triggers a rendezvous recovery.

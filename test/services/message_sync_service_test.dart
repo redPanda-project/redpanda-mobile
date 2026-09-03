@@ -264,7 +264,7 @@ void main() {
           channelId: 'channel-1',
         ),
       );
-      client.updateController.add(
+      client.stateController.add(
         OhMailboxUpdate(
           ohId: HEX.decode(ohIdHex),
           lastCursor: 7,
@@ -282,7 +282,7 @@ void main() {
       await insertChannel('channel-1');
       service.start();
 
-      client.ratchetStateController.add(
+      client.stateController.add(
         const RatchetStateUpdate(
           channelId: 'channel-1',
           stateJson: '{"v":1,"advanced":true}',
@@ -298,7 +298,7 @@ void main() {
       await insertChannel('channel-1');
       service.start();
 
-      client.garlicSessionController.add(
+      client.stateController.add(
         const GarlicSessionUpdate(
           channelId: 'channel-1',
           sessionTags: {'aa11': 1000, 'bb22': 2000},
@@ -314,7 +314,7 @@ void main() {
 
       // A later snapshot REPLACES the channel's state: the consumed tag
       // disappears and the pending RGB is cleared.
-      client.garlicSessionController.add(
+      client.stateController.add(
         const GarlicSessionUpdate(
           channelId: 'channel-1',
           sessionTags: {'bb22': 2000},

@@ -10,6 +10,7 @@ import 'package:test/test.dart';
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/domain/channel.dart';
 import 'package:redpanda_light_client/src/domain/peer_oh_update.dart';
+import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
 import 'redpanda_node_launcher.dart';
@@ -137,7 +138,9 @@ void main() async {
 
       // Alice learns Bob's full mailbox set in-band.
       final peerOhMoves = <PeerOhUpdate>[];
-      final peerOhSub = alice.peerOhUpdates.listen(peerOhMoves.add);
+      final peerOhSub = alice.stateUpdates.of<PeerOhUpdate>().listen(
+        peerOhMoves.add,
+      );
       addTearDown(peerOhSub.cancel);
 
       // Bob tops up to the full k=3 target and announces the set. All three
