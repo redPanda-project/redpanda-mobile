@@ -45,6 +45,12 @@ class MessageSyncService {
   final _overflowController = StreamController<OhMailboxUpdate>.broadcast();
   StreamSubscription<DecryptedMessage>? _messageSub;
   StreamSubscription<StateUpdate>? _stateSub;
+  StreamSubscription<List<String>>? _channelIdsSub;
+
+  /// Channel ids already handed to the network worker in this app run (T111).
+  /// Guards the watcher below so a channel is restored once, not on every
+  /// write to the `Channels` table (the ratchet state is written per message).
+  final Set<String> _registeredChannelIds = {};
 
   /// The ONE persistence chain (T110): every state update is written in
   /// emission order. Replaces the four per-kind future chains (ratchet,
@@ -98,6 +104,34 @@ class MessageSyncService {
             ),
           );
     });
+    // T111: a channel row is the trigger to hand the channel to the worker —
+    // not whichever screen happened to create it. Before, `chat_screen.build`
+    // registered the keys, so "is this channel live?" depended on the user
+    // opening the chat; anything that adds a row another way (the duo-E2E
+    // harness joins straight through the repository, and a future deep link
+    // or import would too) silently ended up with a channel the worker has no
+    // key for. The watcher makes it a property of the DATA instead.
+    _channelIdsSub ??= _db
+        .select(_db.channels)
+        .map((c) => c.uuid)
+        .watch()
+        .listen((ids) {
+          for (final id in ids) {
+            // Claim the id BEFORE the async restore so a burst of writes
+            // cannot start two restores for the same channel.
+            if (!_registeredChannelIds.add(id)) continue;
+            unawaited(
+              registerChannel(id).catchError((Object e) {
+                // Un-claim so the next write to the table retries instead of
+                // leaving a channel the worker has no key for.
+                _registeredChannelIds.remove(id);
+                debugPrint(
+                  'MessageSyncService: failed to register channel $id: $e',
+                );
+              }),
+            );
+          }
+        });
   }
 
   /// Applies one state update to the local database. The single dispatch
@@ -133,8 +167,10 @@ class MessageSyncService {
   Future<void> stop() async {
     await _messageSub?.cancel();
     await _stateSub?.cancel();
+    await _channelIdsSub?.cancel();
     _messageSub = null;
     _stateSub = null;
+    _channelIdsSub = null;
     // Drain what is still queued: the subscriptions are gone, so no new link
     // can be appended, and callers (tests, app teardown) may close the
     // database right after stop() — a write still in flight would then fail.
@@ -467,6 +503,7 @@ class MessageSyncService {
   /// worker's restore call — with the COMPLETE argument set. Anything that
   /// registers a channel with fewer arguments is a bug, not an optimization.
   void _registerChannel(Channel channel, Map<String, int> sessionTags) {
+    _registeredChannelIds.add(channel.uuid);
     _client.addChannelKeys(
       channel.uuid,
       HEX.decode(channel.encryptionKey),

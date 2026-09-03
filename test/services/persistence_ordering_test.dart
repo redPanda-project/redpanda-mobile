@@ -125,8 +125,32 @@ void main() {
         );
   }
 
-  Future<void> settle() =>
-      Future<void>.delayed(const Duration(milliseconds: 200));
+  /// Waits until the persistence chain has gone quiet: the write-order log
+  /// must stay unchanged for [quiet] before we assert on it.
+  ///
+  /// Was a flat 200 ms sleep, which measured a serialized 3x30 ms handler
+  /// chain plus real Drift writes and went red under full-suite load (T111
+  /// added a channel-table watcher that does its own reads at start()).
+  /// Waiting for the condition instead of guessing a duration keeps the
+  /// invariant the same and the test honest — the cap is only a failure
+  /// deadline, not the expected wait.
+  Future<void> settle({
+    Duration quiet = const Duration(milliseconds: 150),
+    Duration cap = const Duration(seconds: 10),
+  }) async {
+    final deadline = DateTime.now().add(cap);
+    var lastLength = -1;
+    var stableSince = DateTime.now();
+    while (DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      if (service.order.length != lastLength) {
+        lastLength = service.order.length;
+        stableSince = DateTime.now();
+        continue;
+      }
+      if (DateTime.now().difference(stableSince) >= quiet) return;
+    }
+  }
 
   test('I1: same-kind writes land in emission order, newest wins', () async {
     await insertChannel('channel-1');

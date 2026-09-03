@@ -46,12 +46,16 @@ class _CreateChannelScreenState extends ConsumerState<CreateChannelScreen> {
     await ref.read(channelRepositoryProvider).addChannel(channel);
 
     // T111: hand the fresh channel to the network worker through the ONE
-    // restore entry point. Before, the only caller was `chat_screen.build`,
-    // so a newly created channel stayed unknown to the worker — and with it
-    // the rendezvous state — until the user opened the chat or restarted the
-    // app. This must precede the OH registration below: publishing the
-    // rendezvous record needs the channel's rendezvous state to exist.
-    await ref.read(messageSyncServiceProvider).registerChannel(channel.id);
+    // restore entry point, BEFORE registering our own OH below — publishing
+    // the rendezvous record needs the channel's rendezvous state to exist.
+    // Ordering is the only reason this is explicit: `MessageSyncService`
+    // also watches the channel table, so a failure here is repaired, just
+    // not necessarily before the OH registration.
+    try {
+      await ref.read(messageSyncServiceProvider).registerChannel(channel.id);
+    } catch (e) {
+      debugPrint('Failed to register the new channel with the worker: $e');
+    }
 
     // Fire-and-forget: register our own OH and publish the rendezvous record
     // so a joiner can discover us over the DHT.

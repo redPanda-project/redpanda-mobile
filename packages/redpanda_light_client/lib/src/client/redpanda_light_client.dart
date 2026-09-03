@@ -2994,27 +2994,46 @@ class RedPandaLightClient implements RedPandaClient {
   static const Duration redundancySweepInterval = Duration(minutes: 1);
   DateTime? _lastRedundancySweep;
 
+  /// Guards re-entry: the sweep is started fire-and-forget by the poll cycle,
+  /// so a slow one must not be joined by the next cycle's.
+  bool _redundancySweepInProgress = false;
+
   /// Tops every known channel up to [ohRedundancy] own mailboxes (T42),
   /// throttled to [redundancySweepInterval]. Only channels that already hold
   /// at least one mailbox are topped up: creating a channel's FIRST mailbox
   /// stays with the app layer (it needs the descriptor synchronously for the
   /// QR code and the rendezvous record), and sweeping from zero would race
   /// that registration onto a second mailbox on the same node.
-  Future<void> _sweepOhRedundancy() async {
+  ///
+  /// Public like [checkAndRenewExpiringHandles], the other periodic
+  /// maintenance task: the poll cycle drives it, tests call it directly.
+  Future<void> sweepOhRedundancy() async {
+    if (_redundancySweepInProgress) return;
     final now = DateTime.now();
     final last = _lastRedundancySweep;
     if (last != null && now.difference(last) < redundancySweepInterval) return;
     _lastRedundancySweep = now;
-    for (final channelId in _restoredChannels.toList()) {
-      if (!_registeredOHs.any((oh) => oh.channelId == channelId)) continue;
-      try {
-        await ensureOhRedundancy(channelId);
-      } catch (e) {
-        RpLog.info(
-          'RedPandaLightClient: OH redundancy top-up for $channelId '
-          'failed: $e',
-        );
+    _redundancySweepInProgress = true;
+    try {
+      for (final channelId in _restoredChannels.toList()) {
+        if (!_registeredOHs.any((oh) => oh.channelId == channelId)) continue;
+        // A T21 failover is mid-flight: its dead handle still counts towards
+        // the redundancy target, so a top-up now would register against a set
+        // that is about to change — and `_failoverOwnHandle` is written on the
+        // assumption that nothing else registers for the channel meanwhile.
+        // The next sweep sees the settled set.
+        if (_failoversInProgress.contains(channelId)) continue;
+        try {
+          await ensureOhRedundancy(channelId);
+        } catch (e) {
+          RpLog.info(
+            'RedPandaLightClient: OH redundancy top-up for $channelId '
+            'failed: $e',
+          );
+        }
       }
+    } finally {
+      _redundancySweepInProgress = false;
     }
   }
 
@@ -4890,7 +4909,17 @@ class RedPandaLightClient implements RedPandaClient {
       // widget rebuild. The worker owns its own mailbox set, and this is the
       // one place where the preconditions (verified peers with a discovered
       // node id) actually appear.
-      await _sweepOhRedundancy();
+      //
+      // NOT awaited, like [checkAndRenewExpiringHandles]: a top-up performs
+      // real OH registrations, and the cycle's completion gates when the next
+      // fetch loop may run (and `_notePollActivity`'s pull-forward). Blocking
+      // delivery latency on background maintenance would work against the
+      // ≤10 s goal. [sweepOhRedundancy] guards its own re-entry.
+      unawaited(
+        sweepOhRedundancy().catchError((Object e) {
+          RpLog.info('RedPandaLightClient: OH redundancy sweep failed: $e');
+        }),
+      );
       // T21: re-send pending failover announcements until their send
       // budget is used up.
       for (final channelId in List.of(_pendingOhUpdates.keys)) {

@@ -54,11 +54,15 @@ class _JoinChannelScreenState extends ConsumerState<JoinChannelScreen> {
           .addChannel(channel);
 
       // T111: hand the channel to the network worker through the ONE restore
-      // entry point (full argument set). Before, `chat_screen.build` was the
-      // only caller, so a joined channel stayed unknown to the worker — no
-      // rendezvous lookup, no ratchet — until the chat was opened. Must
-      // precede the OH registration: the rendezvous publish needs it.
-      await ref.read(messageSyncServiceProvider).registerChannel(channel.id);
+      // entry point (full argument set), BEFORE the OH registration — the
+      // rendezvous publish needs the channel's rendezvous state to exist.
+      // Its own catch: a failure here must not be reported as "invalid QR
+      // code", and `MessageSyncService`'s channel-table watcher repairs it.
+      try {
+        await ref.read(messageSyncServiceProvider).registerChannel(channel.id);
+      } catch (e) {
+        debugPrint('Failed to register the joined channel: $e');
+      }
 
       // Register our own OH for this channel in the background so it's
       // ready when we share our QR code with the peer later.

@@ -320,6 +320,51 @@ void main() {
       expect(client.channelRegistrations, isEmpty);
     });
 
+    test('a channel row added by ANY path is registered (duo-E2E)', () async {
+      // The regression the emulator duo gate caught: the harness joins by
+      // calling the channel repository directly, so before the watcher
+      // existed only `chat_screen.build` registered Bob's keys and his worker
+      // logged `fetchMessages() no encryption key` forever. Registration is a
+      // property of the data now, not of which screen ran.
+      service.start();
+
+      await insertChannel('joined-outside-the-ui');
+      await pumpEventQueue();
+
+      expect(
+        client.channelRegistrations.map((r) => r.channelId),
+        contains('joined-outside-the-ui'),
+      );
+    });
+
+    test('a channel is registered once, not on every table write', () async {
+      service.start();
+      await insertChannel('channel-1');
+      await pumpEventQueue();
+
+      // A ratchet advance writes the Channels row on every message.
+      await service.handleRatchetStateUpdate(
+        const RatchetStateUpdate(channelId: 'channel-1', stateJson: '{"v":2}'),
+      );
+      await pumpEventQueue();
+
+      expect(
+        client.channelRegistrations
+            .where((r) => r.channelId == 'channel-1')
+            .length,
+        equals(1),
+      );
+    });
+
+    test('the startup restore does not re-register via the watcher', () async {
+      await insertChannel('channel-1');
+      await service.restorePersistedState();
+      service.start();
+      await pumpEventQueue();
+
+      expect(client.channelRegistrations, hasLength(1));
+    });
+
     test('a channel without garlic state passes null, not empty', () async {
       await insertChannel('channel-1');
 

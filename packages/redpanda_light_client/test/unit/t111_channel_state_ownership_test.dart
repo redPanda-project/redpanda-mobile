@@ -1,7 +1,9 @@
 import 'package:test/test.dart';
 
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
+import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
 import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
+import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
 
@@ -129,6 +131,44 @@ void main() {
     );
 
     expect(client.channelEncryptionKeyOf('chan'), equals(channelKey));
+  });
+
+  group('the redundancy sweep never creates a channel\'s FIRST mailbox', () {
+    test('a channel without an own mailbox is skipped', () async {
+      client.addChannelKeys('chan', channelKey, isChannelCreator: true);
+
+      await client.sweepOhRedundancy();
+
+      // Creating the first mailbox stays with the app layer
+      // (`ensureOwnDescriptor`) — the sweep only tops UP.
+      expect(client.registeredOutboundHandles, isEmpty);
+    });
+
+    test('an unknown channel is not swept at all', () async {
+      await client.sweepOhRedundancy();
+      expect(client.registeredOutboundHandles, isEmpty);
+    });
+
+    test('sweeping without a connected peer is a safe no-op', () async {
+      client.addChannelKeys('chan', channelKey, isChannelCreator: true);
+      await client.restoreOutboundHandle(
+        OHRegistration(
+          ohId: ohId(3),
+          keypair: await OHKeypair.generate(),
+          expiresAtMs: DateTime.now()
+              .add(const Duration(days: 7))
+              .millisecondsSinceEpoch,
+          channelId: 'chan',
+          serverEndpoint: 'host-a:59558',
+        ),
+      );
+
+      await client.sweepOhRedundancy();
+      // Throttled: a second sweep right away must not run again either.
+      await client.sweepOhRedundancy();
+
+      expect(client.registeredOutboundHandles, hasLength(1));
+    });
   });
 
   test('a second restore of the same channel is a no-op', () {
