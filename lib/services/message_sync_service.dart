@@ -127,6 +127,12 @@ class MessageSyncService {
     await _stateSub?.cancel();
     _messageSub = null;
     _stateSub = null;
+    // Drain what is still queued: the subscriptions are gone, so no new link
+    // can be appended, and callers (tests, app teardown) may close the
+    // database right after stop() — a write still in flight would then fail.
+    // Safe to await: every link carries its own catchError, so the chain
+    // never completes with an error.
+    await _persistPending;
   }
 
   /// Persists a fetched message unless it was already stored (dedup via
@@ -166,6 +172,9 @@ class MessageSyncService {
   /// multi-OH) so the redundancy top-up and failover replacements survive an
   /// app restart. Dead mailboxes are dropped, new ones added.
   Future<void> handleOhRegistrationUpdate(OwnOhSetUpdate update) async {
+    // [OwnOhSetUpdate.handles] is never empty by contract; the guard stays
+    // because the alternative reading of an empty set here would be
+    // destructive (delete every persisted mailbox row of the channel).
     if (update.handles.isEmpty) return;
     final channelId = update.channelId;
     if (channelId == null) return;

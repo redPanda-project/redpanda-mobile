@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hex/hex.dart';
 import 'package:redpanda/database/database.dart';
@@ -228,11 +230,13 @@ void main() {
     service.start();
 
     // Cursor value visible in the DB at the moment the overflow warning
-    // reaches a UI listener.
-    int? cursorWhenWarned;
-    final sub = service.overflowEvents.listen((_) async {
-      cursorWhenWarned =
-          (await db.select(db.outboundHandles).getSingle()).lastCursor;
+    // reaches a UI listener. Read ON the event (not after a sleep), so the
+    // assertion cannot pass by timing luck.
+    final cursorWhenWarned = Completer<int>();
+    final sub = service.overflowEvents.listen((_) {
+      cursorWhenWarned.complete(
+        db.select(db.outboundHandles).getSingle().then((r) => r.lastCursor),
+      );
     });
     addTearDown(sub.cancel);
 
@@ -246,14 +250,34 @@ void main() {
         mailboxOverflow: true,
       ),
     );
+    // The warning is raised only after the cursor/expiry writes committed —
+    // a UI listener never sees an overflow with a stale cursor.
+    expect(
+      await cursorWhenWarned.future.timeout(const Duration(seconds: 5)),
+      equals(12),
+    );
     await settle();
 
     final handle = await db.select(db.outboundHandles).getSingle();
     expect(handle.lastCursor, equals(12));
-    // The warning is raised only after the cursor/expiry writes committed —
-    // a UI listener never sees an overflow with a stale cursor.
-    expect(cursorWhenWarned, equals(12));
     expect(service.order, equals(['mailbox:start', 'mailbox:done']));
+  });
+
+  test('stop() drains the queued writes before returning', () async {
+    // Callers close the database right after stop()/dispose(); a write still
+    // in flight would then fail against a closed connection.
+    await insertChannel('channel-1');
+    service.start();
+
+    client.stateController.add(
+      const RatchetStateUpdate(channelId: 'channel-1', stateJson: 'slow'),
+    );
+    // No settle(): stop() is called while the slow write is still running.
+    await service.stop();
+
+    expect(service.order, equals(['ratchet:start', 'ratchet:done']));
+    final channel = await db.select(db.channels).getSingle();
+    expect(channel.ratchetState, equals('slow'));
   });
 
   test('updates the sync service does not own are ignored', () async {

@@ -54,8 +54,10 @@ class OwnOhSetUpdate extends StateUpdate {
   /// Channel the set belongs to; null only for handles without a channel.
   final String? channelId;
 
-  /// The complete current own-OH set of [channelId] — may be empty when the
-  /// last mailbox of a channel went away.
+  /// The complete current own-OH set of [channelId]. Never empty: the set is
+  /// a REPLACEMENT instruction, and "this channel has no mailbox any more" is
+  /// not a state the app can act on today, so the producer suppresses it
+  /// rather than have every consumer invent its own interpretation.
   final List<OHRegistration> handles;
 
   const OwnOhSetUpdate({required this.channelId, required this.handles});

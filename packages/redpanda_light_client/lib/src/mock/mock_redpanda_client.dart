@@ -19,6 +19,11 @@ class MockRedPandaClient implements RedPandaClient {
   final _incomingMessageController =
       StreamController<DecryptedMessage>.broadcast();
 
+  /// Broadcast on purpose: the app attaches several independent listeners to
+  /// the state channel (MessageSyncService, channel_health, GroupService), and
+  /// a single-subscription stream would throw on the second one.
+  final _stateController = StreamController<StateUpdate>.broadcast();
+
   @override
   Stream<ConnectionStatus> get connectionStatus =>
       _connectionStatusController.stream;
@@ -128,7 +133,7 @@ class MockRedPandaClient implements RedPandaClient {
       _incomingMessageController.stream;
 
   @override
-  Stream<StateUpdate> get stateUpdates => const Stream.empty();
+  Stream<StateUpdate> get stateUpdates => _stateController.stream;
 
   @override
   void onPause() {}

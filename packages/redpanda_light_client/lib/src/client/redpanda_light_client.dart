@@ -2663,6 +2663,12 @@ class RedPandaLightClient implements RedPandaClient {
     final set = _registeredOHs
         .where((oh) => oh.channelId == channelId)
         .toList(growable: false);
+    // The set is a REPLACEMENT instruction, so an empty one would mean "this
+    // channel has no mailbox any more" — a state the app cannot act on today
+    // (it would only drop the persisted rows and the replay entries). Both
+    // call sites run after a successful registration, so this never fires;
+    // the guard keeps [OwnOhSetUpdate.handles]'s never-empty contract true.
+    if (set.isEmpty) return;
     _emitState(OwnOhSetUpdate(channelId: channelId, handles: set));
     // T44: our OH set just changed — refresh the rendezvous record so peers
     // can still find us over the DHT (publish on every own-OH change). Gated on
