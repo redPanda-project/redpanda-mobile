@@ -150,6 +150,13 @@ void main() {
       }
       if (DateTime.now().difference(stableSince) >= quiet) return;
     }
+    // Never fall through silently: a hit deadline means the chain is still
+    // writing (or wedged), and letting the caller assert anyway would report
+    // that as an unrelated "wrong write order" failure.
+    fail(
+      'the persistence chain did not go quiet within ${cap.inSeconds}s — '
+      'write order so far: ${service.order}',
+    );
   }
 
   test('I1: same-kind writes land in emission order, newest wins', () async {
