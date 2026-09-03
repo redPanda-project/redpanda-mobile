@@ -13,7 +13,7 @@ import 'package:redpanda_light_client/src/crypto/ratchet.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
-import 'package:redpanda_light_client/src/domain/peer_oh_update.dart';
+import 'package:redpanda_light_client/src/domain/counterpart_oh_update.dart';
 import 'package:hex/hex.dart';
 import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/generated/outbound.pb.dart';
@@ -195,7 +195,7 @@ bool _sameBytes(List<int> a, List<int> b) {
 }
 
 final channelKey = List<int>.generate(32, (i) => i);
-final peerOhId = List<int>.generate(20, (i) => 100 + i);
+final counterpartOhId = List<int>.generate(20, (i) => 100 + i);
 
 Future<OHRegistration> deadHostRegistration() async {
   return OHRegistration(
@@ -289,8 +289,8 @@ void main() {
         client.addChannelKeys(
           'chan',
           channelKey,
-          peerOhId: peerOhId,
-          peerOhEndpoint: 'peerhost:9',
+          counterpartOhId: counterpartOhId,
+          counterpartOhEndpoint: 'peerhost:9',
           isChannelCreator: true,
         );
         final oldOh = await deadHostRegistration();
@@ -352,7 +352,7 @@ void main() {
           () => announcePayload != null,
           reason: 'no oh_update announce was deposited',
         );
-        expect(_sameBytes(announceOhId!, peerOhId), isTrue);
+        expect(_sameBytes(announceOhId!, counterpartOhId), isTrue);
 
         final partnerSession = await RatchetSession.create(
           channelKey: channelKey,
@@ -397,7 +397,7 @@ void main() {
       client.addChannelKeys(
         'chan',
         channelKey,
-        peerOhId: peerOhId,
+        counterpartOhId: counterpartOhId,
         isChannelCreator: true,
       );
       final oldOh = await deadHostRegistration();
@@ -426,150 +426,161 @@ void main() {
   });
 
   group('T21 receive: oh_update applies and deduplicates', () {
-    test('fetched oh_update moves the peer mailbox for future sends', () async {
-      final (client, socket, relays) = await connectedClient();
-      addTearDown(client.disconnect);
+    test(
+      'fetched oh_update moves the counterpart mailbox for future sends',
+      () async {
+        final (client, socket, relays) = await connectedClient();
+        addTearDown(client.disconnect);
 
-      final newPeerOhId = List<int>.generate(20, (i) => 200 - i);
-      final newPeerKey = List<int>.generate(32, (i) => 50 + i);
-      // T42: oh_update payload is a JSON ARRAY of descriptors.
-      final descriptorJson = jsonEncode([
-        OHDescriptor(
-          serverEndpoint: 'newhost:7',
-          handleId: newPeerOhId,
-          authPublicKey: newPeerKey,
-        ).toJsonMap(),
-      ]);
+        final newCounterpartOhId = List<int>.generate(20, (i) => 200 - i);
+        final newCounterpartKey = List<int>.generate(32, (i) => 50 + i);
+        // T42: oh_update payload is a JSON ARRAY of descriptors.
+        final descriptorJson = jsonEncode([
+          OHDescriptor(
+            serverEndpoint: 'newhost:7',
+            handleId: newCounterpartOhId,
+            authPublicKey: newCounterpartKey,
+          ).toJsonMap(),
+        ]);
 
-      // The partner (channel creator) announces their new mailbox twice with
-      // the same message id (the announce is re-sent on purpose).
-      final partnerSession = await RatchetSession.create(
-        channelKey: channelKey,
-        isChannelCreator: true,
-      );
-      final announceId = Uint8List.fromList(List<int>.generate(16, (i) => i));
-      ChannelMessage announce() => ChannelMessage(
-        messageId: announceId,
-        timestampMs: DateTime.now().millisecondsSinceEpoch,
-        content: '',
-        ohUpdate: Uint8List.fromList(utf8.encode(descriptorJson)),
-      );
-      final firstCopy = await partnerSession.encrypt(announce(), 'chan');
-      final secondCopy = await partnerSession.encrypt(announce(), 'chan');
+        // The partner (channel creator) announces their new mailbox twice with
+        // the same message id (the announce is re-sent on purpose).
+        final partnerSession = await RatchetSession.create(
+          channelKey: channelKey,
+          isChannelCreator: true,
+        );
+        final announceId = Uint8List.fromList(List<int>.generate(16, (i) => i));
+        ChannelMessage announce() => ChannelMessage(
+          messageId: announceId,
+          timestampMs: DateTime.now().millisecondsSinceEpoch,
+          content: '',
+          ohUpdate: Uint8List.fromList(utf8.encode(descriptorJson)),
+        );
+        final firstCopy = await partnerSession.encrypt(announce(), 'chan');
+        final secondCopy = await partnerSession.encrypt(announce(), 'chan');
 
-      final depositOhIds = <List<int>>[];
-      var itemsDelivered = false;
-      socket.onCommandFrame = (command, payload) {
-        if (command == 150) {
-          socket.replyCommand(
-            151,
-            (RegisterOhResponse()..status = Status.OK).writeToBuffer(),
-          );
-        } else if (command == 159) {
-          socket.replyCommand(
-            160,
-            (SubscribeResponse()..status = Status.OK).writeToBuffer(),
-          );
-        } else if (command == 152) {
-          if (itemsDelivered) {
+        final depositOhIds = <List<int>>[];
+        var itemsDelivered = false;
+        socket.onCommandFrame = (command, payload) {
+          if (command == 150) {
+            socket.replyCommand(
+              151,
+              (RegisterOhResponse()..status = Status.OK).writeToBuffer(),
+            );
+          } else if (command == 159) {
+            socket.replyCommand(
+              160,
+              (SubscribeResponse()..status = Status.OK).writeToBuffer(),
+            );
+          } else if (command == 152) {
+            if (itemsDelivered) {
+              socket.replyCommand(
+                153,
+                (FetchResponse()..status = Status.OK).writeToBuffer(),
+              );
+              return;
+            }
+            itemsDelivered = true;
             socket.replyCommand(
               153,
-              (FetchResponse()..status = Status.OK).writeToBuffer(),
+              (FetchResponse()
+                    ..status = Status.OK
+                    ..nextCursor = fixnum.Int64(2)
+                    ..items.addAll([
+                      MailItem(
+                        payload: firstCopy,
+                        receivedAtMs: fixnum.Int64(
+                          DateTime.now().millisecondsSinceEpoch,
+                        ),
+                      ),
+                      MailItem(
+                        payload: secondCopy,
+                        receivedAtMs: fixnum.Int64(
+                          DateTime.now().millisecondsSinceEpoch,
+                        ),
+                      ),
+                    ]))
+                  .writeToBuffer(),
             );
-            return;
+          } else if (command == 142) {
+            unawaited(() async {
+              final deposit = await peelGarlicDeposit(payload, relays);
+              if (deposit != null) depositOhIds.add(deposit.ohId);
+            }());
           }
-          itemsDelivered = true;
-          socket.replyCommand(
-            153,
-            (FetchResponse()
-                  ..status = Status.OK
-                  ..nextCursor = fixnum.Int64(2)
-                  ..items.addAll([
-                    MailItem(
-                      payload: firstCopy,
-                      receivedAtMs: fixnum.Int64(
-                        DateTime.now().millisecondsSinceEpoch,
-                      ),
-                    ),
-                    MailItem(
-                      payload: secondCopy,
-                      receivedAtMs: fixnum.Int64(
-                        DateTime.now().millisecondsSinceEpoch,
-                      ),
-                    ),
-                  ]))
-                .writeToBuffer(),
-          );
-        } else if (command == 142) {
-          unawaited(() async {
-            final deposit = await peelGarlicDeposit(payload, relays);
-            if (deposit != null) depositOhIds.add(deposit.ohId);
-          }());
-        }
-      };
+        };
 
-      client.addChannelKeys(
-        'chan',
-        channelKey,
-        peerOhId: List<int>.generate(20, (i) => 100 + i),
-        peerOhEndpoint: 'oldhost:9',
-        isChannelCreator: false,
-      );
-      final ownOh = OHRegistration(
-        ohId: List.generate(20, (i) => 60 + i),
-        keypair: await OHKeypair.generate(),
-        expiresAtMs: DateTime.now()
-            .add(const Duration(days: 7))
-            .millisecondsSinceEpoch,
-        channelId: 'chan',
-        serverEndpoint: liveEndpoint,
-      );
-      await client.restoreOutboundHandle(ownOh);
+        client.addChannelKeys(
+          'chan',
+          channelKey,
+          counterpartOhId: List<int>.generate(20, (i) => 100 + i),
+          counterpartOhEndpoint: 'oldhost:9',
+          isChannelCreator: false,
+        );
+        final ownOh = OHRegistration(
+          ohId: List.generate(20, (i) => 60 + i),
+          keypair: await OHKeypair.generate(),
+          expiresAtMs: DateTime.now()
+              .add(const Duration(days: 7))
+              .millisecondsSinceEpoch,
+          channelId: 'chan',
+          serverEndpoint: liveEndpoint,
+        );
+        await client.restoreOutboundHandle(ownOh);
 
-      final updates = <PeerOhUpdate>[];
-      final sub = client.stateUpdates.of<PeerOhUpdate>().listen(updates.add);
-      addTearDown(sub.cancel);
-      final surfaced = <DecryptedMessage>[];
-      final msgSub = client.incomingMessages.listen(surfaced.add);
-      addTearDown(msgSub.cancel);
+        final updates = <CounterpartOhUpdate>[];
+        final sub = client.stateUpdates.of<CounterpartOhUpdate>().listen(
+          updates.add,
+        );
+        addTearDown(sub.cancel);
+        final surfaced = <DecryptedMessage>[];
+        final msgSub = client.incomingMessages.listen(surfaced.add);
+        addTearDown(msgSub.cancel);
 
-      // Both copies arrive in one fetch batch (delivered by the scripted
-      // node on the next poll).
-      final messages = await client.fetchMessages(ownOh);
-      expect(
-        messages,
-        isEmpty,
-        reason: 'an oh_update must never surface as a chat message',
-      );
-      await pumpUntil(
-        () => updates.isNotEmpty,
-        reason: 'the oh_update never arrived',
-      );
-      await Future.delayed(const Duration(milliseconds: 100));
-      expect(surfaced, isEmpty);
-      expect(
-        updates,
-        hasLength(1),
-        reason: 'the duplicate copy must be ignored',
-      );
-      expect(updates.single.channelId, equals('chan'));
-      expect(
-        updates.single.descriptors.single.serverEndpoint,
-        equals('newhost:7'),
-      );
-      expect(
-        _sameBytes(updates.single.descriptors.single.handleId, newPeerOhId),
-        true,
-      );
+        // Both copies arrive in one fetch batch (delivered by the scripted
+        // node on the next poll).
+        final messages = await client.fetchMessages(ownOh);
+        expect(
+          messages,
+          isEmpty,
+          reason: 'an oh_update must never surface as a chat message',
+        );
+        await pumpUntil(
+          () => updates.isNotEmpty,
+          reason: 'the oh_update never arrived',
+        );
+        await Future.delayed(const Duration(milliseconds: 100));
+        expect(surfaced, isEmpty);
+        expect(
+          updates,
+          hasLength(1),
+          reason: 'the duplicate copy must be ignored',
+        );
+        expect(updates.single.channelId, equals('chan'));
+        expect(
+          updates.single.descriptors.single.serverEndpoint,
+          equals('newhost:7'),
+        );
+        expect(
+          _sameBytes(
+            updates.single.descriptors.single.handleId,
+            newCounterpartOhId,
+          ),
+          true,
+        );
 
-      // A follow-up send deposits into the NEW peer mailbox (over garlic).
-      await client.sendMessage('chan', 'hello after failover');
-      await pumpUntil(
-        () => depositOhIds.isNotEmpty,
-        reason: 'the send after the oh_update never deposited',
-      );
-      expect(depositOhIds.any((id) => _sameBytes(id, newPeerOhId)), isTrue);
-    });
+        // A follow-up send deposits into the NEW counterpart mailbox (over garlic).
+        await client.sendMessage('chan', 'hello after failover');
+        await pumpUntil(
+          () => depositOhIds.isNotEmpty,
+          reason: 'the send after the oh_update never deposited',
+        );
+        expect(
+          depositOhIds.any((id) => _sameBytes(id, newCounterpartOhId)),
+          isTrue,
+        );
+      },
+    );
 
     test('an unreadable oh_update is dropped without touching state', () async {
       final (client, socket, _) = await connectedClient();
@@ -618,8 +629,8 @@ void main() {
       client.addChannelKeys(
         'chan',
         channelKey,
-        peerOhId: peerOhId,
-        peerOhEndpoint: 'oldhost:9',
+        counterpartOhId: counterpartOhId,
+        counterpartOhEndpoint: 'oldhost:9',
         isChannelCreator: false,
       );
       final ownOh = OHRegistration(
@@ -633,8 +644,10 @@ void main() {
       );
       await client.restoreOutboundHandle(ownOh);
 
-      final updates = <PeerOhUpdate>[];
-      final sub = client.stateUpdates.of<PeerOhUpdate>().listen(updates.add);
+      final updates = <CounterpartOhUpdate>[];
+      final sub = client.stateUpdates.of<CounterpartOhUpdate>().listen(
+        updates.add,
+      );
       addTearDown(sub.cancel);
 
       final messages = await client.fetchMessages(ownOh);

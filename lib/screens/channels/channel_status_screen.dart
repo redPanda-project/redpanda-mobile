@@ -9,9 +9,9 @@ import 'package:redpanda_light_client/redpanda_light_client.dart' hide Channel;
 /// for this channel last ran (mailbox checks, own-mailbox renewal, send
 /// retries) and what the send/receive state is.
 class ChannelStatusScreen extends ConsumerWidget {
-  final String channelUuid;
+  final String conversationId;
 
-  const ChannelStatusScreen({super.key, required this.channelUuid});
+  const ChannelStatusScreen({super.key, required this.conversationId});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -19,13 +19,13 @@ class ChannelStatusScreen extends ConsumerWidget {
     ref.watch(healthTickProvider);
 
     final now = DateTime.now();
-    final channel = ref.watch(channelRowProvider(channelUuid)).value;
+    final channel = ref.watch(channelRowProvider(conversationId)).value;
     final connection = ref.watch(connectionStatusProvider).value;
     final peerCount = ref.watch(peerCountProvider).value ?? 0;
-    final fetchInfo = ref.watch(channelFetchInfoProvider)[channelUuid];
-    final ownHandle = ref.watch(ownHandleProvider(channelUuid)).value;
-    final stats = ref.watch(conversationStatsProvider(channelUuid)).value;
-    final health = ref.watch(channelHealthProvider(channelUuid));
+    final fetchInfo = ref.watch(channelFetchInfoProvider)[conversationId];
+    final ownHandle = ref.watch(ownHandleProvider(conversationId)).value;
+    final stats = ref.watch(conversationStatsProvider(conversationId)).value;
+    final health = ref.watch(channelHealthProvider(conversationId));
 
     return Scaffold(
       appBar: AppBar(
@@ -81,7 +81,7 @@ class ChannelStatusScreen extends ConsumerWidget {
                 subtitle: Text(
                   'The previous host node was unreachable — a new mailbox '
                   'was registered ${_relative(ownHandle.failedOverAt!, now)} '
-                  'and announced to your peer.',
+                  'and announced to your contact.',
                 ),
               ),
             ListTile(
@@ -98,20 +98,22 @@ class ChannelStatusScreen extends ConsumerWidget {
               ),
             ),
           ],
-          const _SectionHeader('Sending (to peer)'),
+          const _SectionHeader('Sending (to the recipient)'),
           ListTile(
             leading: Icon(
-              channel?.peerOhId != null ? Icons.send : Icons.help_outline,
+              channel?.counterpartOhId != null
+                  ? Icons.send
+                  : Icons.help_outline,
             ),
             title: Text(
-              channel?.peerOhId != null
-                  ? 'Peer mailbox known'
-                  : 'Peer mailbox unknown',
+              channel?.counterpartOhId != null
+                  ? "Recipient's mailbox known"
+                  : "Recipient's mailbox unknown",
             ),
             subtitle: Text(
-              channel?.peerOhId != null
-                  ? 'On ${channel!.peerOhEndpoint ?? 'unknown node'}'
-                  : "Scan the peer's QR code to enable sending.",
+              channel?.counterpartOhId != null
+                  ? 'On ${channel!.counterpartOhEndpoint ?? 'unknown node'}'
+                  : "Scan the recipient's QR code to enable sending.",
             ),
           ),
           if (stats != null) ...[
@@ -142,7 +144,7 @@ class ChannelStatusScreen extends ConsumerWidget {
           ],
           const _SectionHeader('Self-test'),
           _LoopbackTile(
-            channelUuid: channelUuid,
+            conversationId: conversationId,
             hasOwnMailbox: ownHandle != null,
           ),
           ListTile(
@@ -152,7 +154,7 @@ class ChannelStatusScreen extends ConsumerWidget {
               'Run step-by-step checks and see where a problem is.',
             ),
             trailing: const Icon(Icons.chevron_right),
-            onTap: () => context.push('/channels/$channelUuid/doctor'),
+            onTap: () => context.push('/channels/$conversationId/doctor'),
           ),
         ],
       ),
@@ -219,10 +221,13 @@ class ChannelStatusScreen extends ConsumerWidget {
 /// and reports whether — and how fast — it came back through the regular
 /// fetch pipeline. Runs only on demand; there is no periodic self-ping.
 class _LoopbackTile extends ConsumerStatefulWidget {
-  final String channelUuid;
+  final String conversationId;
   final bool hasOwnMailbox;
 
-  const _LoopbackTile({required this.channelUuid, required this.hasOwnMailbox});
+  const _LoopbackTile({
+    required this.conversationId,
+    required this.hasOwnMailbox,
+  });
 
   @override
   ConsumerState<_LoopbackTile> createState() => _LoopbackTileState();
@@ -238,7 +243,7 @@ class _LoopbackTileState extends ConsumerState<_LoopbackTile> {
       _result = null;
     });
     final client = ref.read(redPandaClientProvider);
-    final result = await client.runLoopbackTest(widget.channelUuid);
+    final result = await client.runLoopbackTest(widget.conversationId);
     if (!mounted) return;
     setState(() {
       _running = false;

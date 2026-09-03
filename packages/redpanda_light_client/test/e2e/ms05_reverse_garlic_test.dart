@@ -21,7 +21,7 @@ import 'test_helpers.dart';
 /// Alice attaches a Reverse Garlic Block to her message (return hops +
 /// session tag + her OH id) and routes it to Bob's OH over 3 garlic hops.
 /// Bob — who never learns Alice's OH endpoint or network location and has
-/// **no peer OH id registered** — replies over the hops Alice chose, with a
+/// **no counterpart OH id registered** — replies over the hops Alice chose, with a
 /// CMD_DELIVER_TAGGED innermost layer. The relays peel it with unmodified
 /// MS04 logic; the final hop deposits payload + session tag into Alice's OH
 /// mailbox. Alice fetches the reply and correlates it via the tag
@@ -141,11 +141,11 @@ void main() async {
       alice.addChannelKeys(
         channel.id,
         channel.encryptionKey,
-        peerOhId: bobOH.ohId,
-        peerOhEndpoint: entryAddress,
+        counterpartOhId: bobOH.ohId,
+        counterpartOhEndpoint: entryAddress,
         isChannelCreator: true,
       );
-      // Bob gets NO peer OH id: his only way back to Alice is the RGB.
+      // Bob gets NO counterpart OH id: his only way back to Alice is the RGB.
       bob.addChannelKeys(
         channel.id,
         channel.encryptionKey,
@@ -216,7 +216,7 @@ void main() async {
       // hello). The RGB is single-use, so each retry first REPLENISHES it
       // (Alice re-sends hello, Bob's poll re-fetches) before Bob replies
       // again — otherwise the consumed RGB would force the reply onto a path
-      // Bob (no peer OH id) cannot take. We require the reply to travel the
+      // Bob (no counterpart OH id) cannot take. We require the reply to travel the
       // RGB at least once and to reach Alice.
       const reply = 'Hi Alice — routed over your return hops!';
       String? replyId;
@@ -255,7 +255,8 @@ void main() async {
       expect(
         repliedViaRgb,
         isTrue,
-        reason: 'Bob (no peer OH id) must reply via the RGB at least once',
+        reason:
+            'Bob (no counterpart OH id) must reply via the RGB at least once',
       );
       expect(aliceInbox.messages.map((m) => m.content), contains(reply));
       final tagged = aliceInbox.messages.firstWhere((m) => m.content == reply);

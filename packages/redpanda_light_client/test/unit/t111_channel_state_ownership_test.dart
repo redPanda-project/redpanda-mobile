@@ -44,13 +44,16 @@ void main() {
     client.addChannelKeys(
       'chan',
       channelKey,
-      peerOhSet: [descriptor(1, 'host-a:59558'), descriptor(2, 'host-b:59558')],
+      counterpartOhSet: [
+        descriptor(1, 'host-a:59558'),
+        descriptor(2, 'host-b:59558'),
+      ],
       isChannelCreator: true,
     );
 
     expect(client.knowsChannel('chan'), isTrue);
-    expect(client.peerMailboxIds('chan'), equals([ohId(1), ohId(2)]));
-    expect(client.peerMailboxEndpoint('chan'), equals('host-a:59558'));
+    expect(client.counterpartMailboxIds('chan'), equals([ohId(1), ohId(2)]));
+    expect(client.counterpartMailboxEndpoint('chan'), equals('host-a:59558'));
   });
 
   test('a re-register with a stale primary never re-points the live set', () {
@@ -59,7 +62,10 @@ void main() {
     client.addChannelKeys(
       'chan',
       channelKey,
-      peerOhSet: [descriptor(5, 'live-a:59558'), descriptor(6, 'live-b:59558')],
+      counterpartOhSet: [
+        descriptor(5, 'live-a:59558'),
+        descriptor(6, 'live-b:59558'),
+      ],
       isChannelCreator: false,
     );
 
@@ -70,31 +76,31 @@ void main() {
     client.addChannelKeys(
       'chan',
       channelKey,
-      peerOhId: ohId(9),
-      peerOhEndpoint: 'dead-host:59558',
+      counterpartOhId: ohId(9),
+      counterpartOhEndpoint: 'dead-host:59558',
       isChannelCreator: false,
     );
 
-    expect(client.peerMailboxIds('chan'), equals([ohId(5), ohId(6)]));
-    expect(client.peerMailboxEndpoint('chan'), equals('live-a:59558'));
+    expect(client.counterpartMailboxIds('chan'), equals([ohId(5), ohId(6)]));
+    expect(client.counterpartMailboxEndpoint('chan'), equals('live-a:59558'));
   });
 
   test('a re-register still fills a gap: no live mailbox yet', () {
     // A channel joined by QR knows no partner mailbox until the rendezvous
     // lookup answers, so the restore path must still be able to seed one.
     client.addChannelKeys('chan', channelKey, isChannelCreator: false);
-    expect(client.peerMailboxIds('chan'), isEmpty);
+    expect(client.counterpartMailboxIds('chan'), isEmpty);
 
     client.addChannelKeys(
       'chan',
       channelKey,
-      peerOhId: ohId(4),
-      peerOhEndpoint: 'host-c:59558',
+      counterpartOhId: ohId(4),
+      counterpartOhEndpoint: 'host-c:59558',
       isChannelCreator: false,
     );
 
-    expect(client.peerMailboxIds('chan'), equals([ohId(4)]));
-    expect(client.peerMailboxEndpoint('chan'), equals('host-c:59558'));
+    expect(client.counterpartMailboxIds('chan'), equals([ohId(4)]));
+    expect(client.counterpartMailboxEndpoint('chan'), equals('host-c:59558'));
   });
 
   test('a re-registration without a display name keeps the published one', () {
@@ -177,7 +183,7 @@ void main() {
       channelKey,
       channelSecret: channelSecret,
       ownDisplayName: 'Alice',
-      peerOhSet: [descriptor(1, 'host-a:59558')],
+      counterpartOhSet: [descriptor(1, 'host-a:59558')],
       isChannelCreator: true,
       ratchetState: null,
       sessionTags: const {'aa': 1},
@@ -192,14 +198,14 @@ void main() {
       channelKey,
       channelSecret: channelSecret,
       ownDisplayName: 'Alice',
-      peerOhSet: [descriptor(1, 'host-a:59558')],
+      counterpartOhSet: [descriptor(1, 'host-a:59558')],
       isChannelCreator: true,
       sessionTags: const {'aa': 1},
     );
 
     expect(client.knowsChannel('chan'), isTrue);
     expect(client.channelEncryptionKeyOf('chan'), equals(keyBefore));
-    expect(client.peerMailboxIds('chan'), equals([ohId(1)]));
+    expect(client.counterpartMailboxIds('chan'), equals([ohId(1)]));
     expect(client.rendezvousOwnNameOf('chan'), equals('Alice'));
   });
 }

@@ -12,7 +12,7 @@ import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
 import 'package:redpanda_light_client/src/crypto/ratchet.dart';
 import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
-import 'package:redpanda_light_client/src/domain/peer_oh_update.dart';
+import 'package:redpanda_light_client/src/domain/counterpart_oh_update.dart';
 import 'package:redpanda_light_client/src/domain/send_exceptions.dart';
 import 'package:hex/hex.dart';
 import 'package:redpanda_light_client/src/domain/state_update.dart';
@@ -26,7 +26,7 @@ import '../helpers/garlic_test_utils.dart';
 /// T42 multi-OH / multi-deposit unit tests. A scripted in-memory Socket plays
 /// the single connected node; the client's peer repository is pre-seeded with
 /// relay candidates so each deposit travels its own GARLIC route (T45: sends
-/// are garlic-only, one hop-disjoint route per peer OH — never a direct
+/// are garlic-only, one hop-disjoint route per counterpart OH — never a direct
 /// FlaschenpostPut). The mock captures the command-142 frames and peels them
 /// with the known relay keys to recover which OH each route deposits into. The
 /// exchange stays plaintext (the encryption handshake is never completed;
@@ -184,62 +184,70 @@ Future<void> pumpUntil(
 
 final channelKey = List<int>.generate(32, (i) => i + 1);
 
-OHDescriptor peerOh(int seed, String endpoint) => OHDescriptor(
+OHDescriptor counterpartOh(int seed, String endpoint) => OHDescriptor(
   serverEndpoint: endpoint,
   handleId: List<int>.generate(20, (i) => (seed + i) & 0xFF),
   authPublicKey: List<int>.generate(32, (i) => (seed * 2 + i) & 0xFF),
 );
 
 void main() {
-  group('T45 multi-OH: one garlic route per peer OH (never direct)', () {
-    test('fans out to every peer OH over garlic; no direct deposit', () async {
-      // Six relays so the two 3-hop routes can be fully disjoint.
-      final (client, socket, relays) = await connectedClient(hopCount: 6);
-      addTearDown(client.disconnect);
+  group('T45 multi-OH: one garlic route per counterpart OH (never direct)', () {
+    test(
+      'fans out to every counterpart OH over garlic; no direct deposit',
+      () async {
+        // Six relays so the two 3-hop routes can be fully disjoint.
+        final (client, socket, relays) = await connectedClient(hopCount: 6);
+        addTearDown(client.disconnect);
 
-      final ohA = peerOh(10, 'nodeA:1');
-      final ohB = peerOh(90, 'nodeB:2');
+        final ohA = counterpartOh(10, 'nodeA:1');
+        final ohB = counterpartOh(90, 'nodeB:2');
 
-      final garlicFrames = <Uint8List>[];
-      var directDeposits = 0;
-      socket.onCommandFrame = (command, payload) {
-        if (command == 142) garlicFrames.add(payload);
-        if (command == 141) directDeposits++;
-      };
+        final garlicFrames = <Uint8List>[];
+        var directDeposits = 0;
+        socket.onCommandFrame = (command, payload) {
+          if (command == 142) garlicFrames.add(payload);
+          if (command == 141) directDeposits++;
+        };
 
-      client.addChannelKeys(
-        'chan',
-        channelKey,
-        peerOhSet: [ohA, ohB],
-        isChannelCreator: true,
-      );
+        client.addChannelKeys(
+          'chan',
+          channelKey,
+          counterpartOhSet: [ohA, ohB],
+          isChannelCreator: true,
+        );
 
-      final id = await client.sendMessage('chan', 'hello redundancy');
-      expect(id, isNotEmpty);
+        final id = await client.sendMessage('chan', 'hello redundancy');
+        expect(id, isNotEmpty);
 
-      await pumpUntil(
-        () => garlicFrames.length >= 2,
-        reason: 'the send did not fan out to both peer OHs over garlic',
-      );
-      expect(directDeposits, equals(0), reason: 'no deposit may go out direct');
-      // Peel each route and confirm both peer OHs are covered — with disjoint
-      // relay hop sets across the two routes (best-effort anti-correlation).
-      final ohIds = <String>{};
-      final firstHops = <String>[];
-      for (final frame in garlicFrames.take(2)) {
-        firstHops.add(HEX.encode(ParsedPacket.parse(frame).nextHop));
-        final deposit = await peelGarlicDeposit(frame, relays);
-        ohIds.add(HEX.encode(deposit!.ohId));
-      }
-      expect(ohIds, contains(HEX.encode(ohA.handleId)));
-      expect(ohIds, contains(HEX.encode(ohB.handleId)));
-      expect(client.lastSendHopCount, greaterThan(0));
-      expect(
-        firstHops.toSet(),
-        hasLength(2),
-        reason: 'the two routes must start on disjoint relay hops',
-      );
-    });
+        await pumpUntil(
+          () => garlicFrames.length >= 2,
+          reason:
+              'the send did not fan out to both counterpart OHs over garlic',
+        );
+        expect(
+          directDeposits,
+          equals(0),
+          reason: 'no deposit may go out direct',
+        );
+        // Peel each route and confirm both counterpart OHs are covered — with disjoint
+        // relay hop sets across the two routes (best-effort anti-correlation).
+        final ohIds = <String>{};
+        final firstHops = <String>[];
+        for (final frame in garlicFrames.take(2)) {
+          firstHops.add(HEX.encode(ParsedPacket.parse(frame).nextHop));
+          final deposit = await peelGarlicDeposit(frame, relays);
+          ohIds.add(HEX.encode(deposit!.ohId));
+        }
+        expect(ohIds, contains(HEX.encode(ohA.handleId)));
+        expect(ohIds, contains(HEX.encode(ohB.handleId)));
+        expect(client.lastSendHopCount, greaterThan(0));
+        expect(
+          firstHops.toSet(),
+          hasLength(2),
+          reason: 'the two routes must start on disjoint relay hops',
+        );
+      },
+    );
 
     test('fan-out is non-blocking: garlic submission never waits on a '
         'confirmation (T39: submit != delivered)', () async {
@@ -250,8 +258,8 @@ void main() {
       final (client, socket, _) = await connectedClient();
       addTearDown(client.disconnect);
 
-      final ohA = peerOh(10, 'deadhost:1');
-      final ohB = peerOh(90, 'livehost:2');
+      final ohA = counterpartOh(10, 'deadhost:1');
+      final ohB = counterpartOh(90, 'livehost:2');
 
       var garlic = 0;
       socket.onCommandFrame = (command, payload) {
@@ -262,7 +270,7 @@ void main() {
       client.addChannelKeys(
         'chan',
         channelKey,
-        peerOhSet: [ohA, ohB],
+        counterpartOhSet: [ohA, ohB],
         isChannelCreator: true,
       );
 
@@ -285,8 +293,8 @@ void main() {
         final (client, socket, _) = await connectedClient(hopCount: 0);
         addTearDown(client.disconnect);
 
-        final ohA = peerOh(10, 'nodeA:1');
-        final ohB = peerOh(90, 'nodeB:2');
+        final ohA = counterpartOh(10, 'nodeA:1');
+        final ohB = counterpartOh(90, 'nodeB:2');
 
         var frames = 0;
         socket.onCommandFrame = (command, payload) {
@@ -296,7 +304,7 @@ void main() {
         client.addChannelKeys(
           'chan',
           channelKey,
-          peerOhSet: [ohA, ohB],
+          counterpartOhSet: [ohA, ohB],
           isChannelCreator: true,
         );
 
@@ -309,15 +317,15 @@ void main() {
     );
   });
 
-  group('T42 receive: oh_update array grows the peer OH set', () {
+  group('T42 receive: oh_update array grows the counterpart OH set', () {
     test(
       'a 2-descriptor announce makes future sends fan out to both',
       () async {
         final (client, socket, relays) = await connectedClient();
         addTearDown(client.disconnect);
 
-        final ohA = peerOh(10, 'nodeA:1');
-        final ohB = peerOh(90, 'nodeB:2');
+        final ohA = counterpartOh(10, 'nodeA:1');
+        final ohB = counterpartOh(90, 'nodeB:2');
 
         // The partner announces BOTH mailboxes as a JSON array.
         final partnerSession = await RatchetSession.create(
@@ -372,8 +380,8 @@ void main() {
         client.addChannelKeys(
           'chan',
           channelKey,
-          peerOhId: ohA.handleId,
-          peerOhEndpoint: ohA.serverEndpoint,
+          counterpartOhId: ohA.handleId,
+          counterpartOhEndpoint: ohA.serverEndpoint,
           isChannelCreator: false,
         );
         final ownOh = OHRegistration(
@@ -387,8 +395,10 @@ void main() {
         );
         await client.restoreOutboundHandle(ownOh);
 
-        final updates = <PeerOhUpdate>[];
-        final sub = client.stateUpdates.of<PeerOhUpdate>().listen(updates.add);
+        final updates = <CounterpartOhUpdate>[];
+        final sub = client.stateUpdates.of<CounterpartOhUpdate>().listen(
+          updates.add,
+        );
         addTearDown(sub.cancel);
 
         await client.fetchMessages(ownOh);

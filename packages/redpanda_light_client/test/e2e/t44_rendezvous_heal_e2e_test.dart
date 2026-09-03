@@ -13,7 +13,7 @@ import 'package:test/test.dart';
 
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/domain/channel.dart';
-import 'package:redpanda_light_client/src/domain/peer_oh_update.dart';
+import 'package:redpanda_light_client/src/domain/counterpart_oh_update.dart';
 import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
@@ -31,8 +31,8 @@ import 'test_helpers.dart';
 /// Topology: three local nodes A/B/C seeded together (isolated from the public
 /// testnet). Alice's mailbox is on node A; she publishes the rendezvous record
 /// on registration (`record_store`, garlic-wrapped to a remote node). Bob is on
-/// node C, holds the same channel secret but no peer OH. His first send finds
-/// no peer mailbox and triggers a rendezvous recovery (`record_lookup`,
+/// node C, holds the same channel secret but no counterpart OH. His first send finds
+/// no counterpart mailbox and triggers a rendezvous recovery (`record_lookup`,
 /// garlic-wrapped; the answer returns via reverse garlic into Bob's own OH
 /// mailbox). Bob adopts Alice's OH from the decrypted record and his next send
 /// is delivered — the channel bootstrapped itself over the DHT alone.
@@ -149,19 +149,21 @@ void main() async {
         // Let Alice's record_store propagate through the DHT.
         await Future.delayed(const Duration(seconds: 8));
 
-        final peerOhMoves = <PeerOhUpdate>[];
-        final sub = bob.stateUpdates.of<PeerOhUpdate>().listen(peerOhMoves.add);
+        final counterpartOhMoves = <CounterpartOhUpdate>[];
+        final sub = bob.stateUpdates.of<CounterpartOhUpdate>().listen(
+          counterpartOhMoves.add,
+        );
         addTearDown(sub.cancel);
 
-        // Bob's first send finds no peer OH and triggers a rendezvous recovery.
+        // Bob's first send finds no counterpart OH and triggers a rendezvous recovery.
         // Retry: the lookup + reverse-garlic answer + fetch cycle takes a few
         // poll intervals, and each failed send re-arms the recovery.
         final deadline = DateTime.now().add(const Duration(minutes: 7));
-        while (peerOhMoves.isEmpty) {
+        while (counterpartOhMoves.isEmpty) {
           try {
             await bob.sendMessage(channel.id, 'heal me over the DHT');
           } catch (_) {
-            // Expected until the peer OH is recovered from the DHT record.
+            // Expected until the counterpart OH is recovered from the DHT record.
           }
           if (DateTime.now().isAfter(deadline)) {
             fail('Bob never recovered Alice\'s OH from the rendezvous record');
@@ -171,7 +173,7 @@ void main() async {
 
         // Bob adopted Alice's mailbox purely from the decrypted DHT record.
         expect(
-          peerOhMoves.last.descriptors.map((d) => d.serverEndpoint),
+          counterpartOhMoves.last.descriptors.map((d) => d.serverEndpoint),
           contains(nodeA),
           reason: 'Bob must learn Alice\'s node-A mailbox from the DHT record',
         );

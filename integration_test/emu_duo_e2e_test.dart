@@ -409,7 +409,7 @@ Future<void> openChat(WidgetTester tester) async {
 /// The stamp goes out BEFORE the send tap: the tap dispatches the actual
 /// network send, and with a loopback node delivery can complete in tens of
 /// milliseconds — faster than our own `sent-` PUT when this emulator's vCPU
-/// is starved. Stamping afterwards let the peer's `recv-` PUT win the race
+/// is starved. Stamping afterwards let the counterpart's `recv-` PUT win the race
 /// to the coord server, which reported as a negative latency and failed the
 /// run (TD046; -167/-47 ms on 2026-08-17/18). Stamping first can only
 /// overestimate latency, never produce a negative — the overestimate is the
@@ -426,7 +426,7 @@ Future<void> sendChatMessage(WidgetTester tester, String text) async {
   log('sent message: "$text"');
 }
 
-/// Waits for [text] from the peer in the chat UI and stamps `recv-<text>`.
+/// Waits for [text] from the counterpart in the chat UI and stamps `recv-<text>`.
 Future<void> awaitChatMessage(
   WidgetTester tester,
   String text, {
@@ -527,29 +527,29 @@ Future<void> runAlice(WidgetTester tester) async {
     throw StateError('Bob QR is for a different channel');
   }
 
-  // Attach the peer OH that rendezvous discovery contributes. Since #82
+  // Attach the counterpart OH that rendezvous discovery contributes. Since #82
   // addChannel updates an existing row in place instead of INSERT OR REPLACE,
   // so it preserves the ratchet state and our creator role marker — the normal
   // repository path, no direct DB write needed.
   await container
       .read(channelRepositoryProvider)
-      .addChannel(myChannel.copyWith(peerOhDescriptor: desc));
-  // Re-register the channel keys with the peer OH — same call the app makes
+      .addChannel(myChannel.copyWith(counterpartOhDescriptor: desc));
+  // Re-register the channel keys with the counterpart OH — same call the app makes
   // on startup when restoring persisted state.
   final db = container.read(dbProvider);
   final row = await (db.select(
     db.channels,
-  )..where((t) => t.uuid.equals(myChannel.id))).getSingle();
+  )..where((t) => t.conversationId.equals(myChannel.id))).getSingle();
   container
       .read(redPandaClientProvider)
       .addChannelKeys(
-        row.uuid,
+        row.conversationId,
         HEX.decode(row.encryptionKey),
         channelSecret: row.channelSecret != null
             ? HEX.decode(row.channelSecret!)
             : null,
-        peerOhId: HEX.decode(row.peerOhId!),
-        peerOhEndpoint: row.peerOhEndpoint,
+        counterpartOhId: HEX.decode(row.counterpartOhId!),
+        counterpartOhEndpoint: row.counterpartOhEndpoint,
         isChannelCreator: row.authPrivateKey != null,
         ratchetState: row.ratchetState,
       );
@@ -655,11 +655,11 @@ Future<void> runBob(WidgetTester tester) async {
 
   // Same code path as the QR scanner (join screen), minus the camera. QR v4
   // carries only the secret; Alice's OH arrives out of band (stands in for the
-  // rendezvous DHT) and is attached as the peer descriptor.
+  // rendezvous DHT) and is attached as the counterpart descriptor.
   final aliceDesc = OHDescriptor.fromJson(aliceOhJson);
   final channel = (await Channel.fromJson(
     aliceQr,
-  )).copyWith(peerOhDescriptor: aliceDesc);
+  )).copyWith(counterpartOhDescriptor: aliceDesc);
   final container = containerOf(tester);
   await container.read(channelRepositoryProvider).addChannel(channel);
   log('joined channel from Alice QR');
@@ -777,7 +777,7 @@ Future<void> runBob(WidgetTester tester) async {
 
 /// Second app start for Bob (S3): the harness force-stopped the app while
 /// Alice's S3 message was in flight and restarted it with bob_phase =
-/// resume-s3. Everything is persisted (onboarding, channel, peer OH) — the
+/// resume-s3. Everything is persisted (onboarding, channel, counterpart OH) — the
 /// app must come up, reconnect and catch up on the missed message. The
 /// harness measures recv(s3) - restart against the 60 s budget.
 Future<void> runBobResume(WidgetTester tester) async {

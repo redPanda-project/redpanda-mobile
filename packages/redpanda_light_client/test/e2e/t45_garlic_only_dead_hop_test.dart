@@ -148,8 +148,8 @@ void main() async {
         alice.addChannelKeys(
           channel.id,
           channel.encryptionKey,
-          peerOhId: bobOH.ohId,
-          peerOhEndpoint: entryAddress,
+          counterpartOhId: bobOH.ohId,
+          counterpartOhEndpoint: entryAddress,
           isChannelCreator: true,
         );
         bob.addChannelKeys(

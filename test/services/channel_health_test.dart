@@ -43,7 +43,7 @@ ChannelHealth _health({
   ConnectionStatus? connection = ConnectionStatus.connected,
   ChannelFetchInfo? fetchInfo,
   OutboundHandle? ownHandle,
-  bool peerOhKnown = true,
+  bool counterpartOhKnown = true,
   ConversationStats? stats = const ConversationStats(),
 }) {
   return computeChannelHealth(
@@ -52,7 +52,7 @@ ChannelHealth _health({
         fetchInfo ??
         ChannelFetchInfo(lastOkAt: now.subtract(const Duration(seconds: 10))),
     ownHandle: ownHandle ?? _handle(),
-    peerOhKnown: peerOhKnown,
+    counterpartOhKnown: counterpartOhKnown,
     stats: stats,
     now: now,
   );
@@ -60,11 +60,14 @@ ChannelHealth _health({
 
 void main() {
   group('computeChannelHealth', () {
-    test('healthy when connected, fresh fetch, peer known, outbox empty', () {
-      final health = _health();
-      expect(health.level, ChannelHealthLevel.healthy);
-      expect(health.reasons, isEmpty);
-    });
+    test(
+      'healthy when connected, fresh fetch, counterpart mailbox known, outbox empty',
+      () {
+        final health = _health();
+        expect(health.level, ChannelHealthLevel.healthy);
+        expect(health.reasons, isEmpty);
+      },
+    );
 
     test('disconnected is a problem', () {
       final health = _health(connection: ConnectionStatus.disconnected);
@@ -94,7 +97,7 @@ void main() {
         connection: ConnectionStatus.connected,
         fetchInfo: null,
         ownHandle: null,
-        peerOhKnown: true,
+        counterpartOhKnown: true,
         stats: const ConversationStats(),
         now: now,
       );
@@ -102,8 +105,8 @@ void main() {
       expect(health.reasons.single, contains('Receiving not set up'));
     });
 
-    test('unknown peer mailbox degrades', () {
-      final health = _health(peerOhKnown: false);
+    test('unknown counterpart mailbox degrades', () {
+      final health = _health(counterpartOhKnown: false);
       expect(health.level, ChannelHealthLevel.degraded);
     });
 
@@ -141,7 +144,7 @@ void main() {
     test('problems rank above degradations and keep all reasons', () {
       final health = _health(
         connection: ConnectionStatus.disconnected,
-        peerOhKnown: false,
+        counterpartOhKnown: false,
         stats: const ConversationStats(pendingCount: 3),
       );
       expect(health.level, ChannelHealthLevel.problem);

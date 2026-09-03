@@ -96,8 +96,8 @@ void main() {
 
       expect(creator.ownParticipantId, isNot(equals(joiner.ownParticipantId)));
       // The recovering side looks up the peer's entry by the opposite role.
-      expect(creator.peerParticipantId, joiner.ownParticipantId);
-      expect(joiner.peerParticipantId, creator.ownParticipantId);
+      expect(creator.counterpartParticipantId, joiner.ownParticipantId);
+      expect(joiner.counterpartParticipantId, creator.ownParticipantId);
       // Matches the standalone derivation.
       expect(
         creator.ownParticipantId,

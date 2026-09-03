@@ -41,13 +41,13 @@ void main() {
     await db.close();
   });
 
-  Future<Channel> insertPeerChannel(String label) async {
+  Future<Channel> insertCounterpartChannel(String label) async {
     final channel = Channel(
       label: label,
       channelSecret: List.filled(32, 3),
       encryptionKey: List.filled(32, 1),
       authPublicKey: List.filled(32, 2),
-      peerOhDescriptor: OHDescriptor(
+      counterpartOhDescriptor: OHDescriptor(
         serverEndpoint: 'localhost:59559',
         handleId: List.filled(20, 3),
         authPublicKey: List.filled(32, 4),
@@ -57,7 +57,7 @@ void main() {
         .into(db.channels)
         .insert(
           ChannelsCompanion.insert(
-            uuid: channel.id,
+            conversationId: channel.id,
             label: label,
             encryptionKey: HEX.encode(channel.encryptionKey),
             authPublicKey: HEX.encode(channel.authPublicKey),
@@ -68,7 +68,7 @@ void main() {
 
   test('createGroup registers the group, rotates to epoch 1 and sends '
       'invites over the 1:1 channels', () async {
-    final channel = await insertPeerChannel('Bob');
+    final channel = await insertCounterpartChannel('Bob');
     final groupId = await service.createGroup('Runde', [channel]);
 
     // Group row persisted with own identity.
@@ -145,7 +145,7 @@ void main() {
   test(
     'a JoinAccept on the admin device rotates with the grown member list',
     () async {
-      final channel = await insertPeerChannel('Carol');
+      final channel = await insertCounterpartChannel('Carol');
       final groupId = await service.createGroup('Runde', const []);
       client.rotations.clear();
 

@@ -142,7 +142,7 @@ class ScriptedSocket implements Socket {
 }
 
 void main() {
-  final peerOhId = List<int>.generate(20, (i) => 200 - i);
+  final counterpartOhId = List<int>.generate(20, (i) => 200 - i);
   final ownOhId = List<int>.generate(20, (i) => 50 + i);
 
   /// Builds a connected client whose peer repository knows [hopCount] relay
@@ -273,7 +273,7 @@ void main() {
       client.addChannelKeys(
         channel.id,
         channel.encryptionKey,
-        peerOhId: peerOhId,
+        counterpartOhId: counterpartOhId,
         isChannelCreator: true,
       );
       await restoreOwnOh(client, channel.id);
@@ -295,7 +295,7 @@ void main() {
         hops,
       );
       expect(cmd, GarlicBuilder.cmdDeliverAcked);
-      expect(ohId, equals(peerOhId));
+      expect(ohId, equals(counterpartOhId));
       expect(tag, isNull);
 
       // The partner's ratchet decrypts the payload; the inner ChannelMessage
@@ -338,7 +338,7 @@ void main() {
       client.addChannelKeys(
         channel.id,
         channel.encryptionKey,
-        peerOhId: peerOhId,
+        counterpartOhId: counterpartOhId,
         isChannelCreator: true,
       );
 
@@ -386,7 +386,7 @@ void main() {
         hops: hops.map((h) => h.asGarlicHop).toList(),
       );
 
-      // Bob's view: channel WITHOUT the peer's OH id — the RGB is his only
+      // Bob's view: channel WITHOUT the counterpart's OH id — the RGB is his only
       // route back to Alice.
       final channel = await Channel.generate('MS05 reply');
       client.addChannelKeys(
@@ -428,7 +428,7 @@ void main() {
       expect(message.content, 'Reply through your hops!');
 
       // Consumed: the persistence snapshot clears the pending RGB, and the
-      // next send has no route left at all — no RGB, no known peer OH, no
+      // next send has no route left at all — no RGB, no known counterpart OH, no
       // garlic hops for this channel. REDPANDAJ-2DR: sendMessage must refuse
       // rather than deposit with an empty oh_id.
       await waitFor(
@@ -439,7 +439,7 @@ void main() {
 
       await expectLater(
         client.sendMessage(channel.id, 'Second message'),
-        throwsA(isA<UnknownPeerException>()),
+        throwsA(isA<UnknownCounterpartException>()),
       );
       expect(
         frames,
@@ -471,7 +471,7 @@ void main() {
       client.addChannelKeys(
         channel.id,
         channel.encryptionKey,
-        peerOhId: peerOhId,
+        counterpartOhId: counterpartOhId,
         isChannelCreator: false,
         pendingRgbHex: HEX.encode(expired.serialize()),
       );
@@ -486,7 +486,7 @@ void main() {
       expect(client.lastSendViaRgb, isFalse);
       final (cmd, ohId, tag, _, _) = await peelAll(frames.single.$2, hops);
       expect(cmd, GarlicBuilder.cmdDeliver, reason: 'untagged forward path');
-      expect(ohId, equals(peerOhId));
+      expect(ohId, equals(counterpartOhId));
       expect(tag, isNull);
     });
   });
@@ -514,7 +514,7 @@ void main() {
             .add(const Duration(hours: 1))
             .millisecondsSinceEpoch,
         sessionTag: List<int>.filled(16, 0x42),
-        ohId: peerOhId,
+        ohId: counterpartOhId,
         hops: [bobHop.asGarlicHop],
       );
       final replyPayload = await bobSession.encrypt(

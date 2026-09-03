@@ -101,7 +101,7 @@ class ChannelMessage {
   /// True when this message carries a group control action (MS08).
   bool get isGroupControl => groupControl != null && groupControl!.isNotEmpty;
 
-  /// True when this message announces a new peer mailbox (T21 failover).
+  /// True when this message announces a new counterpart mailbox (T21 failover).
   bool get isOhUpdate => ohUpdate != null && ohUpdate!.isNotEmpty;
 
   /// Encodes this message to its proto3-compatible binary representation.

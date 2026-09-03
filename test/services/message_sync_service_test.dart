@@ -51,7 +51,7 @@ void main() {
             keypairBytes: (await OHKeypair.generate()).privateKeyBytes,
             serverEndpoint: 'localhost:59558',
             expiresAt: DateTime.now().add(const Duration(days: 7)),
-            channelId: drift.Value(channelId),
+            conversationId: drift.Value(channelId),
           ),
         );
   }
@@ -65,7 +65,7 @@ void main() {
         .into(db.channels)
         .insert(
           ChannelsCompanion.insert(
-            uuid: uuid,
+            conversationId: uuid,
             label: 'Test',
             encryptionKey: HEX.encode(List.generate(32, (i) => i)),
             authPrivateKey: drift.Value(authPrivateKey),
@@ -218,11 +218,12 @@ void main() {
           .insert(
             SessionTagsCompanion.insert(
               tag: 'aa' * 16,
-              channelId: 'channel-1',
+              conversationId: 'channel-1',
               createdAt: DateTime.fromMillisecondsSinceEpoch(1700000000000),
             ),
           );
-      await (db.update(db.channels)..where((c) => c.uuid.equals('channel-1')))
+      await (db.update(db.channels)
+            ..where((c) => c.conversationId.equals('channel-1')))
           .write(ChannelsCompanion(pendingRgb: drift.Value('bb' * 40)));
 
       await service.restorePersistedState();
@@ -262,17 +263,19 @@ void main() {
           .insert(
             SessionTagsCompanion.insert(
               tag: 'aa' * 16,
-              channelId: uuid,
+              conversationId: uuid,
               createdAt: DateTime.fromMillisecondsSinceEpoch(1700000000000),
             ),
           );
-      await (db.update(db.channels)..where((c) => c.uuid.equals(uuid))).write(
+      await (db.update(
+        db.channels,
+      )..where((c) => c.conversationId.equals(uuid))).write(
         ChannelsCompanion(
           channelSecret: drift.Value(HEX.encode(List.generate(32, (i) => i))),
           pendingRgb: drift.Value('bb' * 40),
-          peerOhId: drift.Value(HEX.encode(List.filled(20, 9))),
-          peerOhEndpoint: const drift.Value('peer-host:59558'),
-          peerOhSet: drift.Value(
+          counterpartOhId: drift.Value(HEX.encode(List.filled(20, 9))),
+          counterpartOhEndpoint: const drift.Value('peer-host:59558'),
+          counterpartOhSet: drift.Value(
             '[{"ep":"peer-host:59558","id":"${HEX.encode(List.filled(20, 9))}",'
             '"pk":"${HEX.encode(List.filled(32, 8))}"}]',
           ),
@@ -293,9 +296,9 @@ void main() {
       expect(registration.ratchetState, equals('{"v":1}'));
       // …and the rest of the row.
       expect(registration.channelSecret, isNotNull);
-      expect(registration.peerOhId, equals(List.filled(20, 9)));
-      expect(registration.peerOhEndpoint, equals('peer-host:59558'));
-      expect(registration.peerOhSet, hasLength(1));
+      expect(registration.counterpartOhId, equals(List.filled(20, 9)));
+      expect(registration.counterpartOhEndpoint, equals('peer-host:59558'));
+      expect(registration.counterpartOhSet, hasLength(1));
     });
 
     test('the startup restore hands over exactly the same state', () async {
@@ -310,12 +313,15 @@ void main() {
       expect(viaRegister.sessionTags, equals(viaRestore.sessionTags));
       expect(viaRegister.pendingRgbHex, equals(viaRestore.pendingRgbHex));
       expect(viaRegister.ratchetState, equals(viaRestore.ratchetState));
-      expect(viaRegister.peerOhId, equals(viaRestore.peerOhId));
-      expect(viaRegister.peerOhEndpoint, equals(viaRestore.peerOhEndpoint));
+      expect(viaRegister.counterpartOhId, equals(viaRestore.counterpartOhId));
+      expect(
+        viaRegister.counterpartOhEndpoint,
+        equals(viaRestore.counterpartOhEndpoint),
+      );
       expect(viaRegister.channelSecret, equals(viaRestore.channelSecret));
       expect(
-        viaRegister.peerOhSet?.length,
-        equals(viaRestore.peerOhSet?.length),
+        viaRegister.counterpartOhSet?.length,
+        equals(viaRestore.counterpartOhSet?.length),
       );
     });
 

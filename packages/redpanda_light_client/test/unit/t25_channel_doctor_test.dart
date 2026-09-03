@@ -235,8 +235,8 @@ void main() {
         channel.encryptionKey,
         // T44: channel secret enables the rendezvous doctor stage.
         channelSecret: channel.channelSecret,
-        peerOhId: List<int>.generate(20, (i) => i),
-        peerOhEndpoint: 'peer:9',
+        counterpartOhId: List<int>.generate(20, (i) => i),
+        counterpartOhEndpoint: 'peer:9',
         isChannelCreator: true,
       );
       await client.registerOutboundHandle(channelId: channel.id);
@@ -274,7 +274,7 @@ void main() {
       client.addChannelKeys(
         channel.id,
         channel.encryptionKey,
-        peerOhId: List<int>.generate(20, (i) => i),
+        counterpartOhId: List<int>.generate(20, (i) => i),
         isChannelCreator: true,
       );
 
@@ -291,8 +291,11 @@ void main() {
       expect(ownMailbox.status, DoctorStatus.fail);
       expect(ownMailbox.detail, contains('No own mailbox'));
 
-      // Peer OH was provided, so that stage is green even offline.
-      expect(stageNamed(report, 'Peer mailbox known').status, DoctorStatus.ok);
+      // Counterpart OH was provided, so that stage is green even offline.
+      expect(
+        stageNamed(report, "Recipient's mailbox known").status,
+        DoctorStatus.ok,
+      );
       // Nothing ever fetched.
       expect(
         stageNamed(report, 'Last fetch success').status,
@@ -305,13 +308,13 @@ void main() {
       );
     });
 
-    test('peer OH missing: sending stage is amber', () async {
+    test('counterpart OH missing: sending stage is amber', () async {
       final (client, socket, relays) = await connectedClient();
       addTearDown(client.disconnect);
       DoctorNodeScript(socket, relays, deliverOnFetch: true);
 
       final channel = await Channel.generate('Test');
-      // No peerOhId registered.
+      // No counterpartOhId registered.
       client.addChannelKeys(
         channel.id,
         channel.encryptionKey,
@@ -321,9 +324,9 @@ void main() {
 
       final report = await client.runChannelDoctor(channel.id);
 
-      final peer = stageNamed(report, 'Peer mailbox known');
-      expect(peer.status, DoctorStatus.warn);
-      expect(peer.detail, contains('Peer mailbox unknown'));
+      final counterpart = stageNamed(report, "Recipient's mailbox known");
+      expect(counterpart.status, DoctorStatus.warn);
+      expect(counterpart.detail, contains("Recipient's mailbox unknown"));
     });
 
     test('loopback never returns: self-test stage is red', () async {
@@ -336,7 +339,7 @@ void main() {
       client.addChannelKeys(
         channel.id,
         channel.encryptionKey,
-        peerOhId: List<int>.generate(20, (i) => i),
+        counterpartOhId: List<int>.generate(20, (i) => i),
         isChannelCreator: true,
       );
       await client.registerOutboundHandle(channelId: channel.id);
@@ -360,7 +363,7 @@ void main() {
       client.addChannelKeys(
         channel.id,
         channel.encryptionKey,
-        peerOhId: List<int>.generate(20, (i) => i),
+        counterpartOhId: List<int>.generate(20, (i) => i),
         isChannelCreator: true,
       );
       await client.registerOutboundHandle(channelId: channel.id);
@@ -385,7 +388,7 @@ void main() {
       client.addChannelKeys(
         channel.id,
         channel.encryptionKey,
-        peerOhId: List<int>.generate(20, (i) => i),
+        counterpartOhId: List<int>.generate(20, (i) => i),
         isChannelCreator: true,
       );
       await client.registerOutboundHandle(channelId: channel.id);

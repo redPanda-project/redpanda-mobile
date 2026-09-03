@@ -67,7 +67,7 @@ void main() async {
       alice.addChannelKeys(
         sharedChannel.id,
         sharedChannel.encryptionKey,
-        peerOhId: bobOH.ohId,
+        counterpartOhId: bobOH.ohId,
         isChannelCreator: true,
       );
       bob.addChannelKeys(
@@ -135,7 +135,7 @@ void main() async {
         alice.addChannelKeys(
           bogusChannel.id,
           bogusChannel.encryptionKey,
-          peerOhId: List.generate(20, (i) => 255 - i),
+          counterpartOhId: List.generate(20, (i) => 255 - i),
           isChannelCreator: true,
         );
 

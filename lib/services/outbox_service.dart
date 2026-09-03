@@ -382,9 +382,9 @@ class OutboxService {
       await _messages.markRetryAttempt(msg.id);
       failure = DeliveryFailure.groupPartial;
       unreached = e.failedMemberIds.length;
-    } on UnknownPeerException catch (e) {
-      // Peer OH still unknown — normal backoff, becomes sendable once the
-      // peer OH is registered (see redpanda_light_client.dart sendMessage /
+    } on UnknownCounterpartException catch (e) {
+      // The counterpart's OH is still unknown — normal backoff; the message
+      // becomes sendable once it is (see redpanda_light_client.dart sendMessage /
       // REDPANDAJ-2DR).
       debugPrint(
         'OutboxService: message ${msg.id} deferred, counterpart mailbox '

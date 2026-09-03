@@ -14,7 +14,14 @@ class Users extends Table {
 }
 
 class Channels extends Table {
-  TextColumn get uuid => text()(); // The Channel ID (Hash of keys)
+  /// The conversation id: `SHA256(channel_pk)` as hex (spec Decision 1).
+  ///
+  /// T114: this is THE identifier of a 1:1 conversation. It used to be called
+  /// `uuid` here, `channelId` in the repositories and `peerUuid` in the chat
+  /// screen — four names (with `Messages.conversationId`) for one string. The
+  /// app layer says `conversationId` now; the SQL column keeps its historical
+  /// name so no migration is needed.
+  TextColumn get conversationId => text().named('uuid')();
   TextColumn get label => text()();
   TextColumn get encryptionKey => text()(); // HEX encoded, 32 bytes (k_enc)
 
@@ -26,22 +33,31 @@ class Channels extends Table {
 
   // Ed25519 channel identity keypair (T44: derived from channelSecret). The
   // private seed exists only on the device that generated the channel — it is
-  // the local role marker (creator vs joiner); peers joining via QR hold only
-  // the public key.
+  // the local role marker (creator vs joiner); a device joining via QR holds
+  // only the public key.
   TextColumn get authPrivateKey => text().nullable()(); // HEX encoded
   TextColumn get authPublicKey => text()(); // HEX encoded, 32 bytes
 
-  // OH Descriptor of the peer's PRIMARY mailbox (for sending messages to
-  // them). Mirrors the first entry of peerOhSet below.
-  TextColumn get peerOhEndpoint => text().nullable()();
-  TextColumn get peerOhId => text().nullable()(); // HEX encoded
-  TextColumn get peerOhPublicKey => text().nullable()(); // HEX encoded
+  // OH descriptor of the COUNTERPART's PRIMARY mailbox (for sending messages
+  // to them). Mirrors the first entry of counterpartOhSet below.
+  //
+  // T114: the Dart names say "counterpart" (the human on the other side of
+  // this conversation) instead of "peer", which in the light client means a
+  // full node. The SQL column names are pinned with `named(...)` to the
+  // historical `peer_oh_*` spelling, so this is a pure code-level rename with
+  // no migration and no risk to existing databases.
+  TextColumn get counterpartOhEndpoint =>
+      text().nullable().named('peer_oh_endpoint')();
+  TextColumn get counterpartOhId =>
+      text().nullable().named('peer_oh_id')(); // HEX encoded
+  TextColumn get counterpartOhPublicKey =>
+      text().nullable().named('peer_oh_public_key')(); // HEX encoded
 
-  // T42 multi-OH: the partner's FULL known mailbox set as a JSON array of
+  // T42 multi-OH: the counterpart's FULL known mailbox set as a JSON array of
   // OHDescriptor maps ({ep,id,pk}). A send deposits into every entry; the
   // receiver deduplicates by message id. Grown/replaced by the in-band
   // `oh_update` announce. Null until the first announce arrives.
-  TextColumn get peerOhSet => text().nullable()();
+  TextColumn get counterpartOhSet => text().nullable().named('peer_oh_set')();
 
   // Metadata
   DateTimeColumn get lastSeen => dateTime().nullable()(); // Last message time?
@@ -57,7 +73,7 @@ class Channels extends Table {
   TextColumn get pendingRgb => text().nullable()();
 
   @override
-  Set<Column> get primaryKey => {uuid};
+  Set<Column> get primaryKey => {conversationId};
 }
 
 // MS05: outstanding reverse-garlic session tags issued with our RGBs.
@@ -65,7 +81,8 @@ class Channels extends Table {
 // losing a row silently discards the matching reply, hence persistent.
 class SessionTags extends Table {
   TextColumn get tag => text()(); // 16 bytes, hex (32 chars)
-  TextColumn get channelId => text().references(Channels, #uuid)();
+  TextColumn get conversationId =>
+      text().references(Channels, #conversationId).named('channel_id')();
   DateTimeColumn get createdAt => dateTime()();
 
   @override
@@ -85,7 +102,7 @@ class SessionTags extends Table {
 class Messages extends Table {
   IntColumn get id => integer().autoIncrement()();
   TextColumn get conversationId =>
-      text().references(Channels, #uuid)(); // Updated reference
+      text().references(Channels, #conversationId)();
   TextColumn get senderId => text()();
   TextColumn get content => text()();
   DateTimeColumn get timestamp => dateTime()();
@@ -112,7 +129,7 @@ class Messages extends Table {
 // on-device only, never exported.
 @DataClassName('GroupChannelRow')
 class GroupChannels extends Table {
-  // 32-byte group id (hex) — also the channelId of the own group OH.
+  // 32-byte group id (hex) — also the conversation id of the own group OH.
   TextColumn get groupId => text()();
   TextColumn get label => text()();
   BoolColumn get isAdmin => boolean().withDefault(const Constant(false))();
@@ -173,8 +190,9 @@ class GroupInvites extends Table {
   TextColumn get groupName => text()();
   // Pinned admin identity from the proposal: rotations must be signed by it.
   TextColumn get adminMemberId => text()();
-  // The 1:1 channel the proposal arrived on (the reply path for the accept).
-  TextColumn get channelId => text()();
+  // The 1:1 conversation the proposal arrived on (the reply path for the
+  // accept).
+  TextColumn get conversationId => text().named('channel_id')();
   DateTimeColumn get receivedAt => dateTime()();
 
   @override
@@ -235,7 +253,7 @@ class OutboundHandles extends Table {
   BlobColumn get keypairBytes => blob()(); // Serialized ECDSA keypair
   TextColumn get serverEndpoint => text()();
   DateTimeColumn get expiresAt => dateTime()();
-  TextColumn get channelId => text().nullable()();
+  TextColumn get conversationId => text().nullable().named('channel_id')();
 
   // Highest acknowledged mailbox sequence id; fetches resume from here
   // after an app restart so old messages are not fetched again.
@@ -300,9 +318,9 @@ class AppDatabase extends _$AppDatabase {
         if (from < 6) {
           // Add OH columns to Channels and create OutboundHandles table
           try {
-            await m.addColumn(channels, channels.peerOhEndpoint);
-            await m.addColumn(channels, channels.peerOhId);
-            await m.addColumn(channels, channels.peerOhPublicKey);
+            await m.addColumn(channels, channels.counterpartOhEndpoint);
+            await m.addColumn(channels, channels.counterpartOhId);
+            await m.addColumn(channels, channels.counterpartOhPublicKey);
           } catch (e) {
             // Columns might already exist if channels was recreated in step 5
           }
@@ -342,7 +360,7 @@ class AppDatabase extends _$AppDatabase {
           // key model v3). Old channels (shared-secret K_auth, old channel-id
           // scheme), their messages and the brainpool OH keypairs are
           // incompatible with the new protocol — destructive recreation
-          // (testnet, spec section 7). Both peers re-create channels via a
+          // (testnet, spec section 7). Both sides re-create channels via a
           // fresh v3 QR code.
           for (final table in <TableInfo>[
             messages,
@@ -409,9 +427,9 @@ class AppDatabase extends _$AppDatabase {
           }
         }
         if (from < 16 && to >= 16) {
-          // T42 multi-OH: full peer mailbox set (JSON array). Non-destructive.
+          // T42 multi-OH: full counterpart mailbox set (JSON array). Non-destructive.
           if (from >= 2) {
-            await m.addColumn(channels, channels.peerOhSet);
+            await m.addColumn(channels, channels.counterpartOhSet);
           }
         }
         if (from < 17 && to >= 17) {
@@ -419,7 +437,7 @@ class AppDatabase extends _$AppDatabase {
           // is now the source of truth (k_enc, identity and rendezvous keys are
           // derived from it). QR v3 is invalid without a migration path
           // (spec Decision 1) — existing channels cannot be upgraded and are
-          // dropped so peers re-pair with a fresh v4 QR. Destructive by design.
+          // dropped so both sides re-pair with a fresh v4 QR. Destructive by design.
           for (final table in <TableInfo>[
             messages,
             channels,

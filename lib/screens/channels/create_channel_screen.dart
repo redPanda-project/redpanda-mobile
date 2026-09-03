@@ -37,7 +37,7 @@ class _CreateChannelScreenState extends ConsumerState<CreateChannelScreen> {
     if (!mounted) return;
     setState(() {
       _createdChannel = channel;
-      // QR v4: the code is just the channel secret — the peer discovers our
+      // QR v4: the code is just the channel secret — the counterpart discovers our
       // OH via the rendezvous DHT record, not the QR.
       _qrData = channel.toJson();
     });
@@ -64,7 +64,7 @@ class _CreateChannelScreenState extends ConsumerState<CreateChannelScreen> {
 
   /// Registers our own Outbound Handle for this channel. The OH is published
   /// into the rendezvous DHT record (by the network client) rather than
-  /// embedded in the QR, so the scanning peer discovers it over the DHT.
+  /// embedded in the QR, so the scanning counterpart discovers it over the DHT.
   Future<void> _registerOwnOh(Channel channel) async {
     final client = ref.read(redPandaClientProvider);
     final ownDescriptor = await ref

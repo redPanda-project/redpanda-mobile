@@ -42,7 +42,7 @@ void main() {
   late AppDatabase db;
   late FakeRedPandaClient client;
 
-  const channelUuid = 'channel-1';
+  const conversationUuid = 'channel-1';
   const myUuid = 'me-uuid';
 
   setUp(() async {
@@ -56,7 +56,7 @@ void main() {
         .into(db.channels)
         .insert(
           ChannelsCompanion.insert(
-            uuid: channelUuid,
+            conversationId: conversationUuid,
             label: 'Test Channel',
             encryptionKey: HEX.encode(List.generate(32, (i) => i)),
             authPublicKey: HEX.encode(List.generate(32, (i) => i + 1)),
@@ -74,7 +74,7 @@ void main() {
         .into(db.messages)
         .insert(
           MessagesCompanion.insert(
-            conversationId: channelUuid,
+            conversationId: conversationUuid,
             senderId: myUuid,
             content: content,
             timestamp: DateTime.now(),
@@ -90,7 +90,9 @@ void main() {
         dbProvider.overrideWithValue(db),
         redPandaClientProvider.overrideWithValue(client),
       ],
-      child: const MaterialApp(home: ChatScreen(peerUuid: channelUuid)),
+      child: const MaterialApp(
+        home: ChatScreen(conversationId: conversationUuid),
+      ),
     );
   }
 
@@ -166,15 +168,15 @@ void main() {
       await unmount(tester);
     });
 
-    testWidgets('received messages from the peer show no status icon', (
+    testWidgets('received messages from the counterpart show no status icon', (
       tester,
     ) async {
       await db
           .into(db.messages)
           .insert(
             MessagesCompanion.insert(
-              conversationId: channelUuid,
-              senderId: channelUuid, // sent by the peer
+              conversationId: conversationUuid,
+              senderId: conversationUuid, // sent by the counterpart
               content: 'their msg',
               timestamp: DateTime.now(),
               status: MessageStatus.received,
@@ -207,7 +209,7 @@ void main() {
       client.stateController.add(
         OhMailboxUpdate(
           ohId: List.generate(20, (i) => i),
-          channelId: channelUuid,
+          channelId: conversationUuid,
           lastCursor: 1,
           expiresAtMs: DateTime.now().millisecondsSinceEpoch,
           mailboxOverflow: true,
@@ -354,7 +356,9 @@ void main() {
             redPandaClientProvider.overrideWithValue(client),
             outboxServiceProvider.overrideWithValue(outbox),
           ],
-          child: const MaterialApp(home: ChatScreen(peerUuid: channelUuid)),
+          child: const MaterialApp(
+            home: ChatScreen(conversationId: conversationUuid),
+          ),
         ),
       );
       await tester.pump();
@@ -365,7 +369,7 @@ void main() {
       await tester.pump();
 
       expect(outbox.enqueued, hasLength(1));
-      expect(outbox.enqueued.single.conversationId, equals(channelUuid));
+      expect(outbox.enqueued.single.conversationId, equals(conversationUuid));
       expect(outbox.enqueued.single.senderId, equals(myUuid));
       expect(outbox.enqueued.single.content, equals('enqueue me'));
       expect(
@@ -388,7 +392,7 @@ void main() {
           .into(db.channels)
           .insert(
             ChannelsCompanion.insert(
-              uuid: 'other-channel',
+              conversationId: 'other-channel',
               label: 'Other',
               encryptionKey: HEX.encode(List.generate(32, (i) => i)),
               authPublicKey: HEX.encode(List.generate(32, (i) => i + 1)),
@@ -429,7 +433,7 @@ void main() {
           .into(db.messages)
           .insert(
             MessagesCompanion.insert(
-              conversationId: channelUuid,
+              conversationId: conversationUuid,
               senderId: myUuid,
               content: 'older pending',
               timestamp: DateTime.now(),

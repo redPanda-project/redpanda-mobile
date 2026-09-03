@@ -8,7 +8,7 @@ import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
 import 'package:redpanda_light_client/src/domain/oh_fetch_status.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
-import 'package:redpanda_light_client/src/domain/peer_oh_update.dart';
+import 'package:redpanda_light_client/src/domain/counterpart_oh_update.dart';
 import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/garlic/node_scorer.dart';
 import 'package:test/test.dart';
@@ -26,8 +26,8 @@ void main() {
     List<int>.filled(32, 1),
     channelSecret: List<int>.filled(32, 2),
     ownDisplayName: 'me',
-    peerOhId: ohId(9),
-    peerOhEndpoint: 'old-host:59558',
+    counterpartOhId: ohId(9),
+    counterpartOhEndpoint: 'old-host:59558',
     isChannelCreator: true,
     ratchetState: 'ratchet-v1',
     sessionTags: const {'aa': 1},
@@ -66,7 +66,7 @@ void main() {
     expect(cmd.ratchetState, equals('ratchet-v2'));
     expect(cmd.sessionTags, equals({'aa': 1}));
     expect(cmd.pendingRgbHex, equals('beef'));
-    expect(cmd.peerOhEndpoint, equals('old-host:59558'));
+    expect(cmd.counterpartOhEndpoint, equals('old-host:59558'));
     expect(cmd.isChannelCreator, isTrue);
     expect(cmd.ownDisplayName, equals('me'));
   });
@@ -87,7 +87,7 @@ void main() {
   test('a peer-OH update moves the primary and the whole set', () {
     final replay = WorkerReplayState()..recordChannelKeys(channelCmd('c1'));
     replay.apply(
-      PeerOhUpdate(
+      CounterpartOhUpdate(
         channelId: 'c1',
         descriptors: [
           OHDescriptor(
@@ -105,19 +105,19 @@ void main() {
     );
 
     final cmd = onlyChannel(replay);
-    expect(cmd.peerOhEndpoint, equals('new-host:59558'));
-    expect(cmd.peerOhId, equals(ohId(7)));
-    expect(cmd.peerOhSet, hasLength(2));
-    expect(cmd.peerOhSet!.first.endpoint, equals('new-host:59558'));
+    expect(cmd.counterpartOhEndpoint, equals('new-host:59558'));
+    expect(cmd.counterpartOhId, equals(ohId(7)));
+    expect(cmd.counterpartOhSet, hasLength(2));
+    expect(cmd.counterpartOhSet!.first.endpoint, equals('new-host:59558'));
     // Crypto state survives a mailbox move.
     expect(cmd.ratchetState, equals('ratchet-v1'));
   });
 
   test('an empty peer-OH set never clears the known mailbox', () {
     final replay = WorkerReplayState()..recordChannelKeys(channelCmd('c1'));
-    replay.apply(const PeerOhUpdate(channelId: 'c1', descriptors: []));
+    replay.apply(const CounterpartOhUpdate(channelId: 'c1', descriptors: []));
 
-    expect(onlyChannel(replay).peerOhEndpoint, equals('old-host:59558'));
+    expect(onlyChannel(replay).counterpartOhEndpoint, equals('old-host:59558'));
   });
 
   test('state for an unknown channel does not resurrect it', () {
@@ -324,8 +324,8 @@ void main() {
           'c1',
           List<int>.filled(32, 1),
           channelSecret: List<int>.filled(32, 2),
-          peerOhId: ohId(9),
-          peerOhEndpoint: 'old-host:59558',
+          counterpartOhId: ohId(9),
+          counterpartOhEndpoint: 'old-host:59558',
           isChannelCreator: true,
           ratchetState: 'ratchet-v1',
         ),
@@ -338,10 +338,10 @@ void main() {
       expect(cmd.ratchetState, equals('ratchet-v7'));
     });
 
-    test('a stale re-register never moves the peer mailbox back', () {
+    test('a stale re-register never moves the counterpart mailbox back', () {
       final replay = WorkerReplayState()..recordChannelKeys(channelCmd('c1'));
       replay.apply(
-        PeerOhUpdate(
+        CounterpartOhUpdate(
           channelId: 'c1',
           descriptors: [
             OHDescriptor(
@@ -356,9 +356,9 @@ void main() {
       replay.recordChannelKeys(channelCmd('c1')); // carries ohId(9) again
 
       final cmd = onlyChannel(replay);
-      expect(cmd.peerOhId, equals(ohId(7)));
-      expect(cmd.peerOhEndpoint, equals('new-host:59558'));
-      expect(cmd.peerOhSet, hasLength(1));
+      expect(cmd.counterpartOhId, equals(ohId(7)));
+      expect(cmd.counterpartOhEndpoint, equals('new-host:59558'));
+      expect(cmd.counterpartOhSet, hasLength(1));
     });
 
     test('a consumed RGB is not resurrected by a re-register', () {
@@ -390,7 +390,7 @@ void main() {
       final cmd = onlyChannel(replay);
       expect(cmd.channelSecret, equals(List<int>.filled(32, 2)));
       expect(cmd.ownDisplayName, equals('me'));
-      expect(cmd.peerOhId, equals(ohId(9)));
+      expect(cmd.counterpartOhId, equals(ohId(9)));
       expect(cmd.ratchetState, equals('ratchet-v1'));
       expect(cmd.sessionTags, equals({'aa': 1}));
       // The role is the channel's identity, not something a later caller

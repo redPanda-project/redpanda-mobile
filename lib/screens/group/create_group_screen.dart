@@ -58,10 +58,10 @@ class _CreateGroupScreenState extends ConsumerState<CreateGroupScreen> {
       appBar: AppBar(title: const Text('New Group')),
       body: channelsAsync.when(
         data: (channels) {
-          // Invites need a peer mailbox to be deposited into.
+          // Invites need a counterpart mailbox to be deposited into.
           final invitable = [
             for (final channel in channels)
-              if (channel.peerOhDescriptor != null) channel,
+              if (channel.counterpartOhDescriptor != null) channel,
           ];
           return Column(
             children: [

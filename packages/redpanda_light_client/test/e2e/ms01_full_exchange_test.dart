@@ -90,12 +90,12 @@ void main() async {
 
         // 5. Alice imports channel and registers keys with Bob's OH as peer
         final channelWithOH = sharedChannel.copyWith(
-          peerOhDescriptor: bobDescriptor,
+          counterpartOhDescriptor: bobDescriptor,
         );
         alice.addChannelKeys(
           channelWithOH.id,
           channelWithOH.encryptionKey,
-          peerOhId: bobOH.ohId,
+          counterpartOhId: bobOH.ohId,
           isChannelCreator: true,
         );
 

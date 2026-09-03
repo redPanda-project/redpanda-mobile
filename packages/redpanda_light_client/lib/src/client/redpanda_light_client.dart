@@ -28,7 +28,7 @@ import 'package:redpanda_light_client/src/domain/oh_fetch_status.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
-import 'package:redpanda_light_client/src/domain/peer_oh_update.dart';
+import 'package:redpanda_light_client/src/domain/counterpart_oh_update.dart';
 import 'package:redpanda_light_client/src/domain/reverse_garlic_block.dart';
 import 'package:redpanda_light_client/src/domain/routing_ack.dart';
 import 'package:redpanda_light_client/src/domain/send_exceptions.dart';
@@ -1169,16 +1169,16 @@ class RedPandaLightClient implements RedPandaClient {
   /// Populated externally or via addChannelKeys().
   final Map<String, List<int>> _channelEncryptionKeys = {};
 
-  /// The PRIMARY peer OH id per channel (== [_channelPeerOhSet].first). Kept
+  /// The PRIMARY counterpart OH id per channel (== [_channelCounterpartOhSet].first). Kept
   /// as a plain map so the single-target senders (garlic, RGB reply,
   /// direct-deposit fallback, ack routing) stay unchanged — they always aim
   /// at the primary. The multi-deposit fan-out (T42) uses the full set below.
-  final Map<String, List<int>> _channelPeerOhIds = {};
+  final Map<String, List<int>> _channelCounterpartOhIds = {};
 
-  /// host:port of the node hosting the peer's PRIMARY OH (from the
+  /// host:port of the node hosting the counterpart's PRIMARY OH (from the
   /// OHDescriptor), excluded from garlic hop candidates (MS04: no hop ==
   /// destination node).
-  final Map<String, String> _channelPeerOhEndpoints = {};
+  final Map<String, String> _channelCounterpartOhEndpoints = {};
 
   /// The live encryption key of [channelId] (read-only view, for tests and
   /// diagnostics).
@@ -1195,15 +1195,16 @@ class RedPandaLightClient implements RedPandaClient {
   /// The partner's currently known mailbox ids for [channelId], primary
   /// first (read-only view, for tests and diagnostics — mirrors
   /// [registeredOutboundHandles] for the own side).
-  List<List<int>> peerMailboxIds(String channelId) => [
-    for (final oh in _channelPeerOhSet[channelId] ?? const <_PeerOh>[])
+  List<List<int>> counterpartMailboxIds(String channelId) => [
+    for (final oh
+        in _channelCounterpartOhSet[channelId] ?? const <_CounterpartOh>[])
       List.unmodifiable(oh.ohId),
   ];
 
   /// host:port of the node hosting the partner's PRIMARY mailbox, if known
   /// (read-only view, for tests and diagnostics).
-  String? peerMailboxEndpoint(String channelId) =>
-      _channelPeerOhEndpoints[channelId];
+  String? counterpartMailboxEndpoint(String channelId) =>
+      _channelCounterpartOhEndpoints[channelId];
 
   /// T42: the FULL set of the partner's known OH mailboxes per channel.
   /// A send deposits into EVERY entry in parallel (the receiver deduplicates
@@ -1211,39 +1212,48 @@ class RedPandaLightClient implements RedPandaClient {
   /// copy on the surviving node arrives without waiting for a failover. The
   /// set is seeded from the QR/primary OH and grown/replaced by the in-band
   /// `oh_update` announce (a JSON array of descriptors, T42). The first entry
-  /// mirrors [_channelPeerOhIds]/[_channelPeerOhEndpoints].
-  final Map<String, List<_PeerOh>> _channelPeerOhSet = {};
+  /// mirrors [_channelCounterpartOhIds]/[_channelCounterpartOhEndpoints].
+  final Map<String, List<_CounterpartOh>> _channelCounterpartOhSet = {};
 
-  /// Sets the primary peer OH (id + endpoint) for [channelId] and seeds the
-  /// peer OH set with it when no richer set is known yet.
+  /// Sets the primary counterpart OH (id + endpoint) for [channelId] and seeds the
+  /// counterpart OH set with it when no richer set is known yet.
   ///
-  /// Only ever called while the channel has NO live peer mailbox at all (see
+  /// Only ever called while the channel has NO live counterpart mailbox at all (see
   /// [addChannelKeys]): a set grown via `oh_update` or the T44 rendezvous
   /// lookup is always at least as fresh as anything the app layer persisted,
   /// so a re-registration must not re-point the primary at it.
-  void _seedPrimaryPeerOh(String channelId, List<int> ohId, String? endpoint) {
-    _channelPeerOhIds[channelId] = ohId;
+  void _seedPrimaryCounterpartOh(
+    String channelId,
+    List<int> ohId,
+    String? endpoint,
+  ) {
+    _channelCounterpartOhIds[channelId] = ohId;
     if (endpoint != null) {
-      _channelPeerOhEndpoints[channelId] = endpoint;
+      _channelCounterpartOhEndpoints[channelId] = endpoint;
     }
-    final existing = _channelPeerOhSet[channelId];
+    final existing = _channelCounterpartOhSet[channelId];
     if (existing == null || existing.isEmpty) {
-      _channelPeerOhSet[channelId] = [_PeerOh(ohId: ohId, endpoint: endpoint)];
+      _channelCounterpartOhSet[channelId] = [
+        _CounterpartOh(ohId: ohId, endpoint: endpoint),
+      ];
     }
   }
 
-  /// Replaces the peer OH set for [channelId] with [descriptors] (deduplicated
+  /// Replaces the counterpart OH set for [channelId] with [descriptors] (deduplicated
   /// by OH id, order preserved) and re-points the primary at the first entry.
   /// Returns true when the set actually changed.
-  bool _replacePeerOhSet(String channelId, List<OHDescriptor> descriptors) {
-    final deduped = <_PeerOh>[];
+  bool _replaceCounterpartOhSet(
+    String channelId,
+    List<OHDescriptor> descriptors,
+  ) {
+    final deduped = <_CounterpartOh>[];
     for (final d in descriptors) {
       if (d.handleId.length != GarlicHop.nodeIdLength) continue;
       if (deduped.any((e) => _sameBytes(e.ohId, d.handleId))) continue;
-      deduped.add(_PeerOh(ohId: d.handleId, endpoint: d.serverEndpoint));
+      deduped.add(_CounterpartOh(ohId: d.handleId, endpoint: d.serverEndpoint));
     }
     if (deduped.isEmpty) return false;
-    final previous = _channelPeerOhSet[channelId];
+    final previous = _channelCounterpartOhSet[channelId];
     if (previous != null &&
         previous.length == deduped.length &&
         List.generate(
@@ -1254,11 +1264,11 @@ class RedPandaLightClient implements RedPandaClient {
         ).every((x) => x)) {
       return false; // identical — a duplicate announce
     }
-    _channelPeerOhSet[channelId] = deduped;
-    _channelPeerOhIds[channelId] = deduped.first.ohId;
+    _channelCounterpartOhSet[channelId] = deduped;
+    _channelCounterpartOhIds[channelId] = deduped.first.ohId;
     final primaryEndpoint = deduped.first.endpoint;
     if (primaryEndpoint != null) {
-      _channelPeerOhEndpoints[channelId] = primaryEndpoint;
+      _channelCounterpartOhEndpoints[channelId] = primaryEndpoint;
     }
     return true;
   }
@@ -1317,9 +1327,9 @@ class RedPandaLightClient implements RedPandaClient {
     List<int> encryptionKey, {
     List<int>? channelSecret,
     String? ownDisplayName,
-    List<int>? peerOhId,
-    String? peerOhEndpoint,
-    List<OHDescriptor>? peerOhSet,
+    List<int>? counterpartOhId,
+    String? counterpartOhEndpoint,
+    List<OHDescriptor>? counterpartOhSet,
     required bool isChannelCreator,
     String? ratchetState,
     Map<String, int>? sessionTags,
@@ -1355,21 +1365,25 @@ class RedPandaLightClient implements RedPandaClient {
         'expected 32 bytes, got ${channelSecret.length}; rendezvous disabled',
       );
     }
-    // T42/T111: restore the persisted peer mailbox set (multi-OH first, then
+    // T42/T111: restore the persisted counterpart mailbox set (multi-OH first, then
     // the primary) ONLY while no live mailbox is known for the channel. Every
-    // other source of a peer mailbox — the in-band `oh_update` announce and
+    // other source of a counterpart mailbox — the in-band `oh_update` announce and
     // the T44 rendezvous lookup — is newer by construction, so a
     // re-registration from persisted data must not undo it. The primary used
     // to be re-pointed unconditionally here, which let a re-register carrying
     // a stale row silently redirect every single-target send (garlic, RGB
     // reply, channel-ACK) at a dead mailbox.
-    final livePeerOhSet = _channelPeerOhSet[channelId];
-    if (livePeerOhSet == null || livePeerOhSet.isEmpty) {
-      if (peerOhSet != null && peerOhSet.isNotEmpty) {
-        _replacePeerOhSet(channelId, peerOhSet);
+    final liveCounterpartOhSet = _channelCounterpartOhSet[channelId];
+    if (liveCounterpartOhSet == null || liveCounterpartOhSet.isEmpty) {
+      if (counterpartOhSet != null && counterpartOhSet.isNotEmpty) {
+        _replaceCounterpartOhSet(channelId, counterpartOhSet);
       }
-      if (peerOhId != null) {
-        _seedPrimaryPeerOh(channelId, peerOhId, peerOhEndpoint);
+      if (counterpartOhId != null) {
+        _seedPrimaryCounterpartOh(
+          channelId,
+          counterpartOhId,
+          counterpartOhEndpoint,
+        );
       }
     }
     // MS05: the garlic session snapshot is adopted on the first registration
@@ -1618,29 +1632,29 @@ class RedPandaLightClient implements RedPandaClient {
       }
     }
 
-    // T45: garlic-only deposit into the peer's mailbox set. A deposit is NEVER
+    // T45: garlic-only deposit into the counterpart's mailbox set. A deposit is NEVER
     // sent as a direct FlaschenpostPut anymore — the connected node must not be
     // able to observe every deposit pattern (MS04 privacy; binding user
-    // decision 2026-07-20: Garlic ALWAYS, one hop-disjoint route per peer OH).
-    // Each known peer OH gets its own garlic route with forward hops kept
+    // decision 2026-07-20: Garlic ALWAYS, one hop-disjoint route per counterpart OH).
+    // Each known counterpart OH gets its own garlic route with forward hops kept
     // disjoint across routes (best-effort anti-correlation); a degenerate net
     // with no relay candidates routes the packet through the connected node
     // itself (uniform garlic — still command 142, never a direct 141 deposit).
     final targets =
-        _channelPeerOhSet[channelId]
+        _channelCounterpartOhSet[channelId]
             ?.where((t) => t.ohId.length == GarlicHop.nodeIdLength)
             .toList(growable: false) ??
-        const <_PeerOh>[];
+        const <_CounterpartOh>[];
     if (targets.isEmpty) {
-      // No known peer OH — no route can be built. Keep the message pending
+      // No known counterpart OH — no route can be built. Keep the message pending
       // (the app retries it) and kick off a rendezvous DHT recovery so a later
-      // retry finds the peer's current mailboxes (T44).
+      // retry finds the counterpart's current mailboxes (T44).
       RpLog.info(
         'RedPandaLightClient: sendMessage() channel $channelId has no known '
-        'peer OH — message stays pending for retry',
+        'counterpart OH — message stays pending for retry',
       );
       unawaited(_recoverViaRendezvous(channelId));
-      throw UnknownPeerException(channelId);
+      throw UnknownCounterpartException(channelId);
     }
     await _depositViaGarlicToAll(
       activePeer,
@@ -1931,37 +1945,38 @@ class RedPandaLightClient implements RedPandaClient {
       }
     }
 
-    // Stage 3: peer OH mailboxes known (required for sending). Reports how
-    // many of the partner's mailboxes we can deposit into (T42 fan-out).
+    // Stage 3: counterpart mailboxes known (required for sending). Reports
+    // how many of the partner's mailboxes we can deposit into (T42 fan-out).
     sw
       ..reset()
       ..start();
-    final peerSet = _channelPeerOhSet[channelId] ?? const <_PeerOh>[];
-    if (peerSet.isEmpty) {
+    final counterpartSet =
+        _channelCounterpartOhSet[channelId] ?? const <_CounterpartOh>[];
+    if (counterpartSet.isEmpty) {
       stages.add(
         _stage(
-          'Peer mailbox known',
+          "Recipient's mailbox known",
           DoctorStatus.warn,
           sw,
-          'Peer mailbox unknown — scan the peer\'s QR code to enable '
+          "Recipient's mailbox unknown — scan their QR code to enable "
               'sending. Receiving still works.',
         ),
       );
     } else {
-      final endpoints = peerSet
+      final endpoints = counterpartSet
           .map((p) => p.endpoint)
           .whereType<String>()
           .toList(growable: false);
       stages.add(
         _stage(
-          'Peer mailbox known',
+          "Recipient's mailbox known",
           DoctorStatus.ok,
           sw,
-          peerSet.length == 1
+          counterpartSet.length == 1
               ? (endpoints.isNotEmpty
-                    ? 'Peer mailbox on ${endpoints.first}.'
-                    : 'Peer mailbox id known.')
-              : '${peerSet.length} peer mailboxes known'
+                    ? "Recipient's mailbox on ${endpoints.first}."
+                    : "Recipient's mailbox id known.")
+              : '${counterpartSet.length} recipient mailboxes known'
                     '${endpoints.isNotEmpty ? ' (${endpoints.join(', ')})' : ''}.',
         ),
       );
@@ -2143,7 +2158,7 @@ class RedPandaLightClient implements RedPandaClient {
     return (hops: [self], selfHop: true);
   }
 
-  /// T45: deposits [payload] into EVERY known peer OH in [targets], each over
+  /// T45: deposits [payload] into EVERY known counterpart OH in [targets], each over
   /// its OWN garlic route (command 142) — never a direct FlaschenpostPut.
   /// Forward hop sets are kept disjoint across the routes as far as relay
   /// candidates allow (best-effort anti-correlation: no single relay observes
@@ -2162,7 +2177,7 @@ class RedPandaLightClient implements RedPandaClient {
   /// kicked off so a later retry has fresh targets.
   Future<void> _depositViaGarlicToAll(
     ActivePeer submitVia,
-    List<_PeerOh> targets,
+    List<_CounterpartOh> targets,
     Uint8List payload,
     String channelId, {
     String? messageIdHex,
@@ -2203,13 +2218,13 @@ class RedPandaLightClient implements RedPandaClient {
         // never succeed, so surface it instead of retrying forever.
         if (e.isBadRequest) rethrow;
         RpLog.info(
-          'RedPandaLightClient: garlic deposit to one peer OH for channel '
+          'RedPandaLightClient: garlic deposit to one counterpart OH for channel '
           '$channelId failed: $e',
         );
         continue;
       } catch (e) {
         RpLog.info(
-          'RedPandaLightClient: garlic deposit to one peer OH for channel '
+          'RedPandaLightClient: garlic deposit to one counterpart OH for channel '
           '$channelId failed: $e',
         );
         continue;
@@ -2246,7 +2261,7 @@ class RedPandaLightClient implements RedPandaClient {
     if (ownOh == null) return null;
 
     // The mailbox host never becomes a return relay (mirrors the MS04
-    // peerOhEndpoint exclusion on the forward path).
+    // counterpartOhEndpoint exclusion on the forward path).
     final rgb = _rgbBuilder.build(
       ohId: ownOh.ohId,
       hopCount: defaultHopCount,
@@ -2374,7 +2389,7 @@ class RedPandaLightClient implements RedPandaClient {
   /// excluding the node the packet is submitted through (anti-correlation:
   /// it sees the sender directly) and the destination OH endpoint.
   List<GarlicHop> _selectGarlicHops(String channelId, ActivePeer submitVia) {
-    final ohEndpoint = _channelPeerOhEndpoints[channelId];
+    final ohEndpoint = _channelCounterpartOhEndpoints[channelId];
     return _hopSelector.selectHops(
       count: defaultHopCount,
       excludeAddresses: {submitVia.address, ?ohEndpoint},
@@ -2396,7 +2411,7 @@ class RedPandaLightClient implements RedPandaClient {
   Future<void> _sendViaGarlic(
     ActivePeer submitVia,
     List<GarlicHop> hops,
-    List<int> peerOhId,
+    List<int> counterpartOhId,
     Uint8List payload,
     String channelId, {
     String? messageIdHex,
@@ -2431,7 +2446,7 @@ class RedPandaLightClient implements RedPandaClient {
         : null;
     final packet = await GarlicBuilder.build(
       hops: hops,
-      ohId: peerOhId,
+      ohId: counterpartOhId,
       payload: payload,
       returnPath: returnPath,
     );
@@ -2676,8 +2691,11 @@ class RedPandaLightClient implements RedPandaClient {
     // Without a forward path to the partner the new mailbox could never be
     // announced — the failover would strand the channel on a handle the
     // partner does not know.
-    final peerOhId = _channelPeerOhIds[channelId];
-    if (peerOhId == null || peerOhId.length != GarlicHop.nodeIdLength) return;
+    final counterpartOhId = _channelCounterpartOhIds[channelId];
+    if (counterpartOhId == null ||
+        counterpartOhId.length != GarlicHop.nodeIdLength) {
+      return;
+    }
     if (_ratchetSessions[channelId] == null) return;
 
     unawaited(
@@ -2835,9 +2853,9 @@ class RedPandaLightClient implements RedPandaClient {
     }
   }
 
-  /// T44: recovery — all of a peer's OHs are unreachable, so look the channel's
+  /// T44: recovery — all of a counterpart's OHs are unreachable, so look the channel's
   /// rendezvous record up over the DHT (today's key, then yesterday's) and
-  /// adopt the peer's current OH list. The lookups travel garlic-wrapped to a
+  /// adopt the counterpart's current OH list. The lookups travel garlic-wrapped to a
   /// remote node; the answer returns via a reverse-garlic return path into our
   /// own OH mailbox and is correlated in the fetch loop by its ack tag.
   Future<void> _recoverViaRendezvous(String channelId) async {
@@ -2912,7 +2930,7 @@ class RedPandaLightClient implements RedPandaClient {
 
   /// T44: handles a `record_lookup` reverse-garlic answer
   /// (`[1 status][KademliaStore]`). On a found + valid + newer record, adopts
-  /// the peer's OH list into the deposit fan-out set.
+  /// the counterpart's OH list into the deposit fan-out set.
   Future<void> _handleRecordLookupAnswer(
     String channelId,
     List<int> payload,
@@ -2940,18 +2958,18 @@ class RedPandaLightClient implements RedPandaClient {
       }
       final record = RendezvousManager.recordFromStoreBytes(payload.sublist(1));
       final now = DateTime.now().millisecondsSinceEpoch;
-      final peerOhs = await _rendezvous.applyResolvedRecord(
+      final counterpartOhs = await _rendezvous.applyResolvedRecord(
         channelId,
         record,
         now,
       );
-      if (peerOhs == null || peerOhs.isEmpty) return;
-      final changed = _replacePeerOhSet(channelId, peerOhs);
+      if (counterpartOhs == null || counterpartOhs.isEmpty) return;
+      final changed = _replaceCounterpartOhSet(channelId, counterpartOhs);
       if (changed) {
-        _emitPeerOhUpdate(channelId, peerOhs);
+        _emitCounterpartOhUpdate(channelId, counterpartOhs);
         RpLog.info(
           'RedPandaLightClient: rendezvous recovery for $channelId adopted '
-          '${peerOhs.length} peer OH(s) from the DHT record',
+          '${counterpartOhs.length} counterpart OH(s) from the DHT record',
         );
       }
     } catch (e) {
@@ -3122,7 +3140,7 @@ class RedPandaLightClient implements RedPandaClient {
   /// Sends the queued `oh_update` announce for [channelId] to the partner's
   /// mailbox — ratchet-encrypted like any regular message and, since T45, over
   /// GARLIC like any other deposit (never a direct FlaschenpostPut; binding
-  /// user decision 2026-07-20). It is deposited into EVERY known peer OH (one
+  /// user decision 2026-07-20). It is deposited into EVERY known counterpart OH (one
   /// hop-disjoint route each) and re-sent on the poll loop over fresh hops
   /// (the [_PendingOhUpdate.remainingSends] budget), so a single dead relay
   /// hop cannot swallow the one message the channel's healing depends on — the
@@ -3136,7 +3154,7 @@ class RedPandaLightClient implements RedPandaClient {
     final pending = _pendingOhUpdates[channelId];
     if (pending == null) return;
     final sessionFuture = _ratchetSessions[channelId];
-    final targets = _channelPeerOhSet[channelId];
+    final targets = _channelCounterpartOhSet[channelId];
     if (sessionFuture == null || targets == null || targets.isEmpty) {
       // No path to announce over — checked before the failover started, so
       // this only happens after a disconnect/reset; drop the stale entry.
@@ -3158,14 +3176,14 @@ class RedPandaLightClient implements RedPandaClient {
     final payload = await session.encrypt(message, channelId);
     _emitRatchetState(channelId, session);
 
-    // T45/T47d: deposit the announce into EVERY known peer OH over garlic (one
+    // T45/T47d: deposit the announce into EVERY known counterpart OH over garlic (one
     // hop-disjoint route each), with the primary route requesting an R-ACK.
     // The stable message id lets the partner deduplicate the copies.
     final validTargets = targets
         .where((t) => t.ohId.length == GarlicHop.nodeIdLength)
         .toList(growable: false);
     if (validTargets.isEmpty) {
-      // The peer OH set is (transiently) all-malformed — keep the announce
+      // The counterpart OH set is (transiently) all-malformed — keep the announce
       // pending and retry on the next poll cycle rather than dropping it and
       // permanently suppressing the channel's healing.
       return;
@@ -3195,7 +3213,7 @@ class RedPandaLightClient implements RedPandaClient {
   /// mailbox. Authenticity is the ratchet decryption that already happened —
   /// only the partner holds the message keys. Duplicates (the announce is
   /// sent multiple times) are ignored.
-  void _handlePeerOhUpdate(String channelId, Uint8List ohUpdateBytes) {
+  void _handleCounterpartOhUpdate(String channelId, Uint8List ohUpdateBytes) {
     // T42: the payload is a JSON ARRAY of OHDescriptor maps (breaking change,
     // no pre-T42 compatibility) — the partner's full current mailbox set.
     final List<OHDescriptor> descriptors;
@@ -3216,20 +3234,25 @@ class RedPandaLightClient implements RedPandaClient {
       return;
     }
     if (descriptors.isEmpty) return;
-    final changed = _replacePeerOhSet(channelId, descriptors);
+    final changed = _replaceCounterpartOhSet(channelId, descriptors);
     if (!changed) return; // duplicate announce
     RpLog.info(
-      'RedPandaLightClient: channel $channelId peer mailbox set updated to '
+      'RedPandaLightClient: channel $channelId counterpart mailbox set updated to '
       '${descriptors.length} OH(s) (in-band oh_update)',
     );
-    _emitPeerOhUpdate(channelId, descriptors);
+    _emitCounterpartOhUpdate(channelId, descriptors);
   }
 
-  /// Publishes a peer-OH-set change to the app layer (persists the new deposit
-  /// fan-out set). Shared by the in-band `oh_update` path and T44 rendezvous
-  /// recovery.
-  void _emitPeerOhUpdate(String channelId, List<OHDescriptor> descriptors) {
-    _emitState(PeerOhUpdate(channelId: channelId, descriptors: descriptors));
+  /// Publishes a counterpart-OH-set change to the app layer (persists the new
+  /// deposit fan-out set). Shared by the in-band `oh_update` path and T44
+  /// rendezvous recovery.
+  void _emitCounterpartOhUpdate(
+    String channelId,
+    List<OHDescriptor> descriptors,
+  ) {
+    _emitState(
+      CounterpartOhUpdate(channelId: channelId, descriptors: descriptors),
+    );
   }
 
   /// Re-registers [oh] with the same id and keypair to extend its TTL.
@@ -3573,9 +3596,9 @@ class RedPandaLightClient implements RedPandaClient {
           continue;
         }
         // T21: an in-band mailbox failover announcement — apply the new
-        // peer OH and swallow the item (never a chat message).
+        // counterpart OH and swallow the item (never a chat message).
         if (channelMessage.isOhUpdate) {
-          _handlePeerOhUpdate(oh.channelId!, channelMessage.ohUpdate!);
+          _handleCounterpartOhUpdate(oh.channelId!, channelMessage.ohUpdate!);
           continue;
         }
         // MS08: a group handshake rides the 1:1 channel — surface it as an
@@ -3795,8 +3818,9 @@ class RedPandaLightClient implements RedPandaClient {
 
     // Resolve the destination BEFORE encrypting — a channel-ACK with no
     // forward path must not advance the ratchet or deposit into a void.
-    final peerOhId = _channelPeerOhIds[channelId];
-    if (peerOhId == null || peerOhId.length != GarlicHop.nodeIdLength) {
+    final counterpartOhId = _channelCounterpartOhIds[channelId];
+    if (counterpartOhId == null ||
+        counterpartOhId.length != GarlicHop.nodeIdLength) {
       return;
     }
     final activePeer = _peers.values
@@ -3828,7 +3852,7 @@ class RedPandaLightClient implements RedPandaClient {
     // is repaired by the next one).
     final route = _garlicRoute(
       activePeer,
-      ohEndpoint: _channelPeerOhEndpoints[channelId],
+      ohEndpoint: _channelCounterpartOhEndpoints[channelId],
     );
     if (route == null ||
         payload.length > GarlicBuilder.maxPayloadLength(route.hops.length)) {
@@ -3840,7 +3864,7 @@ class RedPandaLightClient implements RedPandaClient {
     }
     final packet = await GarlicBuilder.build(
       hops: route.hops,
-      ohId: peerOhId,
+      ohId: counterpartOhId,
       payload: payload,
     );
     activePeer.sendCommand(142, packet);
@@ -4237,9 +4261,12 @@ class RedPandaLightClient implements RedPandaClient {
         'sendGroupHandshake: channel $channelId has no keys registered',
       );
     }
-    final peerOhId = _channelPeerOhIds[channelId];
-    if (peerOhId == null || peerOhId.length != GarlicHop.nodeIdLength) {
-      throw StateError('sendGroupHandshake: channel $channelId has no peer OH');
+    final counterpartOhId = _channelCounterpartOhIds[channelId];
+    if (counterpartOhId == null ||
+        counterpartOhId.length != GarlicHop.nodeIdLength) {
+      throw StateError(
+        'sendGroupHandshake: channel $channelId has no counterpart OH',
+      );
     }
     final activePeer = _peers.values
         .where((p) => p.isHandshakeVerified)
@@ -4263,7 +4290,7 @@ class RedPandaLightClient implements RedPandaClient {
         payload.length <= GarlicBuilder.maxPayloadLength(hops.length)) {
       final packet = await GarlicBuilder.build(
         hops: hops,
-        ohId: peerOhId,
+        ohId: counterpartOhId,
         payload: payload,
       );
       activePeer.sendCommand(142, packet);
@@ -4274,7 +4301,7 @@ class RedPandaLightClient implements RedPandaClient {
     // layer retries the handshake on failure.
     final flaschenpost = FlaschenpostPut()
       ..content = payload
-      ..ohId = peerOhId
+      ..ohId = counterpartOhId
       ..wantResponse = true;
     final completer = _putResponses.register();
     activePeer.sendCommand(
@@ -5032,14 +5059,14 @@ class _GroupState {
   });
 }
 
-/// A single peer OH mailbox in the deposit fan-out set (T42): the id a
+/// A single counterpart OH mailbox in the deposit fan-out set (T42): the id a
 /// FlaschenpostPut is addressed to, plus the host endpoint (used for garlic
 /// hop exclusion and status display). The auth public key is not needed to
 /// deposit, so it is intentionally not carried here.
-class _PeerOh {
+class _CounterpartOh {
   final List<int> ohId;
   final String? endpoint;
-  const _PeerOh({required this.ohId, this.endpoint});
+  const _CounterpartOh({required this.ohId, this.endpoint});
 }
 
 /// A queued in-band announcement of the sender's own mailbox set (T21

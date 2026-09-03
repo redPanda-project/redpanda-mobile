@@ -9,7 +9,7 @@ import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
 import 'package:redpanda_light_client/src/domain/oh_fetch_status.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
-import 'package:redpanda_light_client/src/domain/peer_oh_update.dart';
+import 'package:redpanda_light_client/src/domain/counterpart_oh_update.dart';
 import 'package:redpanda_light_client/src/domain/routing_ack.dart';
 import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/garlic/node_scorer.dart';
@@ -44,7 +44,7 @@ void main() {
         GarlicSessionUpdate,
         OhMailboxUpdate,
         OhFetchStatus,
-        PeerOhUpdate,
+        CounterpartOhUpdate,
         OwnOhSetUpdate,
         RoutingAckUpdate,
         ChannelAckUpdate,
@@ -65,8 +65,11 @@ void main() {
     expect(handle.keypair.privateKeyBytes, hasLength(32));
     expect(handle.keypair.publicKeyBytes, hasLength(32));
 
-    final peerOh = received.whereType<PeerOhUpdate>().single;
-    expect(peerOh.descriptors.single.serverEndpoint, equals('peer:59558'));
+    final counterpartOh = received.whereType<CounterpartOhUpdate>().single;
+    expect(
+      counterpartOh.descriptors.single.serverEndpoint,
+      equals('peer:59558'),
+    );
 
     // MS08 Decision 13: the per-member id must survive the boundary. The old
     // hand-written EventRoutingAckUpdate/EventChannelAckUpdate had no field
@@ -104,7 +107,7 @@ Future<void> buildUpdates(SendPort port) async {
       success: true,
       atMs: 1000,
     ),
-    PeerOhUpdate(
+    CounterpartOhUpdate(
       channelId: 'c1',
       descriptors: [
         OHDescriptor(
