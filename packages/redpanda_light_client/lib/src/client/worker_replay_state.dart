@@ -8,7 +8,8 @@ import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/garlic/node_scorer.dart';
 
 /// The state a respawned network worker has to be re-initialized with:
-/// known peers, channel keys (with the LATEST ratchet/garlic/peer-OH state),
+/// known peers, channel keys (with the LATEST ratchet/garlic/counterpart-OH
+/// state),
 /// own OH registrations, groups and node scores.
 ///
 /// This is a **projection of the state channel**, not a second source of
@@ -177,9 +178,9 @@ class WorkerReplayState {
   }
 
   /// Updates the cached [CmdAddChannelKeys] for [channelId] with newer
-  /// ratchet, garlic or peer-OH state. A channel that was never registered is
-  /// not resurrected here — the state belongs to a channel the worker only
-  /// learned about from live traffic.
+  /// ratchet, garlic or counterpart-OH state. A channel that was never
+  /// registered is not resurrected here — the state belongs to a channel the
+  /// worker only learned about from live traffic.
   void _patchChannel(
     String channelId, {
     String? ratchetState,

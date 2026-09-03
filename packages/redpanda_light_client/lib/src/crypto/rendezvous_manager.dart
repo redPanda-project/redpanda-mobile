@@ -13,8 +13,9 @@ import 'package:redpanda_light_client/src/generated/commands.pb.dart';
 ///
 /// For each channel it keeps the channel secret, the local role and the
 /// newest-known entry per participant (the merge state). It builds the signed
-/// record to publish (own fresh entry merged with the known peer entries, so
-/// the newest surviving KadContent carries everyone) and, on a resolved record,
+/// record to publish (own fresh entry merged with the known counterpart
+/// entries, so the newest surviving KadContent carries everyone) and, on a
+/// resolved record,
 /// merges it in and surfaces the counterpart's current OH list.
 class RendezvousManager {
   final Map<String, _ChannelRendezvousState> _states = {};
@@ -93,7 +94,7 @@ class RendezvousManager {
 
   /// Builds the serialized `KademliaStore` proto to publish for [channelId] at
   /// [nowMs]: our own fresh entry (`entry_ts = nowMs`) merged with the
-  /// newest-known peer entries, encrypted and signed with the channel record
+  /// newest-known counterpart entries, encrypted and signed with the channel record
   /// key. Returns null if the channel is unknown or we have no own OH yet.
   Future<Uint8List?> buildSignedStore(String channelId, int nowMs) async {
     final state = _states[channelId];
@@ -181,16 +182,16 @@ class RendezvousManager {
       return null; // wrong key / tampered / malformed
     }
 
-    final peerId = ChannelRendezvous.participantId(
+    final counterpartId = ChannelRendezvous.participantId(
       state.channelSecret,
       isCreator: !state.isCreator,
     );
-    final peerIdHex = _hex(peerId);
-    final before = state.knownEntries[peerIdHex];
+    final counterpartIdHex = _hex(counterpartId);
+    final before = state.knownEntries[counterpartIdHex];
     state.absorb(
       ChannelRendezvous.mergeEntries(state.knownEntries.values, entries),
     );
-    final after = state.knownEntries[peerIdHex];
+    final after = state.knownEntries[counterpartIdHex];
     if (after == null) return null;
     if (before != null && after.entryTs <= before.entryTs) {
       return null; // nothing newer for the counterpart

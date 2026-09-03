@@ -433,13 +433,13 @@ void main() {
         addTearDown(client.disconnect);
 
         final newCounterpartOhId = List<int>.generate(20, (i) => 200 - i);
-        final newPeerKey = List<int>.generate(32, (i) => 50 + i);
+        final newCounterpartKey = List<int>.generate(32, (i) => 50 + i);
         // T42: oh_update payload is a JSON ARRAY of descriptors.
         final descriptorJson = jsonEncode([
           OHDescriptor(
             serverEndpoint: 'newhost:7',
             handleId: newCounterpartOhId,
-            authPublicKey: newPeerKey,
+            authPublicKey: newCounterpartKey,
           ).toJsonMap(),
         ]);
 

@@ -3243,9 +3243,9 @@ class RedPandaLightClient implements RedPandaClient {
     _emitCounterpartOhUpdate(channelId, descriptors);
   }
 
-  /// Publishes a peer-OH-set change to the app layer (persists the new deposit
-  /// fan-out set). Shared by the in-band `oh_update` path and T44 rendezvous
-  /// recovery.
+  /// Publishes a counterpart-OH-set change to the app layer (persists the new
+  /// deposit fan-out set). Shared by the in-band `oh_update` path and T44
+  /// rendezvous recovery.
   void _emitCounterpartOhUpdate(
     String channelId,
     List<OHDescriptor> descriptors,
