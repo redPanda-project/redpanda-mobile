@@ -1,9 +1,16 @@
 import 'dart:typed_data';
 
+import 'package:fixnum/fixnum.dart';
+import 'package:protobuf/protobuf.dart' as pb;
+import 'package:redpanda_light_client/src/generated/outbound.pb.dart'
+    as outbound_pb;
+
 /// The R-ACK payload deposited into the sender's OH mailbox (Frontend MS06).
 ///
-/// Wire format (master spec, Decisions Backend-MS06, Decision 3 — mirrors the
-/// backend `outbound.proto` `RoutingAck`):
+/// Wire format is owned by the vendored backend schema
+/// (`protos/outbound.proto`, message `RoutingAck`) — this class is a thin,
+/// `int`-typed view over the generated `outbound_pb.RoutingAck` so that call
+/// sites do not have to deal with `Int64`:
 ///
 /// ```
 /// RoutingAck {
@@ -14,10 +21,7 @@ import 'dart:typed_data';
 ///
 /// There is deliberately **no** `message_id`: the mailbox UUID is created
 /// server-side and means nothing to the sender — correlation runs over the
-/// `ack_session_tag` that arrives as `MailItem.session_tag` on the R-ACK
-/// item. Hand-rolled proto3 decoding for the same reason as
-/// `ChannelMessage`: the committed generated protobuf files are
-/// hand-post-processed and not regenerable here.
+/// `ack_session_tag` that arrives as `MailItem.session_tag` on the R-ACK item.
 class RoutingAck {
   /// Deposit decision timestamp on the acking node (its clock).
   final int timestampMs;
@@ -42,100 +46,25 @@ class RoutingAck {
   /// Decodes a [RoutingAck] from its proto3 binary form. Unknown fields are
   /// skipped. Throws [FormatException] on malformed input.
   factory RoutingAck.decode(List<int> bytes) {
-    final data = Uint8List.fromList(bytes);
-    var offset = 0;
-
-    int timestampMs = 0;
-    int status = 0;
-
-    int readVarint() {
-      var result = 0;
-      var shift = 0;
-      while (true) {
-        if (offset >= data.length) {
-          throw const FormatException('RoutingAck: truncated varint');
-        }
-        final b = data[offset++];
-        result |= (b & 0x7F) << shift;
-        if ((b & 0x80) == 0) break;
-        shift += 7;
-        if (shift > 63) {
-          throw const FormatException('RoutingAck: varint too long');
-        }
-      }
-      return result;
+    final outbound_pb.RoutingAck decoded;
+    try {
+      decoded = outbound_pb.RoutingAck.fromBuffer(bytes);
+    } on pb.InvalidProtocolBufferException catch (e) {
+      throw FormatException('RoutingAck: ${e.message}');
     }
-
-    while (offset < data.length) {
-      final tag = readVarint();
-      final fieldNumber = tag >> 3;
-      final wireType = tag & 0x7;
-
-      switch (fieldNumber) {
-        case 1: // timestamp_ms
-          if (wireType != 0) {
-            throw const FormatException('RoutingAck: bad wire type for #1');
-          }
-          timestampMs = readVarint();
-          break;
-        case 2: // status
-          if (wireType != 0) {
-            throw const FormatException('RoutingAck: bad wire type for #2');
-          }
-          status = readVarint();
-          break;
-        default:
-          switch (wireType) {
-            case 0:
-              readVarint();
-              break;
-            case 1:
-              offset += 8;
-              break;
-            case 2:
-              final len = readVarint();
-              offset += len;
-              break;
-            case 5:
-              offset += 4;
-              break;
-            default:
-              throw FormatException('RoutingAck: unknown wire type $wireType');
-          }
-          break;
-      }
-    }
-
-    return RoutingAck(timestampMs: timestampMs, status: status);
+    return RoutingAck(
+      timestampMs: decoded.timestampMs.toInt(),
+      status: decoded.status,
+    );
   }
 
   /// Encodes this ack to proto3 binary form (used by tests; the reference
   /// producer is the backend `RoutingAckSender`).
-  Uint8List encode() {
-    final out = BytesBuilder();
-    if (timestampMs != 0) {
-      out.addByte(0x08); // (1 << 3) | 0
-      _writeVarint(out, timestampMs);
-    }
-    if (status != 0) {
-      out.addByte(0x10); // (2 << 3) | 0
-      _writeVarint(out, status);
-    }
-    return out.toBytes();
-  }
+  Uint8List encode() => toProto().writeToBuffer();
 
-  static void _writeVarint(BytesBuilder out, int value) {
-    var v = value;
-    while (true) {
-      final byte = v & 0x7F;
-      v = v >>> 7;
-      if (v == 0) {
-        out.addByte(byte);
-        break;
-      }
-      out.addByte(byte | 0x80);
-    }
-  }
+  /// The generated protobuf message backing this ack.
+  outbound_pb.RoutingAck toProto() =>
+      outbound_pb.RoutingAck(timestampMs: Int64(timestampMs), status: status);
 }
 
 /// Routing-layer delivery feedback for one outgoing message (Frontend MS06),

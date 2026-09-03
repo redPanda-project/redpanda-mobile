@@ -4,6 +4,7 @@ import 'package:test/test.dart';
 import 'package:fixnum/fixnum.dart' as fixnum;
 
 import 'package:redpanda_light_client/src/generated/commands.pb.dart';
+import 'package:redpanda_light_client/src/generated/outbound.pb.dart';
 
 void main() {
   group('MS01 Protobuf: FetchRequest/Response', () {

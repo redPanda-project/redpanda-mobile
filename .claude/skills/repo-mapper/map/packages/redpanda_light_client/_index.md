@@ -11,10 +11,12 @@
 
 * 📄 **pubspec.yaml** — Paket `redpanda_light_client`. Dependencies: `protobuf`,
   `pointycastle`, `asn1lib`.
-* 📄 **protos/commands.proto** — Protobuf-Definitionen: Kademlia-Messages
-  (Get/Store/Answer), Peer-Listen, Ping/Pong, Flaschenpost, GarlicMessage
-  (verschlüsseltes Routing).
-* 📄 **gen_dart.sh** — Script zur Protobuf-Code-Generierung.
+* 📄 **protos/commands.proto** — aus redpandaj vendorte Protobuf-Definitionen:
+  Kademlia-Messages (Get/Store/Answer), Peer-Listen, Ping/Pong, Flaschenpost.
+* 📄 **protos/outbound.proto** — aus redpandaj vendort: OH-Register/Fetch/Ack/
+  Revoke/Subscribe/Notify, MailItem, RoutingAck, OhNodeRecord, Status.
+* 📄 **protos/UPSTREAM.lock** — gepinnter redpandaj-Commit + sha256 je Proto.
+  Sync/Codegen: `tool/sync_protos.sh`, `tool/generate_protos.sh` (Repo-Root).
 
 ## Tests
 

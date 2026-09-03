@@ -1,7 +1,7 @@
 import 'package:fixnum/fixnum.dart' as fixnum;
 import 'package:test/test.dart';
 
-import 'package:redpanda_light_client/src/generated/commands.pb.dart';
+import 'package:redpanda_light_client/src/generated/outbound.pb.dart';
 
 void main() {
   group('MS02: AckFetchRequest protobuf', () {

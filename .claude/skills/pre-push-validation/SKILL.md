@@ -57,6 +57,32 @@ this file, plus any repo-wide reformat).
 The E2E suites additionally need Java 21 (`~/tools/jdk`, CI: Temurin 21) and a
 backend JAR (see `--with-e2e` below).
 
+### 0b. Vendored protobuf schemas (T107)
+
+The wire schemas are owned by `redPanda-project/redpandaj`
+(`src/main/proto/*.proto`). `packages/redpanda_light_client/protos/*.proto` are
+**vendored copies**, and `lib/src/generated/*.pb*.dart` is generated from them —
+never hand-edit either. `tool/pre_push_validation.sh` runs:
+
+```bash
+tool/sync_protos.sh --check
+```
+
+which fails when (a) a vendored `.proto` no longer hashes to
+`protos/UPSTREAM.lock` (someone edited the copy) or (b) it no longer equals
+upstream — (b) is skipped with a notice when neither a redpandaj checkout nor
+the GitHub API is reachable. Check (a) also runs offline in CI through
+`test/unit/vendored_protos_test.dart`.
+
+To adopt an upstream schema change:
+
+```bash
+tool/sync_protos.sh          # local ../redpandaj, or --ref <tag/branch/sha>
+tool/generate_protos.sh      # protoc + the pinned protoc_plugin
+```
+
+and commit protos, `UPSTREAM.lock` and the regenerated Dart together.
+
 ### 1 · Light Client Package (`packages/redpanda_light_client`)
 
 ```bash
