@@ -10,7 +10,9 @@ import 'package:redpanda/repositories/group_repository.dart';
 import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/repositories/outbound_handle_repository.dart';
 import 'package:redpanda/shared/providers.dart';
-import 'package:redpanda_light_client/redpanda_light_client.dart';
+// `hide Channel`: the light client's domain `Channel` collides with the Drift
+// row class of the same name, and this file only ever handles the row.
+import 'package:redpanda_light_client/redpanda_light_client.dart' hide Channel;
 
 /// The app's persistence channel: it owns the ONE subscription to the network
 /// client's [RedPandaClient.stateUpdates] and writes every state change to the
@@ -22,6 +24,12 @@ import 'package:redpanda_light_client/redpanda_light_client.dart';
 ///   scores, group state, and applies routing-/channel-ACKs,
 /// - re-broadcasts mailbox overflow warnings for the UI,
 /// - restores persisted OH registrations and channel keys on startup.
+///
+/// T111: it also owns the ONE restore entry point into the network worker
+/// ([restorePersistedState] for startup, [registerChannel] for a channel
+/// created or joined afterwards — both via [_registerChannel]). Nothing else
+/// in the app hands channel state to the worker; the chat screen used to do
+/// it from `build()` with a subset of the arguments.
 ///
 /// T110: a new state event is handled by adding one `case` to [_persist] —
 /// there is no protocol class, isolate-client branch or facade stream to
@@ -37,6 +45,12 @@ class MessageSyncService {
   final _overflowController = StreamController<OhMailboxUpdate>.broadcast();
   StreamSubscription<DecryptedMessage>? _messageSub;
   StreamSubscription<StateUpdate>? _stateSub;
+  StreamSubscription<List<String>>? _channelIdsSub;
+
+  /// Channel ids already handed to the network worker in this app run (T111).
+  /// Guards the watcher below so a channel is restored once, not on every
+  /// write to the `Channels` table (the ratchet state is written per message).
+  final Set<String> _registeredChannelIds = {};
 
   /// The ONE persistence chain (T110): every state update is written in
   /// emission order. Replaces the four per-kind future chains (ratchet,
@@ -90,6 +104,34 @@ class MessageSyncService {
             ),
           );
     });
+    // T111: a channel row is the trigger to hand the channel to the worker —
+    // not whichever screen happened to create it. Before, `chat_screen.build`
+    // registered the keys, so "is this channel live?" depended on the user
+    // opening the chat; anything that adds a row another way (the duo-E2E
+    // harness joins straight through the repository, and a future deep link
+    // or import would too) silently ended up with a channel the worker has no
+    // key for. The watcher makes it a property of the DATA instead.
+    _channelIdsSub ??= _db
+        .select(_db.channels)
+        .map((c) => c.uuid)
+        .watch()
+        .listen((ids) {
+          for (final id in ids) {
+            // Claim the id BEFORE the async restore so a burst of writes
+            // cannot start two restores for the same channel.
+            if (!_registeredChannelIds.add(id)) continue;
+            unawaited(
+              registerChannel(id).catchError((Object e) {
+                // Un-claim so the next write to the table retries instead of
+                // leaving a channel the worker has no key for.
+                _registeredChannelIds.remove(id);
+                debugPrint(
+                  'MessageSyncService: failed to register channel $id: $e',
+                );
+              }),
+            );
+          }
+        });
   }
 
   /// Applies one state update to the local database. The single dispatch
@@ -125,8 +167,10 @@ class MessageSyncService {
   Future<void> stop() async {
     await _messageSub?.cancel();
     await _stateSub?.cancel();
+    await _channelIdsSub?.cancel();
     _messageSub = null;
     _stateSub = null;
+    _channelIdsSub = null;
     // Drain what is still queued: the subscriptions are gone, so no new link
     // can be appended, and callers (tests, app teardown) may close the
     // database right after stop() — a write still in flight would then fail.
@@ -394,36 +438,17 @@ class MessageSyncService {
 
   /// Restores channel keys and persisted OH registrations into the network
   /// client so polling resumes from the persisted cursor after a restart.
+  ///
+  /// One of the two callers of [_registerChannel] — see [registerChannel].
   Future<void> restorePersistedState() async {
     final channels = await _db.select(_db.channels).get();
     final allTags = await _db.select(_db.sessionTags).get();
     for (final channel in channels) {
-      final sessionTags = {
+      _registerChannel(channel, {
         for (final tag in allTags)
           if (tag.channelId == channel.uuid)
             tag.tag: tag.createdAt.millisecondsSinceEpoch,
-      };
-      _client.addChannelKeys(
-        channel.uuid,
-        HEX.decode(channel.encryptionKey),
-        // T44: the channel secret enables the rendezvous DHT layer.
-        channelSecret: channel.channelSecret != null
-            ? HEX.decode(channel.channelSecret!)
-            : null,
-        peerOhId: channel.peerOhId != null
-            ? HEX.decode(channel.peerOhId!)
-            : null,
-        peerOhEndpoint: channel.peerOhEndpoint,
-        // T42: restore the full persisted peer OH set so the deposit fan-out
-        // survives a restart (the partner only re-announces on change).
-        peerOhSet: decodePeerOhSet(channel.peerOhSet),
-        // The creator is the device holding the channel auth private key;
-        // a device that joined via QR code holds only the public key.
-        isChannelCreator: channel.authPrivateKey != null,
-        ratchetState: channel.ratchetState,
-        sessionTags: sessionTags.isEmpty ? null : sessionTags,
-        pendingRgbHex: channel.pendingRgb,
-      );
+      });
     }
 
     final handles = await _outboundHandles.getAllValid();
@@ -447,6 +472,57 @@ class MessageSyncService {
           ),
       ]);
     }
+  }
+
+  /// Hands ONE channel's persisted state to the network worker (T111).
+  ///
+  /// Call this whenever a channel becomes relevant to the network layer that
+  /// was not there at [restorePersistedState] time — i.e. right after
+  /// creating or joining one. Both paths funnel into [_registerChannel], so
+  /// the worker is never handed a SUBSET of a channel's state: the chat
+  /// screen used to re-register from `build()` without the garlic session and
+  /// display name, which the worker-respawn projection then cached as the
+  /// channel's entire state (the H8 bug class).
+  ///
+  /// The worker is authoritative — it adopts this snapshot only for a channel
+  /// it does not know yet — so calling this more than once is harmless.
+  Future<void> registerChannel(String channelId) async {
+    final channel = await (_db.select(
+      _db.channels,
+    )..where((c) => c.uuid.equals(channelId))).getSingleOrNull();
+    if (channel == null) return;
+    final tags = await (_db.select(
+      _db.sessionTags,
+    )..where((t) => t.channelId.equals(channelId))).get();
+    _registerChannel(channel, {
+      for (final tag in tags) tag.tag: tag.createdAt.millisecondsSinceEpoch,
+    });
+  }
+
+  /// The ONE place that translates a persisted channel row into the network
+  /// worker's restore call — with the COMPLETE argument set. Anything that
+  /// registers a channel with fewer arguments is a bug, not an optimization.
+  void _registerChannel(Channel channel, Map<String, int> sessionTags) {
+    _registeredChannelIds.add(channel.uuid);
+    _client.addChannelKeys(
+      channel.uuid,
+      HEX.decode(channel.encryptionKey),
+      // T44: the channel secret enables the rendezvous DHT layer.
+      channelSecret: channel.channelSecret != null
+          ? HEX.decode(channel.channelSecret!)
+          : null,
+      peerOhId: channel.peerOhId != null ? HEX.decode(channel.peerOhId!) : null,
+      peerOhEndpoint: channel.peerOhEndpoint,
+      // T42: restore the full persisted peer OH set so the deposit fan-out
+      // survives a restart (the partner only re-announces on change).
+      peerOhSet: decodePeerOhSet(channel.peerOhSet),
+      // The creator is the device holding the channel auth private key;
+      // a device that joined via QR code holds only the public key.
+      isChannelCreator: channel.authPrivateKey != null,
+      ratchetState: channel.ratchetState,
+      sessionTags: sessionTags.isEmpty ? null : sessionTags,
+      pendingRgbHex: channel.pendingRgb,
+    );
   }
 
   Future<void> dispose() async {

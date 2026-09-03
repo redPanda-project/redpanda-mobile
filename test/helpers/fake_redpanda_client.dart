@@ -23,6 +23,28 @@ class FakeRedPandaClient implements RedPandaClient {
   final Map<String, String> restoredPendingRgbs = {};
   final List<NodeScore> restoredNodeScores = [];
 
+  /// Every [addChannelKeys] call verbatim (T111) — the maps above only keep
+  /// the non-null values, which cannot tell a COMPLETE registration from one
+  /// that silently dropped the garlic session.
+  final List<
+    ({
+      String channelId,
+      List<int>? channelSecret,
+      String? ownDisplayName,
+      List<int>? peerOhId,
+      String? peerOhEndpoint,
+      List<OHDescriptor>? peerOhSet,
+      String? ratchetState,
+      Map<String, int>? sessionTags,
+      String? pendingRgbHex,
+    })
+  >
+  channelRegistrations = [];
+
+  /// Channel ids [ensureOhRedundancy] was asked to top up (T111: nothing in
+  /// the app should do that any more — the worker owns it).
+  final List<String> ohRedundancyCalls = [];
+
   @override
   Future<LoopbackResult> runLoopbackTest(String channelId) async {
     return const LoopbackResult.ok(roundtripMs: 42, hopCount: 0);
@@ -91,6 +113,17 @@ class FakeRedPandaClient implements RedPandaClient {
   }) {
     channelKeys[channelId] = encryptionKey;
     channelCreatorRoles[channelId] = isChannelCreator;
+    channelRegistrations.add((
+      channelId: channelId,
+      channelSecret: channelSecret,
+      ownDisplayName: ownDisplayName,
+      peerOhId: peerOhId,
+      peerOhEndpoint: peerOhEndpoint,
+      peerOhSet: peerOhSet,
+      ratchetState: ratchetState,
+      sessionTags: sessionTags,
+      pendingRgbHex: pendingRgbHex,
+    ));
     if (ratchetState != null) {
       restoredRatchetStates[channelId] = ratchetState;
     }
@@ -114,7 +147,9 @@ class FakeRedPandaClient implements RedPandaClient {
   Stream<DecryptedMessage> get incomingMessages => incomingController.stream;
 
   @override
-  Future<void> ensureOhRedundancy(String channelId) async {}
+  Future<void> ensureOhRedundancy(String channelId) async {
+    ohRedundancyCalls.add(channelId);
+  }
 
   @override
   Stream<ConnectionStatus> get connectionStatus =>

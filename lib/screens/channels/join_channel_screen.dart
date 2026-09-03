@@ -7,6 +7,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
 import 'package:redpanda/repositories/channel_repository.dart';
 import 'package:redpanda/repositories/outbound_handle_repository.dart';
+import 'package:redpanda/services/message_sync_service.dart';
 import 'package:redpanda/shared/providers.dart';
 
 class JoinChannelScreen extends ConsumerStatefulWidget {
@@ -51,6 +52,17 @@ class _JoinChannelScreenState extends ConsumerState<JoinChannelScreen> {
       final isNewChannel = await ref
           .read(channelRepositoryProvider)
           .addChannel(channel);
+
+      // T111: hand the channel to the network worker through the ONE restore
+      // entry point (full argument set), BEFORE the OH registration — the
+      // rendezvous publish needs the channel's rendezvous state to exist.
+      // Its own catch: a failure here must not be reported as "invalid QR
+      // code", and `MessageSyncService`'s channel-table watcher repairs it.
+      try {
+        await ref.read(messageSyncServiceProvider).registerChannel(channel.id);
+      } catch (e) {
+        debugPrint('Failed to register the joined channel: $e');
+      }
 
       // Register our own OH for this channel in the background so it's
       // ready when we share our QR code with the peer later.

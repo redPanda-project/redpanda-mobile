@@ -7,6 +7,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
 import 'package:redpanda/repositories/channel_repository.dart';
 import 'package:redpanda/repositories/outbound_handle_repository.dart';
+import 'package:redpanda/services/message_sync_service.dart';
 import 'package:redpanda/shared/providers.dart';
 
 class CreateChannelScreen extends ConsumerStatefulWidget {
@@ -43,6 +44,18 @@ class _CreateChannelScreenState extends ConsumerState<CreateChannelScreen> {
 
     // Add to repository
     await ref.read(channelRepositoryProvider).addChannel(channel);
+
+    // T111: hand the fresh channel to the network worker through the ONE
+    // restore entry point, BEFORE registering our own OH below — publishing
+    // the rendezvous record needs the channel's rendezvous state to exist.
+    // Ordering is the only reason this is explicit: `MessageSyncService`
+    // also watches the channel table, so a failure here is repaired, just
+    // not necessarily before the OH registration.
+    try {
+      await ref.read(messageSyncServiceProvider).registerChannel(channel.id);
+    } catch (e) {
+      debugPrint('Failed to register the new channel with the worker: $e');
+    }
 
     // Fire-and-forget: register our own OH and publish the rendezvous record
     // so a joiner can discover us over the DHT.

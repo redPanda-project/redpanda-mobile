@@ -21,21 +21,27 @@ class RendezvousManager {
 
   /// Registers (or refreshes) a channel's rendezvous state. Idempotent — keeps
   /// the accumulated merge state across re-registrations.
+  ///
+  /// T111: [ownName] is nullable so a re-registration that does NOT know the
+  /// display name (a partial re-register from a caller holding only the
+  /// channel row) cannot blank the name already being published in the DHT
+  /// record. A null name means "unchanged"; an empty string is a real,
+  /// explicit "no name".
   void register(
     String channelId, {
     required List<int> channelSecret,
     required bool isCreator,
-    required String ownName,
+    required String? ownName,
   }) {
     final existing = _states[channelId];
     if (existing != null) {
-      existing.ownName = ownName;
+      if (ownName != null) existing.ownName = ownName;
       return;
     }
     _states[channelId] = _ChannelRendezvousState(
       channelSecret: Uint8List.fromList(channelSecret),
       isCreator: isCreator,
-      ownName: ownName,
+      ownName: ownName ?? '',
     );
   }
 
@@ -45,6 +51,10 @@ class RendezvousManager {
 
   /// All channel ids with rendezvous state (used by the daily republish).
   Iterable<String> get channels => _states.keys;
+
+  /// The display name currently advertised for [channelId] in the rendezvous
+  /// record (read-only view, for tests and diagnostics).
+  String? ownNameOf(String channelId) => _states[channelId]?.ownName;
 
   List<int>? channelSecretOf(String channelId) =>
       _states[channelId]?.channelSecret;

@@ -4,7 +4,6 @@ import 'package:drift/drift.dart' as drift;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:hex/hex.dart';
 import 'package:redpanda/database/database.dart';
 import 'package:redpanda/repositories/group_repository.dart';
 import 'package:redpanda/repositories/message_repository.dart';
@@ -397,37 +396,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       );
     });
 
-    // Register channel encryption keys when channel data is available
-    channelAsync.whenData((channel) {
-      if (channel != null) {
-        final client = ref.read(redPandaClientProvider);
-        final encKey = HEX.decode(channel.encryptionKey);
-        final peerOhId = channel.peerOhId != null
-            ? HEX.decode(channel.peerOhId!)
-            : null;
-        client.addChannelKeys(
-          channel.uuid,
-          encKey,
-          // T44: the channel secret enables the rendezvous DHT layer.
-          channelSecret: channel.channelSecret != null
-              ? HEX.decode(channel.channelSecret!)
-              : null,
-          peerOhId: peerOhId,
-          peerOhEndpoint: channel.peerOhEndpoint,
-          // T42: restore the full peer OH set so sends fan out to every
-          // known mailbox.
-          peerOhSet: MessageSyncService.decodePeerOhSet(channel.peerOhSet),
-          // The creator is the device holding the channel auth private key;
-          // a device that joined via QR code holds only the public key.
-          isChannelCreator: channel.authPrivateKey != null,
-          ratchetState: channel.ratchetState,
-        );
-        // T42: keep k=3 own mailboxes on disjoint nodes for this channel and
-        // announce the set to the partner. No-op when only one node is
-        // reachable; fire-and-forget.
-        unawaited(client.ensureOhRedundancy(channel.uuid));
-      }
-    });
+    // T111: no network orchestration here. `build()` used to re-register the
+    // channel's keys on every rebuild — with a SUBSET of the arguments (no
+    // session tags, no pending RGB, no display name), which the worker-respawn
+    // projection then cached as the channel's whole state — and to trigger the
+    // T42 mailbox top-up. Channel state now has exactly one restore entry
+    // point (`MessageSyncService.registerChannel`, called on startup and when
+    // a channel is created/joined), and the worker owns its own mailbox
+    // redundancy in its poll cycle.
 
     final topInset = MediaQuery.paddingOf(context).top;
 

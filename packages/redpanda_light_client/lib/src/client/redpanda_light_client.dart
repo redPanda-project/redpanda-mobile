@@ -161,9 +161,21 @@ class RedPandaLightClient implements RedPandaClient {
   /// (OQ 2: one per message), so only the newest is worth keeping.
   final Map<String, ReverseGarlicBlock> _pendingRgbs = {};
 
-  /// Channels whose persisted garlic session state was already restored;
-  /// re-registrations via addChannelKeys never overwrite live state.
-  final Set<String> _restoredGarlicSessions = {};
+  /// Channel ids this worker already holds live state for (T111).
+  ///
+  /// The worker is the SINGLE owner of channel/crypto state: the first
+  /// [addChannelKeys] for a channel adopts the persisted snapshot the app
+  /// layer hands over, every later call is a re-registration that may only
+  /// fill gaps — it can never move the ratchet, the garlic session, the
+  /// rendezvous name or the partner's mailbox set backwards. Enforced in
+  /// [addChannelKeys] rather than promised in a doc comment.
+  ///
+  /// Cleared by [disconnect] together with the state it guards.
+  final Set<String> _restoredChannels = {};
+
+  /// Whether this worker already holds live state for [channelId] (T111) —
+  /// i.e. whether a further [addChannelKeys] would be a re-registration.
+  bool knowsChannel(String channelId) => _restoredChannels.contains(channelId);
 
   /// Hop count of the most recent sendMessage (0 = direct MS02b deposit).
   /// Diagnostic only — used by tests to assert the garlic path was taken.
@@ -843,7 +855,7 @@ class RedPandaLightClient implements RedPandaClient {
     _subscribeResponses.clear();
     _ratchetSessions.clear();
     _pendingRgbs.clear();
-    _restoredGarlicSessions.clear();
+    _restoredChannels.clear();
     _fetchFailureCounts.clear();
     _failoversInProgress.clear();
     _pendingOhUpdates.clear();
@@ -1025,7 +1037,7 @@ class RedPandaLightClient implements RedPandaClient {
       RpLog.info('RedPandaLightClient: dropping malformed Notify: $e');
       return;
     }
-    final known = _registeredOHs.any((oh) => _sameOhId(oh.ohId, notify.ohId));
+    final known = _registeredOHs.any((oh) => _sameBytes(oh.ohId, notify.ohId));
     if (!known) {
       RpLog.info(
         'RedPandaLightClient: Notify for unknown OH '
@@ -1168,6 +1180,31 @@ class RedPandaLightClient implements RedPandaClient {
   /// destination node).
   final Map<String, String> _channelPeerOhEndpoints = {};
 
+  /// The live encryption key of [channelId] (read-only view, for tests and
+  /// diagnostics).
+  List<int>? channelEncryptionKeyOf(String channelId) {
+    final key = _channelEncryptionKeys[channelId];
+    return key == null ? null : List.unmodifiable(key);
+  }
+
+  /// The display name currently advertised for [channelId] in its rendezvous
+  /// record (read-only view, for tests and diagnostics).
+  String? rendezvousOwnNameOf(String channelId) =>
+      _rendezvous.ownNameOf(channelId);
+
+  /// The partner's currently known mailbox ids for [channelId], primary
+  /// first (read-only view, for tests and diagnostics — mirrors
+  /// [registeredOutboundHandles] for the own side).
+  List<List<int>> peerMailboxIds(String channelId) => [
+    for (final oh in _channelPeerOhSet[channelId] ?? const <_PeerOh>[])
+      List.unmodifiable(oh.ohId),
+  ];
+
+  /// host:port of the node hosting the partner's PRIMARY mailbox, if known
+  /// (read-only view, for tests and diagnostics).
+  String? peerMailboxEndpoint(String channelId) =>
+      _channelPeerOhEndpoints[channelId];
+
   /// T42: the FULL set of the partner's known OH mailboxes per channel.
   /// A send deposits into EVERY entry in parallel (the receiver deduplicates
   /// by message_id), so one dead OH-host node no longer stalls delivery — the
@@ -1178,9 +1215,12 @@ class RedPandaLightClient implements RedPandaClient {
   final Map<String, List<_PeerOh>> _channelPeerOhSet = {};
 
   /// Sets the primary peer OH (id + endpoint) for [channelId] and seeds the
-  /// peer OH set with it when no richer set is known yet — a set already
-  /// grown via `oh_update` (or restored) is always at least as complete, so
-  /// it is never clobbered by a re-registration (chat-screen re-open).
+  /// peer OH set with it when no richer set is known yet.
+  ///
+  /// Only ever called while the channel has NO live peer mailbox at all (see
+  /// [addChannelKeys]): a set grown via `oh_update` or the T44 rendezvous
+  /// lookup is always at least as fresh as anything the app layer persisted,
+  /// so a re-registration must not re-point the primary at it.
   void _seedPrimaryPeerOh(String channelId, List<int> ohId, String? endpoint) {
     _channelPeerOhIds[channelId] = ohId;
     if (endpoint != null) {
@@ -1199,7 +1239,7 @@ class RedPandaLightClient implements RedPandaClient {
     final deduped = <_PeerOh>[];
     for (final d in descriptors) {
       if (d.handleId.length != GarlicHop.nodeIdLength) continue;
-      if (deduped.any((e) => _sameOhId(e.ohId, d.handleId))) continue;
+      if (deduped.any((e) => _sameBytes(e.ohId, d.handleId))) continue;
       deduped.add(_PeerOh(ohId: d.handleId, endpoint: d.serverEndpoint));
     }
     if (deduped.isEmpty) return false;
@@ -1209,7 +1249,7 @@ class RedPandaLightClient implements RedPandaClient {
         List.generate(
           previous.length,
           (i) =>
-              _sameOhId(previous[i].ohId, deduped[i].ohId) &&
+              _sameBytes(previous[i].ohId, deduped[i].ohId) &&
               previous[i].endpoint == deduped[i].endpoint,
         ).every((x) => x)) {
       return false; // identical — a duplicate announce
@@ -1233,7 +1273,7 @@ class RedPandaLightClient implements RedPandaClient {
       if (oh.channelId != channelId) continue;
       final endpoint = oh.serverEndpoint;
       if (endpoint == null) continue;
-      if (out.any((d) => _sameOhId(d.handleId, oh.ohId))) continue;
+      if (out.any((d) => _sameBytes(d.handleId, oh.ohId))) continue;
       out.add(
         OHDescriptor(
           serverEndpoint: endpoint,
@@ -1250,7 +1290,27 @@ class RedPandaLightClient implements RedPandaClient {
   /// is sync; consumers await the future right before encrypt/decrypt.
   final Map<String, Future<RatchetSession>> _ratchetSessions = {};
 
-  /// Register channel encryption info so sendMessage/fetchMessages can use it.
+  /// Restores a channel's persisted state into this worker so
+  /// sendMessage/fetchMessages can use it.
+  ///
+  /// T111 — the worker owns channel state; this is a RESTORE, not an
+  /// assignment. The first call for a [channelId] adopts the snapshot; every
+  /// later call may only fill gaps. Concretely, for a channel already known
+  /// ([knowsChannel]):
+  ///
+  /// - the encryption key is kept (it is derived from the channel secret, so
+  ///   a re-registration carries the same bytes — a differing one is a bug
+  ///   and is logged, not applied),
+  /// - the rendezvous display name is only updated when one is supplied
+  ///   ([ownDisplayName] non-null); a caller that does not know it must not
+  ///   blank the name already being published,
+  /// - the partner's mailbox set is kept whenever ANY is live (it is grown by
+  ///   `oh_update` and the T44 rendezvous lookup),
+  /// - the ratchet session and the garlic session are kept — a live session
+  ///   is always at least as advanced as a persisted snapshot.
+  ///
+  /// So a caller that knows only part of a channel's state can no longer cost
+  /// the worker the rest of it (the H8 bug class).
   @override
   void addChannelKeys(
     String channelId,
@@ -1265,7 +1325,18 @@ class RedPandaLightClient implements RedPandaClient {
     Map<String, int>? sessionTags,
     String? pendingRgbHex,
   }) {
-    _channelEncryptionKeys[channelId] = encryptionKey;
+    // `add` returns false for a channel we already hold live state for.
+    final isFirstRegistration = _restoredChannels.add(channelId);
+    final liveKey = _channelEncryptionKeys[channelId];
+    if (liveKey == null) {
+      _channelEncryptionKeys[channelId] = encryptionKey;
+    } else if (!_sameBytes(liveKey, encryptionKey)) {
+      RpLog.info(
+        'RedPandaLightClient: ignoring a re-registration of channel '
+        '$channelId with a DIFFERENT encryption key — the live key wins '
+        '(the channel id is derived from the secret, so this is a wiring bug)',
+      );
+    }
     // T44: register the rendezvous state (QR v4). Without the channel secret
     // (legacy caller) the rendezvous DHT layer stays dormant for this channel.
     if (channelSecret != null && channelSecret.length == 32) {
@@ -1273,7 +1344,7 @@ class RedPandaLightClient implements RedPandaClient {
         channelId,
         channelSecret: channelSecret,
         isCreator: isChannelCreator,
-        ownName: ownDisplayName ?? '',
+        ownName: ownDisplayName,
       );
     } else if (channelSecret != null) {
       // A non-null but wrong-length secret silently disables rendezvous for
@@ -1284,20 +1355,31 @@ class RedPandaLightClient implements RedPandaClient {
         'expected 32 bytes, got ${channelSecret.length}; rendezvous disabled',
       );
     }
-    // T42: restore the full persisted peer OH set first (multi-OH), then seed
-    // the primary. Both are applied only when nothing richer is live yet —
-    // an `oh_update` learned this session always wins.
-    if (peerOhSet != null && peerOhSet.isNotEmpty) {
-      if (_channelPeerOhSet[channelId] == null) {
+    // T42/T111: restore the persisted peer mailbox set (multi-OH first, then
+    // the primary) ONLY while no live mailbox is known for the channel. Every
+    // other source of a peer mailbox — the in-band `oh_update` announce and
+    // the T44 rendezvous lookup — is newer by construction, so a
+    // re-registration from persisted data must not undo it. The primary used
+    // to be re-pointed unconditionally here, which let a re-register carrying
+    // a stale row silently redirect every single-target send (garlic, RGB
+    // reply, channel-ACK) at a dead mailbox.
+    final livePeerOhSet = _channelPeerOhSet[channelId];
+    if (livePeerOhSet == null || livePeerOhSet.isEmpty) {
+      if (peerOhSet != null && peerOhSet.isNotEmpty) {
         _replacePeerOhSet(channelId, peerOhSet);
       }
+      if (peerOhId != null) {
+        _seedPrimaryPeerOh(channelId, peerOhId, peerOhEndpoint);
+      }
     }
-    if (peerOhId != null) {
-      _seedPrimaryPeerOh(channelId, peerOhId, peerOhEndpoint);
+    // MS05: the garlic session snapshot is adopted on the first registration
+    // only — outstanding tags are consumed and the pending RGB is replaced by
+    // live traffic, so re-applying a snapshot could resurrect a burnt tag.
+    if (isFirstRegistration) {
+      _restoreGarlicSession(channelId, sessionTags, pendingRgbHex);
     }
-    _restoreGarlicSession(channelId, sessionTags, pendingRgbHex);
     // A live session is always at least as advanced as any persisted state,
-    // so re-registrations (e.g. on every chat-screen open) never replace it.
+    // so re-registrations never replace it.
     _ratchetSessions.putIfAbsent(channelId, () async {
       if (ratchetState != null) {
         try {
@@ -1316,15 +1398,14 @@ class RedPandaLightClient implements RedPandaClient {
     });
   }
 
-  /// Restores persisted reverse-garlic session state (MS05). Applied once
-  /// per channel; live state is always at least as advanced as anything
-  /// persisted, so re-registrations never overwrite it.
+  /// Restores persisted reverse-garlic session state (MS05). Called only on
+  /// the first registration of a channel (the caller owns that guard) —
+  /// live state is always at least as advanced as anything persisted.
   void _restoreGarlicSession(
     String channelId,
     Map<String, int>? sessionTags,
     String? pendingRgbHex,
   ) {
-    if (!_restoredGarlicSessions.add(channelId)) return;
     sessionTags?.forEach((tagHex, createdAtMs) {
       _sessionTagStore.store(tagHex, channelId, createdAtMs: createdAtMs);
     });
@@ -1413,7 +1494,7 @@ class RedPandaLightClient implements RedPandaClient {
   @override
   Future<void> restoreOutboundHandle(OHRegistration registration) async {
     final alreadyKnown = _registeredOHs.any(
-      (oh) => _sameOhId(oh.ohId, registration.ohId),
+      (oh) => _sameBytes(oh.ohId, registration.ohId),
     );
     if (alreadyKnown) return;
 
@@ -1421,7 +1502,8 @@ class RedPandaLightClient implements RedPandaClient {
     _startPolling();
   }
 
-  static bool _sameOhId(List<int> a, List<int> b) {
+  /// Byte-wise equality (OH ids, channel keys).
+  static bool _sameBytes(List<int> a, List<int> b) {
     if (a.length != b.length) return false;
     for (var i = 0; i < a.length; i++) {
       if (a[i] != b[i]) return false;
@@ -2905,6 +2987,55 @@ class RedPandaLightClient implements RedPandaClient {
   /// surfaces only as a swallowed publish error, so raise the bucket on BOTH
   /// sides (backend `ChannelDht.RECORD_SIZE_BYTES`) before raising k.
   static const int ohRedundancy = 3;
+
+  /// How often the poll cycle tops channels up to [ohRedundancy] (T111).
+  /// The sweep itself is cheap when nothing is missing, but a top-up performs
+  /// OH registrations, so it must not run at the fast chat cadence.
+  static const Duration redundancySweepInterval = Duration(minutes: 1);
+  DateTime? _lastRedundancySweep;
+
+  /// Guards re-entry: the sweep is started fire-and-forget by the poll cycle,
+  /// so a slow one must not be joined by the next cycle's.
+  bool _redundancySweepInProgress = false;
+
+  /// Tops every known channel up to [ohRedundancy] own mailboxes (T42),
+  /// throttled to [redundancySweepInterval]. Only channels that already hold
+  /// at least one mailbox are topped up: creating a channel's FIRST mailbox
+  /// stays with the app layer (it needs the descriptor synchronously for the
+  /// QR code and the rendezvous record), and sweeping from zero would race
+  /// that registration onto a second mailbox on the same node.
+  ///
+  /// Public like [checkAndRenewExpiringHandles], the other periodic
+  /// maintenance task: the poll cycle drives it, tests call it directly.
+  Future<void> sweepOhRedundancy() async {
+    if (_redundancySweepInProgress) return;
+    final now = DateTime.now();
+    final last = _lastRedundancySweep;
+    if (last != null && now.difference(last) < redundancySweepInterval) return;
+    _lastRedundancySweep = now;
+    _redundancySweepInProgress = true;
+    try {
+      for (final channelId in _restoredChannels.toList()) {
+        if (!_registeredOHs.any((oh) => oh.channelId == channelId)) continue;
+        // A T21 failover is mid-flight: its dead handle still counts towards
+        // the redundancy target, so a top-up now would register against a set
+        // that is about to change — and `_failoverOwnHandle` is written on the
+        // assumption that nothing else registers for the channel meanwhile.
+        // The next sweep sees the settled set.
+        if (_failoversInProgress.contains(channelId)) continue;
+        try {
+          await ensureOhRedundancy(channelId);
+        } catch (e) {
+          RpLog.info(
+            'RedPandaLightClient: OH redundancy top-up for $channelId '
+            'failed: $e',
+          );
+        }
+      }
+    } finally {
+      _redundancySweepInProgress = false;
+    }
+  }
 
   @override
   Future<void> ensureOhRedundancy(String channelId) async {
@@ -4772,6 +4903,23 @@ class RedPandaLightClient implements RedPandaClient {
       // T44: (re)publish rendezvous records that are due or that never got a
       // publish through (e.g. no garlic hops were known at registration time).
       _republishDueRendezvousRecords();
+      // T42/T111: keep every known channel topped up to [ohRedundancy] own
+      // mailboxes. This used to be driven from `chat_screen.build`, so the
+      // invariant only held while a chat was on screen and a retry needed a
+      // widget rebuild. The worker owns its own mailbox set, and this is the
+      // one place where the preconditions (verified peers with a discovered
+      // node id) actually appear.
+      //
+      // NOT awaited, like [checkAndRenewExpiringHandles]: a top-up performs
+      // real OH registrations, and the cycle's completion gates when the next
+      // fetch loop may run (and `_notePollActivity`'s pull-forward). Blocking
+      // delivery latency on background maintenance would work against the
+      // ≤10 s goal. [sweepOhRedundancy] guards its own re-entry.
+      unawaited(
+        sweepOhRedundancy().catchError((Object e) {
+          RpLog.info('RedPandaLightClient: OH redundancy sweep failed: $e');
+        }),
+      );
       // T21: re-send pending failover announcements until their send
       // budget is used up.
       for (final channelId in List.of(_pendingOhUpdates.keys)) {
