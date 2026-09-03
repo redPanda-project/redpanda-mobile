@@ -311,4 +311,49 @@ void main() {
       await unmount(tester);
     });
   });
+
+  group('T111: the chat screen does no network orchestration', () {
+    testWidgets('build() registers no channel state and no OH top-up', (
+      tester,
+    ) async {
+      await insertMessage('hello', MessageStatus.delivered);
+
+      await tester.pumpWidget(app());
+      await tester.pump();
+      // A rebuild used to mean another partial re-registration.
+      await tester.pump();
+
+      expect(
+        client.channelRegistrations,
+        isEmpty,
+        reason:
+            'channel state has ONE restore entry point '
+            '(MessageSyncService.registerChannel) — not build()',
+      );
+      expect(
+        client.ohRedundancyCalls,
+        isEmpty,
+        reason: 'the worker owns its own mailbox redundancy (T42/T111)',
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('sending a message still works without a registration', (
+      tester,
+    ) async {
+      await tester.pumpWidget(app());
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextField), 'no registration needed');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      await tester.pump();
+
+      expect(client.sentMessages.single.content, 'no registration needed');
+      expect(client.channelRegistrations, isEmpty);
+
+      await unmount(tester);
+    });
+  });
 }

@@ -301,4 +301,101 @@ void main() {
     final replay = WorkerReplayState()..recordNodeScores(const []);
     expect(replay.replayCommands(), isEmpty);
   });
+
+  group('T111: a partial re-register never costs the projection state', () {
+    test('session tags, RGB and display name survive a subset re-register', () {
+      final replay = WorkerReplayState()..recordChannelKeys(channelCmd('c1'));
+      // Live state advanced past what any persisted row knows.
+      replay.apply(
+        const GarlicSessionUpdate(
+          channelId: 'c1',
+          sessionTags: {'live': 9},
+          pendingRgbHex: 'cafe',
+        ),
+      );
+      replay.apply(
+        const RatchetStateUpdate(channelId: 'c1', stateJson: 'ratchet-v7'),
+      );
+
+      // Exactly the call `chat_screen.build` used to make: the channel row,
+      // and nothing of the garlic session or the display name.
+      replay.recordChannelKeys(
+        CmdAddChannelKeys(
+          'c1',
+          List<int>.filled(32, 1),
+          channelSecret: List<int>.filled(32, 2),
+          peerOhId: ohId(9),
+          peerOhEndpoint: 'old-host:59558',
+          isChannelCreator: true,
+          ratchetState: 'ratchet-v1',
+        ),
+      );
+
+      final cmd = onlyChannel(replay);
+      expect(cmd.sessionTags, equals({'live': 9}));
+      expect(cmd.pendingRgbHex, equals('cafe'));
+      expect(cmd.ownDisplayName, equals('me'));
+      expect(cmd.ratchetState, equals('ratchet-v7'));
+    });
+
+    test('a stale re-register never moves the peer mailbox back', () {
+      final replay = WorkerReplayState()..recordChannelKeys(channelCmd('c1'));
+      replay.apply(
+        PeerOhUpdate(
+          channelId: 'c1',
+          descriptors: [
+            OHDescriptor(
+              serverEndpoint: 'new-host:59558',
+              handleId: ohId(7),
+              authPublicKey: List<int>.filled(32, 3),
+            ),
+          ],
+        ),
+      );
+
+      replay.recordChannelKeys(channelCmd('c1')); // carries ohId(9) again
+
+      final cmd = onlyChannel(replay);
+      expect(cmd.peerOhId, equals(ohId(7)));
+      expect(cmd.peerOhEndpoint, equals('new-host:59558'));
+      expect(cmd.peerOhSet, hasLength(1));
+    });
+
+    test('a consumed RGB is not resurrected by a re-register', () {
+      final replay = WorkerReplayState()..recordChannelKeys(channelCmd('c1'));
+      // The block was used; the live snapshot has no pending RGB any more.
+      replay.apply(
+        const GarlicSessionUpdate(channelId: 'c1', sessionTags: {'aa': 1}),
+      );
+
+      replay.recordChannelKeys(channelCmd('c1')); // still carries 'beef'
+
+      expect(onlyChannel(replay).pendingRgbHex, isNull);
+    });
+
+    test('a re-register still fills gaps the projection has', () {
+      // A channel first registered before anything was known about the
+      // partner's mailbox or the ratchet.
+      final replay = WorkerReplayState()
+        ..recordChannelKeys(
+          CmdAddChannelKeys(
+            'c1',
+            List<int>.filled(32, 1),
+            isChannelCreator: false,
+          ),
+        );
+
+      replay.recordChannelKeys(channelCmd('c1'));
+
+      final cmd = onlyChannel(replay);
+      expect(cmd.channelSecret, equals(List<int>.filled(32, 2)));
+      expect(cmd.ownDisplayName, equals('me'));
+      expect(cmd.peerOhId, equals(ohId(9)));
+      expect(cmd.ratchetState, equals('ratchet-v1'));
+      expect(cmd.sessionTags, equals({'aa': 1}));
+      // The role is the channel's identity, not something a later caller
+      // gets to flip.
+      expect(cmd.isChannelCreator, isFalse);
+    });
+  });
 }

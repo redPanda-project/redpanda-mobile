@@ -536,6 +536,10 @@ class RedPandaIsolateClient implements RedPandaClient {
 
   @override
   Future<void> ensureOhRedundancy(String channelId) async {
+    // Awaiting readiness matters: [_send] DROPS commands while the worker is
+    // still starting, and this command is not part of the replay projection,
+    // so a dropped one is simply lost.
+    await _isolateReady.future;
     _send(CmdEnsureOhRedundancy(channelId));
   }
 

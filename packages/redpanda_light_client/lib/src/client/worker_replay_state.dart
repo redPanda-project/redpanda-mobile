@@ -29,8 +29,44 @@ class WorkerReplayState {
 
   void recordPeer(String address) => _peers.add(address);
 
-  void recordChannelKeys(CmdAddChannelKeys cmd) =>
+  /// Records the channel registration a respawned worker has to replay.
+  ///
+  /// T111: a re-registration may carry only a SUBSET of a channel's state
+  /// (a caller that holds the channel row but not the live garlic session).
+  /// Recording it as a wholesale replace dropped the session tags, the
+  /// pending RGB and the display name from the projection, so the respawned
+  /// worker came back with crypto state OLDER than the app had already
+  /// persisted — the H8 bug class, one level up.
+  ///
+  /// The projection therefore applies the same precedence the worker itself
+  /// applies (`RedPandaLightClient.addChannelKeys`): what is already known
+  /// wins, and a re-registration may only fill gaps.
+  void recordChannelKeys(CmdAddChannelKeys cmd) {
+    final old = _channels[cmd.channelId];
+    if (old == null) {
       _channels[cmd.channelId] = cmd;
+      return;
+    }
+    // The peer mailbox and the garlic session are patched from live state
+    // (`PeerOhUpdate` / `GarlicSessionUpdate`), so once either is known at
+    // all it must survive a partial re-register untouched — including a
+    // pending RGB that a live update legitimately set back to null.
+    final knowsPeerOh = old.peerOhSet != null || old.peerOhId != null;
+    final knowsGarlic = old.sessionTags != null || old.pendingRgbHex != null;
+    _channels[cmd.channelId] = CmdAddChannelKeys(
+      old.channelId,
+      old.encryptionKey,
+      channelSecret: old.channelSecret ?? cmd.channelSecret,
+      ownDisplayName: old.ownDisplayName ?? cmd.ownDisplayName,
+      peerOhId: knowsPeerOh ? old.peerOhId : cmd.peerOhId,
+      peerOhEndpoint: knowsPeerOh ? old.peerOhEndpoint : cmd.peerOhEndpoint,
+      peerOhSet: knowsPeerOh ? old.peerOhSet : cmd.peerOhSet,
+      isChannelCreator: old.isChannelCreator,
+      ratchetState: old.ratchetState ?? cmd.ratchetState,
+      sessionTags: knowsGarlic ? old.sessionTags : cmd.sessionTags,
+      pendingRgbHex: knowsGarlic ? old.pendingRgbHex : cmd.pendingRgbHex,
+    );
+  }
 
   void recordOutboundHandle(CmdRestoreOutboundHandle cmd) =>
       _handles[HEX.encode(cmd.ohId)] = cmd;

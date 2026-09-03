@@ -183,4 +183,36 @@ void main() {
     final m = creator();
     expect(await m.buildSignedStore(chan, 1000), isNull);
   });
+
+  group('T111: re-registration and the advertised display name', () {
+    test('a re-register without a name keeps the published one', () {
+      final m = creator();
+      // A caller that holds only the channel row knows no display name; it
+      // must not blank the name already in the record (this is what
+      // `chat_screen.build` did on every rebuild).
+      m.register(chan, channelSecret: sk, isCreator: true, ownName: null);
+      expect(m.ownNameOf(chan), equals('Alice'));
+    });
+
+    test('an explicit empty name does clear it', () {
+      final m = creator();
+      m.register(chan, channelSecret: sk, isCreator: true, ownName: '');
+      expect(m.ownNameOf(chan), isEmpty);
+    });
+
+    test('a first registration without a name means no name', () {
+      final m = RendezvousManager()
+        ..register(chan, channelSecret: sk, isCreator: true, ownName: null);
+      expect(m.ownNameOf(chan), isEmpty);
+    });
+
+    test('a re-register keeps the accumulated merge state', () {
+      final m = creator();
+      final oh = _oh('1.1.1.1:59558');
+      expect(m.setOwnOhs(chan, [oh]), isTrue);
+      m.register(chan, channelSecret: sk, isCreator: true, ownName: 'Alice');
+      // Unchanged set ⇒ no spurious publish, i.e. the state survived.
+      expect(m.setOwnOhs(chan, [oh]), isFalse);
+    });
+  });
 }

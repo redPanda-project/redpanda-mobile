@@ -7,6 +7,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
 import 'package:redpanda/repositories/channel_repository.dart';
 import 'package:redpanda/repositories/outbound_handle_repository.dart';
+import 'package:redpanda/services/message_sync_service.dart';
 import 'package:redpanda/shared/providers.dart';
 
 class JoinChannelScreen extends ConsumerStatefulWidget {
@@ -51,6 +52,13 @@ class _JoinChannelScreenState extends ConsumerState<JoinChannelScreen> {
       final isNewChannel = await ref
           .read(channelRepositoryProvider)
           .addChannel(channel);
+
+      // T111: hand the channel to the network worker through the ONE restore
+      // entry point (full argument set). Before, `chat_screen.build` was the
+      // only caller, so a joined channel stayed unknown to the worker — no
+      // rendezvous lookup, no ratchet — until the chat was opened. Must
+      // precede the OH registration: the rendezvous publish needs it.
+      await ref.read(messageSyncServiceProvider).registerChannel(channel.id);
 
       // Register our own OH for this channel in the background so it's
       // ready when we share our QR code with the peer later.
