@@ -32,6 +32,7 @@ import 'package:redpanda_light_client/src/domain/peer_oh_update.dart';
 import 'package:redpanda_light_client/src/domain/reverse_garlic_block.dart';
 import 'package:redpanda_light_client/src/domain/routing_ack.dart';
 import 'package:redpanda_light_client/src/domain/send_exceptions.dart';
+import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/garlic/ack_tag_store.dart';
 import 'package:redpanda_light_client/src/garlic/garlic_builder.dart';
 import 'package:redpanda_light_client/src/garlic/hop_selector.dart';
@@ -164,9 +165,6 @@ class RedPandaLightClient implements RedPandaClient {
   /// re-registrations via addChannelKeys never overwrite live state.
   final Set<String> _restoredGarlicSessions = {};
 
-  final _garlicSessionController =
-      StreamController<GarlicSessionUpdate>.broadcast();
-
   /// Hop count of the most recent sendMessage (0 = direct MS02b deposit).
   /// Diagnostic only — used by tests to assert the garlic path was taken.
   int lastSendHopCount = 0;
@@ -204,16 +202,8 @@ class RedPandaLightClient implements RedPandaClient {
   /// our next mailbox fetch, so the spec's 60 s would misfire routinely.
   static const Duration ackTimeout = Duration(seconds: 90);
 
-  final _routingAckController = StreamController<RoutingAckUpdate>.broadcast();
-  final _channelAckController = StreamController<ChannelAckUpdate>.broadcast();
-  final _nodeScoreController = StreamController<List<NodeScore>>.broadcast();
-
   /// Registered groups by group id (MS08).
   final Map<String, _GroupState> _groups = {};
-
-  final _groupStateController = StreamController<GroupStateUpdate>.broadcast();
-  final _groupHandshakeController =
-      StreamController<GroupHandshakeEvent>.broadcast();
 
   /// Cap on buffered unknown-epoch items per group (Decision 10) — a
   /// malicious or broken peer must not grow the buffer unboundedly.
@@ -858,12 +848,9 @@ class RedPandaLightClient implements RedPandaClient {
     _failoversInProgress.clear();
     _pendingOhUpdates.clear();
     await _incomingMessageController.close();
-    await _ohMailboxUpdateController.close();
-    await _ohFetchStatusController.close();
-    await _ohRegistrationController.close();
-    await _peerOhUpdateController.close();
-    await _ratchetStateController.close();
-    await _garlicSessionController.close();
+    // One channel to close — the old per-event controllers for ACKs, node
+    // scores and group state were never closed at all.
+    await _stateController.close();
     _updateStatus(ConnectionStatus.disconnected);
   }
 
@@ -871,12 +858,19 @@ class RedPandaLightClient implements RedPandaClient {
   final List<OHRegistration> _registeredOHs = [];
   final _incomingMessageController =
       StreamController<DecryptedMessage>.broadcast();
-  final _ohMailboxUpdateController =
-      StreamController<OhMailboxUpdate>.broadcast();
-  final _ohFetchStatusController = StreamController<OhFetchStatus>.broadcast();
-  final _ohRegistrationController =
-      StreamController<List<OHRegistration>>.broadcast();
-  final _peerOhUpdateController = StreamController<PeerOhUpdate>.broadcast();
+
+  /// The single outbound state channel (see [StateUpdate]): every one-way
+  /// state change — ratchet, garlic session, OH mailbox/fetch/own-set/
+  /// peer-set, ACKs, node scores, group state — is published here and
+  /// nowhere else.
+  final _stateController = StreamController<StateUpdate>.broadcast();
+
+  /// Publishes one state change. The only emit path — the closed-check
+  /// lives here instead of at ~20 call sites.
+  void _emitState(StateUpdate update) {
+    if (_stateController.isClosed) return;
+    _stateController.add(update);
+  }
 
   // --- OH failover state (T21) ---
 
@@ -1256,13 +1250,6 @@ class RedPandaLightClient implements RedPandaClient {
   /// is sync; consumers await the future right before encrypt/decrypt.
   final Map<String, Future<RatchetSession>> _ratchetSessions = {};
 
-  final _ratchetStateController =
-      StreamController<RatchetStateUpdate>.broadcast();
-
-  @override
-  Stream<RatchetStateUpdate> get ratchetStateUpdates =>
-      _ratchetStateController.stream;
-
   /// Register channel encryption info so sendMessage/fetchMessages can use it.
   @override
   void addChannelKeys(
@@ -1358,9 +1345,8 @@ class RedPandaLightClient implements RedPandaClient {
   /// Publishes the garlic session state of [channelId] (outstanding tags +
   /// pending RGB) so the app layer can persist it (on-device only).
   void _emitGarlicSession(String channelId) {
-    if (_garlicSessionController.isClosed) return;
     final rgb = _pendingRgbs[channelId];
-    _garlicSessionController.add(
+    _emitState(
       GarlicSessionUpdate(
         channelId: channelId,
         sessionTags: _sessionTagStore.tagsForChannel(channelId),
@@ -1369,20 +1355,10 @@ class RedPandaLightClient implements RedPandaClient {
     );
   }
 
-  /// Routing-layer delivery feedback (R-ACK received / timed out, MS06).
+  /// The single state channel (see [StateUpdate]). Consumers take the typed
+  /// projection they need: `stateUpdates.of<RoutingAckUpdate>()`.
   @override
-  Stream<RoutingAckUpdate> get routingAckUpdates =>
-      _routingAckController.stream;
-
-  /// Application-layer delivery confirmations (Channel-ACK, MS06).
-  @override
-  Stream<ChannelAckUpdate> get channelAckUpdates =>
-      _channelAckController.stream;
-
-  /// Node score snapshots for on-device persistence (MS06). Emitted after
-  /// every score change; the app layer upserts them into `node_scores`.
-  @override
-  Stream<List<NodeScore>> get nodeScoreUpdates => _nodeScoreController.stream;
+  Stream<StateUpdate> get stateUpdates => _stateController.stream;
 
   /// Restores persisted node scores (startup). Live in-memory scores win.
   @override
@@ -1391,20 +1367,13 @@ class RedPandaLightClient implements RedPandaClient {
   }
 
   void _emitNodeScores() {
-    if (!_nodeScoreController.isClosed) {
-      _nodeScoreController.add(_nodeScorer.snapshot());
-    }
+    _emitState(NodeScoreUpdate(_nodeScorer.snapshot()));
   }
-
-  @override
-  Stream<GarlicSessionUpdate> get garlicSessionUpdates =>
-      _garlicSessionController.stream;
 
   /// Publishes the advanced ratchet state of [channelId] so the app layer
   /// can persist it (on-device only).
   void _emitRatchetState(String channelId, RatchetSession session) {
-    if (_ratchetStateController.isClosed) return;
-    _ratchetStateController.add(
+    _emitState(
       RatchetStateUpdate(channelId: channelId, stateJson: session.toJson()),
     );
   }
@@ -1413,35 +1382,20 @@ class RedPandaLightClient implements RedPandaClient {
   Stream<DecryptedMessage> get incomingMessages =>
       _incomingMessageController.stream;
 
-  @override
-  Stream<OhMailboxUpdate> get ohMailboxUpdates =>
-      _ohMailboxUpdateController.stream;
-
-  @override
-  Stream<OhFetchStatus> get ohFetchStatus => _ohFetchStatusController.stream;
-
-  @override
-  Stream<List<OHRegistration>> get ohRegistrationUpdates =>
-      _ohRegistrationController.stream;
-
-  @override
-  Stream<PeerOhUpdate> get peerOhUpdates => _peerOhUpdateController.stream;
-
   /// Timestamp (ms since epoch) of the last successful mailbox fetch per
   /// channel id. Fed by [_emitFetchStatus]; read by [runChannelDoctor] to
   /// judge how fresh the receiving pipeline is. Purely diagnostic.
   final Map<String, int> _lastFetchOkAtMs = {};
 
   /// Reports the outcome of one fetch attempt (success AND failure — unlike
-  /// [ohMailboxUpdates], which only fires on state changes).
+  /// [OhMailboxUpdate], which only fires on state changes).
   void _emitFetchStatus(OHRegistration oh, bool success, [String? detail]) {
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final channelId = oh.channelId;
     if (success && channelId != null) {
       _lastFetchOkAtMs[channelId] = nowMs;
     }
-    if (_ohFetchStatusController.isClosed) return;
-    _ohFetchStatusController.add(
+    _emitState(
       OhFetchStatus(
         ohId: oh.ohId,
         channelId: oh.channelId,
@@ -2592,16 +2546,14 @@ class RedPandaLightClient implements RedPandaClient {
       // Persist the reset immediately — even when the re-registration
       // below cannot reach the host yet, a restored stale cursor after an
       // app restart must not swallow the recreated mailbox's items.
-      if (!_ohMailboxUpdateController.isClosed) {
-        _ohMailboxUpdateController.add(
-          OhMailboxUpdate(
-            ohId: oh.ohId,
-            channelId: oh.channelId,
-            lastCursor: 0,
-            expiresAtMs: oh.expiresAtMs,
-          ),
-        );
-      }
+      _emitState(
+        OhMailboxUpdate(
+          ohId: oh.ohId,
+          channelId: oh.channelId,
+          lastCursor: 0,
+          expiresAtMs: oh.expiresAtMs,
+        ),
+      );
       final renewed = await renewOutboundHandle(oh);
       RpLog.info(
         'RedPandaLightClient: re-registered lost handle $key '
@@ -2658,7 +2610,7 @@ class RedPandaLightClient implements RedPandaClient {
   /// Moves the channel of [oldOh] to a fresh mailbox on a reachable node
   /// (T21): registers a NEW handle (new id + keypair) on a node other than
   /// the dead host, retires the old handle, publishes the replacement via
-  /// [ohRegistrationUpdates] and queues the in-band `oh_update` announce.
+  /// an [OwnOhSetUpdate] and queues the in-band `oh_update` announce.
   ///
   /// Messages already deposited in the dead mailbox are not lost silently:
   /// the partner's unacknowledged sends re-queue on R-ACK timeout and are
@@ -2710,11 +2662,16 @@ class RedPandaLightClient implements RedPandaClient {
   /// and failover replacements both flow through here, replacing the old
   /// per-channel handle rows.
   void _emitOwnOhSet(String channelId) {
-    if (_ohRegistrationController.isClosed) return;
     final set = _registeredOHs
         .where((oh) => oh.channelId == channelId)
         .toList(growable: false);
-    _ohRegistrationController.add(set);
+    // The set is a REPLACEMENT instruction, so an empty one would mean "this
+    // channel has no mailbox any more" — a state the app cannot act on today
+    // (it would only drop the persisted rows and the replay entries). Both
+    // call sites run after a successful registration, so this never fires;
+    // the guard keeps [OwnOhSetUpdate.handles]'s never-empty contract true.
+    if (set.isEmpty) return;
+    _emitState(OwnOhSetUpdate(channelId: channelId, handles: set));
     // T44: our OH set just changed — refresh the rendezvous record so peers
     // can still find us over the DHT (publish on every own-OH change). Gated on
     // relay availability so a single-node network schedules no work here.
@@ -3141,11 +3098,7 @@ class RedPandaLightClient implements RedPandaClient {
   /// fan-out set). Shared by the in-band `oh_update` path and T44 rendezvous
   /// recovery.
   void _emitPeerOhUpdate(String channelId, List<OHDescriptor> descriptors) {
-    if (!_peerOhUpdateController.isClosed) {
-      _peerOhUpdateController.add(
-        PeerOhUpdate(channelId: channelId, descriptors: descriptors),
-      );
-    }
+    _emitState(PeerOhUpdate(channelId: channelId, descriptors: descriptors));
   }
 
   /// Re-registers [oh] with the same id and keypair to extend its TTL.
@@ -3200,7 +3153,7 @@ class RedPandaLightClient implements RedPandaClient {
     }
 
     oh.expiresAtMs = response.expiresAtMs.toInt();
-    _ohMailboxUpdateController.add(
+    _emitState(
       OhMailboxUpdate(
         ohId: oh.ohId,
         channelId: oh.channelId,
@@ -3503,15 +3456,13 @@ class RedPandaLightClient implements RedPandaClient {
         // MS06: a Channel-ACK confirms the partner received our message —
         // surface it as a status update, never as a chat message.
         if (channelMessage.isChannelAck) {
-          if (!_channelAckController.isClosed) {
-            _channelAckController.add(
-              ChannelAckUpdate(
-                channelId: oh.channelId!,
-                messageIdHex: _hexEncode(channelMessage.ackMessageId!),
-                timestampMs: channelMessage.timestampMs,
-              ),
-            );
-          }
+          _emitState(
+            ChannelAckUpdate(
+              channelId: oh.channelId!,
+              messageIdHex: _hexEncode(channelMessage.ackMessageId!),
+              timestampMs: channelMessage.timestampMs,
+            ),
+          );
           continue;
         }
         if (_storeReplyPath(oh.channelId!, channelMessage.replyPath)) {
@@ -3602,7 +3553,7 @@ class RedPandaLightClient implements RedPandaClient {
     if (response.items.isNotEmpty ||
         response.mailboxOverflow ||
         oh.lastCursor != previousCursor) {
-      _ohMailboxUpdateController.add(
+      _emitState(
         OhMailboxUpdate(
           ohId: oh.ohId,
           channelId: oh.channelId,
@@ -3677,17 +3628,15 @@ class RedPandaLightClient implements RedPandaClient {
       }
       return;
     }
-    if (!_routingAckController.isClosed) {
-      _routingAckController.add(
-        RoutingAckUpdate.ack(
-          channelId: entry.channelId,
-          messageIdHex: entry.messageIdHex,
-          status: ack.status,
-          latencyMs: latencyMs,
-          memberIdHex: entry.memberIdHex,
-        ),
-      );
-    }
+    _emitState(
+      RoutingAckUpdate.ack(
+        channelId: entry.channelId,
+        messageIdHex: entry.messageIdHex,
+        status: ack.status,
+        latencyMs: latencyMs,
+        memberIdHex: entry.memberIdHex,
+      ),
+    );
     RpLog.debug(
       'RedPandaLightClient: R-ACK for message ${entry.messageIdHex} '
       '(status ${ack.status}, ${latencyMs}ms)',
@@ -3770,14 +3719,6 @@ class RedPandaLightClient implements RedPandaClient {
   // Groups (Frontend MS08)
   // =========================================================================
 
-  @override
-  Stream<GroupStateUpdate> get groupStateUpdates =>
-      _groupStateController.stream;
-
-  @override
-  Stream<GroupHandshakeEvent> get groupHandshakeEvents =>
-      _groupHandshakeController.stream;
-
   /// Registers a group in the network layer. Applied only on the first
   /// registration of a group id — live state is always at least as advanced
   /// as anything persisted (mirrors [addChannelKeys]).
@@ -3830,8 +3771,7 @@ class RedPandaLightClient implements RedPandaClient {
   /// Publishes the full mutable state of [group] so the app layer can
   /// persist it (on-device only — the crypto state is key material).
   void _emitGroupState(_GroupState group) {
-    if (_groupStateController.isClosed) return;
-    _groupStateController.add(
+    _emitState(
       GroupStateUpdate(
         groupId: group.groupId,
         label: group.label,
@@ -4287,16 +4227,14 @@ class RedPandaLightClient implements RedPandaClient {
       final channelMessage = ChannelMessage.decode(result.plaintext);
 
       if (channelMessage.isChannelAck) {
-        if (!_channelAckController.isClosed) {
-          _channelAckController.add(
-            ChannelAckUpdate(
-              channelId: group.groupId,
-              messageIdHex: _hexEncode(channelMessage.ackMessageId!),
-              timestampMs: channelMessage.timestampMs,
-              memberIdHex: result.senderMemberIdHex,
-            ),
-          );
-        }
+        _emitState(
+          ChannelAckUpdate(
+            channelId: group.groupId,
+            messageIdHex: _hexEncode(channelMessage.ackMessageId!),
+            timestampMs: channelMessage.timestampMs,
+            memberIdHex: result.senderMemberIdHex,
+          ),
+        );
         _emitGroupState(group);
         return;
       }
@@ -4487,16 +4425,14 @@ class RedPandaLightClient implements RedPandaClient {
         final result = await group.session.decrypt(payload);
         final channelMessage = ChannelMessage.decode(result.plaintext);
         if (channelMessage.isChannelAck) {
-          if (!_channelAckController.isClosed) {
-            _channelAckController.add(
-              ChannelAckUpdate(
-                channelId: group.groupId,
-                messageIdHex: _hexEncode(channelMessage.ackMessageId!),
-                timestampMs: channelMessage.timestampMs,
-                memberIdHex: result.senderMemberIdHex,
-              ),
-            );
-          }
+          _emitState(
+            ChannelAckUpdate(
+              channelId: group.groupId,
+              messageIdHex: _hexEncode(channelMessage.ackMessageId!),
+              timestampMs: channelMessage.timestampMs,
+              memberIdHex: result.senderMemberIdHex,
+            ),
+          );
           continue;
         }
         if (channelMessage.isGroupControl) {
@@ -4575,9 +4511,8 @@ class RedPandaLightClient implements RedPandaClient {
       RpLog.info('RedPandaLightClient: dropping malformed group handshake: $e');
       return;
     }
-    if (_groupHandshakeController.isClosed) return;
     if (handshake.isProposal) {
-      _groupHandshakeController.add(
+      _emitState(
         GroupHandshakeEvent(
           channelId: channelId,
           isProposal: true,
@@ -4587,7 +4522,7 @@ class RedPandaLightClient implements RedPandaClient {
         ),
       );
     } else {
-      _groupHandshakeController.add(
+      _emitState(
         GroupHandshakeEvent(
           channelId: channelId,
           isProposal: false,
@@ -4860,15 +4795,13 @@ class RedPandaLightClient implements RedPandaClient {
         // MS08: an unconfirmed rotation box simply stays pending — the
         // periodic retry re-sends it; no message status to update.
         if (entry.isRotation) continue;
-        if (!_routingAckController.isClosed) {
-          _routingAckController.add(
-            RoutingAckUpdate.timeout(
-              channelId: entry.channelId,
-              messageIdHex: entry.messageIdHex,
-              memberIdHex: entry.memberIdHex,
-            ),
-          );
-        }
+        _emitState(
+          RoutingAckUpdate.timeout(
+            channelId: entry.channelId,
+            messageIdHex: entry.messageIdHex,
+            memberIdHex: entry.memberIdHex,
+          ),
+        );
         RpLog.info(
           'RedPandaLightClient: no R-ACK for message '
           '${entry.messageIdHex} within ${ackTimeout.inSeconds}s',

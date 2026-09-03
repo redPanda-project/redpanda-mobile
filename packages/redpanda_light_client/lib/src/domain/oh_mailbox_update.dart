@@ -1,6 +1,8 @@
+import 'package:redpanda_light_client/src/domain/state_update.dart';
+
 /// State change of a registered Outbound Handle, emitted after a fetch or
 /// renewal so the app layer can persist cursor/expiry and warn on overflow.
-class OhMailboxUpdate {
+class OhMailboxUpdate extends StateUpdate {
   final List<int> ohId;
   final String? channelId;
 

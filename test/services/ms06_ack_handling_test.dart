@@ -71,7 +71,7 @@ void main() {
   group('R-ACK handling', () {
     test('stored R-ACK moves sent → routed', () async {
       final id = await insertSentMessage();
-      client.routingAckController.add(
+      client.stateController.add(
         const RoutingAckUpdate.ack(
           channelId: channelId,
           messageIdHex: messageIdHex,
@@ -85,7 +85,7 @@ void main() {
 
     test('a late R-ACK never downgrades delivered', () async {
       final id = await insertSentMessage(status: MessageStatus.delivered);
-      client.routingAckController.add(
+      client.stateController.add(
         const RoutingAckUpdate.ack(
           channelId: channelId,
           messageIdHex: messageIdHex,
@@ -99,7 +99,7 @@ void main() {
 
     test('HANDLE_EXPIRED re-queues the message with backoff', () async {
       final id = await insertSentMessage();
-      client.routingAckController.add(
+      client.stateController.add(
         const RoutingAckUpdate.ack(
           channelId: channelId,
           messageIdHex: messageIdHex,
@@ -116,7 +116,7 @@ void main() {
 
     test('timeout re-queues only messages still in sent', () async {
       final id = await insertSentMessage(status: MessageStatus.routed);
-      client.routingAckController.add(
+      client.stateController.add(
         const RoutingAckUpdate.timeout(
           channelId: channelId,
           messageIdHex: messageIdHex,
@@ -130,7 +130,7 @@ void main() {
   group('Channel-ACK handling', () {
     test('moves the message to delivered from any send state', () async {
       final id = await insertSentMessage(status: MessageStatus.failed);
-      client.channelAckController.add(
+      client.stateController.add(
         const ChannelAckUpdate(
           channelId: channelId,
           messageIdHex: messageIdHex,
@@ -144,15 +144,17 @@ void main() {
 
   group('node score persistence', () {
     test('snapshots are upserted and restored on startup', () async {
-      client.nodeScoreController.add([
-        NodeScore(
-          nodeIdHex: 'aa' * 20,
-          successCount: 4,
-          failureCount: 1,
-          avgLatencyMs: 250,
-          lastUpdatedMs: 1751500000000,
-        ),
-      ]);
+      client.stateController.add(
+        NodeScoreUpdate([
+          NodeScore(
+            nodeIdHex: 'aa' * 20,
+            successCount: 4,
+            failureCount: 1,
+            avgLatencyMs: 250,
+            lastUpdatedMs: 1751500000000,
+          ),
+        ]),
+      );
       await pump();
 
       final rows = await db.select(db.nodeScores).get();
@@ -160,15 +162,17 @@ void main() {
       expect(rows.single.successCount, 4);
 
       // Second snapshot for the same node replaces the row.
-      client.nodeScoreController.add([
-        NodeScore(
-          nodeIdHex: 'aa' * 20,
-          successCount: 5,
-          failureCount: 1,
-          avgLatencyMs: 240,
-          lastUpdatedMs: 1751500001000,
-        ),
-      ]);
+      client.stateController.add(
+        NodeScoreUpdate([
+          NodeScore(
+            nodeIdHex: 'aa' * 20,
+            successCount: 5,
+            failureCount: 1,
+            avgLatencyMs: 240,
+            lastUpdatedMs: 1751500001000,
+          ),
+        ]),
+      );
       await pump();
       final updated = await db.select(db.nodeScores).get();
       expect(updated.single.successCount, 5);

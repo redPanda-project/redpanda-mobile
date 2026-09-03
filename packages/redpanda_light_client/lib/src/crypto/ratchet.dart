@@ -6,6 +6,7 @@ import 'package:hex/hex.dart';
 import 'package:redpanda_light_client/src/crypto/channel_message.dart';
 import 'package:redpanda_light_client/src/crypto/crypto_utils.dart';
 import 'package:redpanda_light_client/src/crypto/message_crypto_v4.dart';
+import 'package:redpanda_light_client/src/domain/state_update.dart';
 
 /// Thrown when the ratchet cannot derive a key for an incoming message —
 /// e.g. the gap to the last seen counter exceeds [RatchetSession.maxSkip],
@@ -22,7 +23,7 @@ class RatchetException implements Exception {
 /// [stateJson] (Drift `Channels.ratchetState`) so the ratchet survives
 /// app restarts. The state never travels in the QR code or any backup
 /// that leaves the device (master spec MS03b).
-class RatchetStateUpdate {
+class RatchetStateUpdate extends StateUpdate {
   final String channelId;
   final String stateJson;
   const RatchetStateUpdate({required this.channelId, required this.stateJson});

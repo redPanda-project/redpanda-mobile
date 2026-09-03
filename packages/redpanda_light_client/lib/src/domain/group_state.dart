@@ -1,4 +1,5 @@
 import 'package:equatable/equatable.dart';
+import 'package:redpanda_light_client/src/domain/state_update.dart';
 
 /// One member of a group (Frontend MS08).
 ///
@@ -108,7 +109,7 @@ class GroupRegistration {
 /// `RatchetStateUpdate`/`GarlicSessionUpdate`. Snapshots the full mutable
 /// state: crypto chains, epoch, member list, buffered items and undelivered
 /// rotation boxes.
-class GroupStateUpdate {
+class GroupStateUpdate extends StateUpdate {
   final String groupId;
   final String label;
   final int keyEpoch;
@@ -137,7 +138,7 @@ class GroupStateUpdate {
 /// A group handshake received over an existing 1:1 channel (Decision 8):
 /// either an invite proposal (admin → invitee) or a join accept
 /// (invitee → admin). Field semantics follow `GroupHandshakeCodec`.
-class GroupHandshakeEvent {
+class GroupHandshakeEvent extends StateUpdate {
   /// The 1:1 channel the handshake arrived on.
   final String channelId;
 

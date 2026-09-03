@@ -15,6 +15,7 @@ import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/domain/peer_oh_update.dart';
 import 'package:hex/hex.dart';
+import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/generated/outbound.pb.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
@@ -296,7 +297,9 @@ void main() {
         await client.restoreOutboundHandle(oldOh);
 
         final replacements = <OHRegistration>[];
-        final sub = client.ohRegistrationUpdates.listen(replacements.addAll);
+        final sub = client.stateUpdates.of<OwnOhSetUpdate>().listen(
+          (u) => replacements.addAll(u.handles),
+        );
         addTearDown(sub.cancel);
 
         // Three provably one-sided failures (the scripted node is verified
@@ -401,7 +404,9 @@ void main() {
       await client.restoreOutboundHandle(oldOh);
 
       final replacements = <OHRegistration>[];
-      final sub = client.ohRegistrationUpdates.listen(replacements.addAll);
+      final sub = client.stateUpdates.of<OwnOhSetUpdate>().listen(
+        (u) => replacements.addAll(u.handles),
+      );
       addTearDown(sub.cancel);
 
       for (var i = 0; i < 5; i++) {
@@ -522,7 +527,7 @@ void main() {
       await client.restoreOutboundHandle(ownOh);
 
       final updates = <PeerOhUpdate>[];
-      final sub = client.peerOhUpdates.listen(updates.add);
+      final sub = client.stateUpdates.of<PeerOhUpdate>().listen(updates.add);
       addTearDown(sub.cancel);
       final surfaced = <DecryptedMessage>[];
       final msgSub = client.incomingMessages.listen(surfaced.add);
@@ -629,7 +634,7 @@ void main() {
       await client.restoreOutboundHandle(ownOh);
 
       final updates = <PeerOhUpdate>[];
-      final sub = client.peerOhUpdates.listen(updates.add);
+      final sub = client.stateUpdates.of<PeerOhUpdate>().listen(updates.add);
       addTearDown(sub.cancel);
 
       final messages = await client.fetchMessages(ownOh);

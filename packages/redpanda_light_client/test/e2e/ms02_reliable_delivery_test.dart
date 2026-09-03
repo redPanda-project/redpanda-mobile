@@ -10,6 +10,7 @@ import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/domain/channel.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
+import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
 import 'redpanda_node_launcher.dart';
@@ -86,7 +87,7 @@ void main() async {
         final bobOH = await setupExchange(sharedChannel);
 
         final updates = <OhMailboxUpdate>[];
-        final sub = bob.ohMailboxUpdates.listen(updates.add);
+        final sub = bob.stateUpdates.of<OhMailboxUpdate>().listen(updates.add);
         final delivery = DeliveryCollector(bob);
         addTearDown(delivery.cancel);
 
@@ -199,7 +200,7 @@ void main() async {
         final sharedChannel = await Channel.generate('MS02 Renewal');
         final bobOH = await setupExchange(sharedChannel);
 
-        final updateFuture = bob.ohMailboxUpdates.first;
+        final updateFuture = bob.stateUpdates.of<OhMailboxUpdate>().first;
 
         final renewed = await bob.renewOutboundHandle(bobOH);
         expect(renewed, isTrue);

@@ -6,6 +6,7 @@ import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
+import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
 import 'package:redpanda_light_client/src/peer_repository.dart';
@@ -80,7 +81,7 @@ void main() {
     final oh = await registration();
     oh.lastCursor = 57;
     final updates = <OhMailboxUpdate>[];
-    final sub = client.ohMailboxUpdates.listen(updates.add);
+    final sub = client.stateUpdates.of<OhMailboxUpdate>().listen(updates.add);
 
     await client.reregisterLostHandle(oh);
     await Future<void>.delayed(Duration.zero);

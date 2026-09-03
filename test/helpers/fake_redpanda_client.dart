@@ -6,7 +6,9 @@ import 'package:redpanda_light_client/redpanda_light_client.dart';
 /// manually controllable incoming/update streams.
 class FakeRedPandaClient implements RedPandaClient {
   final incomingController = StreamController<DecryptedMessage>.broadcast();
-  final updateController = StreamController<OhMailboxUpdate>.broadcast();
+
+  /// The one state channel (T110) — tests push any [StateUpdate] into it.
+  final stateController = StreamController<StateUpdate>.broadcast();
 
   /// When set, [sendMessage] throws this error instead of succeeding.
   Object? sendError;
@@ -19,13 +21,6 @@ class FakeRedPandaClient implements RedPandaClient {
   final Map<String, String> restoredRatchetStates = {};
   final Map<String, Map<String, int>> restoredSessionTags = {};
   final Map<String, String> restoredPendingRgbs = {};
-  final ratchetStateController =
-      StreamController<RatchetStateUpdate>.broadcast();
-  final garlicSessionController =
-      StreamController<GarlicSessionUpdate>.broadcast();
-  final routingAckController = StreamController<RoutingAckUpdate>.broadcast();
-  final channelAckController = StreamController<ChannelAckUpdate>.broadcast();
-  final nodeScoreController = StreamController<List<NodeScore>>.broadcast();
   final List<NodeScore> restoredNodeScores = [];
 
   @override
@@ -108,21 +103,7 @@ class FakeRedPandaClient implements RedPandaClient {
   }
 
   @override
-  Stream<RatchetStateUpdate> get ratchetStateUpdates =>
-      ratchetStateController.stream;
-
-  @override
-  Stream<GarlicSessionUpdate> get garlicSessionUpdates =>
-      garlicSessionController.stream;
-
-  @override
-  Stream<RoutingAckUpdate> get routingAckUpdates => routingAckController.stream;
-
-  @override
-  Stream<ChannelAckUpdate> get channelAckUpdates => channelAckController.stream;
-
-  @override
-  Stream<List<NodeScore>> get nodeScoreUpdates => nodeScoreController.stream;
+  Stream<StateUpdate> get stateUpdates => stateController.stream;
 
   @override
   void restoreNodeScores(List<NodeScore> scores) {
@@ -133,27 +114,7 @@ class FakeRedPandaClient implements RedPandaClient {
   Stream<DecryptedMessage> get incomingMessages => incomingController.stream;
 
   @override
-  Stream<OhMailboxUpdate> get ohMailboxUpdates => updateController.stream;
-
-  final fetchStatusController = StreamController<OhFetchStatus>.broadcast();
-
-  @override
-  Stream<OhFetchStatus> get ohFetchStatus => fetchStatusController.stream;
-
-  final ohRegistrationController =
-      StreamController<List<OHRegistration>>.broadcast();
-
-  @override
-  Stream<List<OHRegistration>> get ohRegistrationUpdates =>
-      ohRegistrationController.stream;
-
-  @override
   Future<void> ensureOhRedundancy(String channelId) async {}
-
-  final peerOhUpdateController = StreamController<PeerOhUpdate>.broadcast();
-
-  @override
-  Stream<PeerOhUpdate> get peerOhUpdates => peerOhUpdateController.stream;
 
   @override
   Stream<ConnectionStatus> get connectionStatus =>
@@ -171,15 +132,7 @@ class FakeRedPandaClient implements RedPandaClient {
   @override
   Future<void> disconnect() async {
     await incomingController.close();
-    await updateController.close();
-    await fetchStatusController.close();
-    await ratchetStateController.close();
-    await garlicSessionController.close();
-    await routingAckController.close();
-    await channelAckController.close();
-    await nodeScoreController.close();
-    await ohRegistrationController.close();
-    await peerOhUpdateController.close();
+    await stateController.close();
   }
 
   @override
@@ -215,9 +168,6 @@ class FakeRedPandaClient implements RedPandaClient {
 
   // --- Groups (MS08) ---
 
-  final groupStateController = StreamController<GroupStateUpdate>.broadcast();
-  final groupHandshakeController =
-      StreamController<GroupHandshakeEvent>.broadcast();
   final List<GroupRegistration> registeredGroups = [];
   final List<({String groupId, String content, String? messageId})>
   sentGroupMessages = [];
@@ -274,11 +224,4 @@ class FakeRedPandaClient implements RedPandaClient {
   Future<void> sendGroupInfoUpdate(String groupId, String label) async {
     sentInfoUpdates.add((groupId: groupId, label: label));
   }
-
-  @override
-  Stream<GroupStateUpdate> get groupStateUpdates => groupStateController.stream;
-
-  @override
-  Stream<GroupHandshakeEvent> get groupHandshakeEvents =>
-      groupHandshakeController.stream;
 }

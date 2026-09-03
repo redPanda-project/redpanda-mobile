@@ -98,7 +98,7 @@ void main() {
 
   test('a received proposal becomes a pending invite; accepting it answers '
       'with a JoinAccept and stores the group waiting for keys', () async {
-    client.groupHandshakeController.add(
+    client.stateController.add(
       const GroupHandshakeEvent(
         channelId: 'chan-1',
         isProposal: true,
@@ -148,7 +148,7 @@ void main() {
       final groupId = await service.createGroup('Runde', const []);
       client.rotations.clear();
 
-      client.groupHandshakeController.add(
+      client.stateController.add(
         GroupHandshakeEvent(
           channelId: channel.id,
           isProposal: false,
@@ -186,7 +186,7 @@ void main() {
           pendingRotations: const {},
         ),
       );
-      client.groupHandshakeController.add(
+      client.stateController.add(
         GroupHandshakeEvent(
           channelId: channel.id,
           isProposal: false,
@@ -214,7 +214,7 @@ void main() {
       groups,
     );
     sync.start();
-    client.groupStateController.add(
+    client.stateController.add(
       GroupStateUpdate(
         groupId: groupId,
         label: 'Neuer Name',

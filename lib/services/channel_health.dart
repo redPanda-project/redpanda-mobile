@@ -29,7 +29,8 @@ class ChannelFetchInfoNotifier extends Notifier<Map<String, ChannelFetchInfo>> {
   Map<String, ChannelFetchInfo> build() {
     final sub = ref
         .watch(redPandaClientProvider)
-        .ohFetchStatus
+        .stateUpdates
+        .of<OhFetchStatus>()
         .listen(_onStatus);
     ref.onDispose(sub.cancel);
     return const {};

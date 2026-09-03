@@ -4,12 +4,9 @@ import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
 import 'package:redpanda_light_client/src/domain/channel_doctor_report.dart';
 import 'package:redpanda_light_client/src/domain/group_state.dart';
 import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
-import 'package:redpanda_light_client/src/domain/oh_fetch_status.dart';
-import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/loopback_result.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
-import 'package:redpanda_light_client/src/domain/peer_oh_update.dart';
-import 'package:redpanda_light_client/src/domain/routing_ack.dart';
+import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/garlic/node_scorer.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/peer_stats_snapshot.dart';
@@ -97,33 +94,21 @@ abstract class RedPandaClient {
   /// Stream of incoming messages from background polling.
   Stream<DecryptedMessage> get incomingMessages;
 
-  /// Stream of OH state changes (fetch cursor advanced, registration
-  /// renewed, mailbox overflow detected). The app layer should persist
-  /// [OhMailboxUpdate.lastCursor] and [OhMailboxUpdate.expiresAtMs].
-  Stream<OhMailboxUpdate> get ohMailboxUpdates;
-
-  /// Outcome of every mailbox fetch attempt (success and failure, including
-  /// empty polls). Purely informational — the app layer uses it to display
-  /// per-channel health ("mailbox last checked …"); nothing is persisted.
-  Stream<OhFetchStatus> get ohFetchStatus;
-
-  /// The channel's current own-OH SET whenever it changes (T21 failover /
-  /// T42 multi-OH top-up). The list holds every own mailbox for one channel
-  /// (all entries share the channelId); the app layer must REPLACE all of the
-  /// channel's persisted own-OH rows with exactly this set — dead mailboxes
-  /// dropped, new ones added.
-  Stream<List<OHRegistration>> get ohRegistrationUpdates;
-
-  /// Authenticated in-band announcements of the channel partner's full
-  /// current mailbox SET (`oh_update`, T42 multi-OH). The client already
-  /// deposits new sends into every mailbox in the set; the app layer must
-  /// persist the whole set so the fan-out survives an app restart.
-  Stream<PeerOhUpdate> get peerOhUpdates;
+  /// **The** state channel: every one-way state change the network layer
+  /// publishes — ratchet and garlic session state (MS03b/MS05), OH mailbox
+  /// cursor/expiry and fetch outcomes, own-OH and peer-OH sets (T21/T42),
+  /// routing- and channel-ACKs (MS06), node scores and group state (MS08).
+  ///
+  /// Consumers take the typed projection they care about:
+  /// `client.stateUpdates.of<RatchetStateUpdate>()`. New state events cost no
+  /// plumbing here — see [StateUpdate] for what belongs on this channel and
+  /// what does not.
+  Stream<StateUpdate> get stateUpdates;
 
   /// Ensures this channel has the target redundancy of own mailboxes (T42:
   /// k=3 on disjoint Full Nodes). Registers additional OHs when fewer than the
   /// target exist and a disjoint node is reachable, publishes the enlarged set
-  /// via [ohRegistrationUpdates] and announces it to the partner in-band.
+  /// as an [OwnOhSetUpdate] and announces it to the partner in-band.
   /// A graceful no-op when only one node is reachable. Never throws.
   Future<void> ensureOhRedundancy(String channelId);
 
@@ -139,12 +124,12 @@ abstract class RedPandaClient {
   /// device that generated the channel (it holds the channel auth private
   /// key), `false` on a device that joined via QR code; with mismatched
   /// roles the two ratchets cannot line up. [ratchetState] restores a
-  /// previously persisted ratchet (see [ratchetStateUpdates]); it is ignored
+  /// previously persisted ratchet (published as [RatchetStateUpdate]); it is ignored
   /// when the client already holds a live session for [channelId], because
   /// the in-memory state is always the most advanced.
   ///
   /// MS05: [sessionTags] (tag hex → createdAtMs) and [pendingRgbHex] restore
-  /// the persisted reverse-garlic session state (see [garlicSessionUpdates]);
+  /// the persisted reverse-garlic session state (published as [GarlicSessionUpdate]);
   /// like [ratchetState], they are applied only on the first registration of
   /// [channelId] — live state always wins.
   void addChannelKeys(
@@ -160,34 +145,6 @@ abstract class RedPandaClient {
     Map<String, int>? sessionTags,
     String? pendingRgbHex,
   });
-
-  /// Ratchet state changes (MS03b). Emitted after every encrypt/decrypt that
-  /// advanced a channel ratchet; the app layer must persist
-  /// [RatchetStateUpdate.stateJson] on-device (and only on-device — ratchet
-  /// state never travels in the QR code or any off-device backup) and feed
-  /// it back via [addChannelKeys] after a restart.
-  Stream<RatchetStateUpdate> get ratchetStateUpdates;
-
-  /// Reverse-garlic session state changes (MS05): outstanding session tags
-  /// and the pending RGB per channel. The app layer must persist these
-  /// on-device and feed them back via [addChannelKeys] after a restart — a
-  /// lost session tag silently discards the matching reply (single-use).
-  Stream<GarlicSessionUpdate> get garlicSessionUpdates;
-
-  /// Routing-layer delivery feedback (MS06): an R-ACK arrived for an
-  /// outgoing message (update its status to `routed`, or `failed` on
-  /// HANDLE_EXPIRED), or none arrived within the ack timeout ([timedOut] —
-  /// re-send over fresh hops).
-  Stream<RoutingAckUpdate> get routingAckUpdates;
-
-  /// Application-layer delivery confirmations (MS06): the channel partner
-  /// received and decrypted an outgoing message (status `delivered`).
-  Stream<ChannelAckUpdate> get channelAckUpdates;
-
-  /// Node score snapshots (MS06). The app layer persists them into the
-  /// `node_scores` table and feeds them back via [restoreNodeScores] after
-  /// a restart.
-  Stream<List<NodeScore>> get nodeScoreUpdates;
 
   /// Restores persisted node scores on startup. Live in-memory scores win.
   void restoreNodeScores(List<NodeScore> scores);
@@ -239,12 +196,4 @@ abstract class RedPandaClient {
 
   /// Admin only: broadcasts a rename to the group (GroupControl over v5).
   Future<void> sendGroupInfoUpdate(String groupId, String label);
-
-  /// Group state snapshots (crypto chains, epoch, member list, buffered
-  /// items, pending rotation boxes). The app layer persists them and feeds
-  /// them back via [registerGroup] after a restart.
-  Stream<GroupStateUpdate> get groupStateUpdates;
-
-  /// Group handshakes received over 1:1 channels (Decision 8).
-  Stream<GroupHandshakeEvent> get groupHandshakeEvents;
 }

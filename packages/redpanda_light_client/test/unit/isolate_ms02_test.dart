@@ -2,7 +2,9 @@ import 'package:test/test.dart';
 
 import 'package:redpanda_light_client/src/client/isolate_client.dart';
 import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
+import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
+import 'package:redpanda_light_client/src/domain/state_update.dart';
 
 void main() {
   group('RedPandaIsolateClient MS02', () {
@@ -75,7 +77,7 @@ void main() {
 
     test('ohMailboxUpdates stream is exposed', () async {
       final client = RedPandaIsolateClient(seeds: const []);
-      expect(client.ohMailboxUpdates, isNotNull);
+      expect(client.stateUpdates.of<OhMailboxUpdate>(), isNotNull);
       await client.disconnect();
     });
   });

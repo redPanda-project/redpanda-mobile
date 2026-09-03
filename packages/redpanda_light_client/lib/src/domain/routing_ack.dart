@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:fixnum/fixnum.dart';
 import 'package:protobuf/protobuf.dart' as pb;
+import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/generated/outbound.pb.dart'
     as outbound_pb;
 
@@ -91,7 +92,7 @@ class RoutingAck {
 /// Routing-layer delivery feedback for one outgoing message (Frontend MS06),
 /// emitted by the network client so the app layer can update the message
 /// status and trigger a re-send on timeout.
-class RoutingAckUpdate {
+class RoutingAckUpdate extends StateUpdate {
   /// Channel the acknowledged message belongs to.
   final String channelId;
 
@@ -132,7 +133,7 @@ class RoutingAckUpdate {
 
 /// Application-layer delivery confirmation (Channel-ACK, Frontend MS06):
 /// the channel partner received and decrypted the message.
-class ChannelAckUpdate {
+class ChannelAckUpdate extends StateUpdate {
   /// Channel the acknowledged message belongs to.
   final String channelId;
 

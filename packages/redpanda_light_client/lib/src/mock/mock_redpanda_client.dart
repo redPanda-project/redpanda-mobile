@@ -1,17 +1,12 @@
 import 'dart:async';
 import 'package:redpanda_light_client/src/client_facade.dart';
-import 'package:redpanda_light_client/src/crypto/ratchet.dart';
 import 'package:redpanda_light_client/src/domain/channel_doctor_report.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
-import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
 import 'package:redpanda_light_client/src/domain/group_state.dart';
 import 'package:redpanda_light_client/src/domain/loopback_result.dart';
-import 'package:redpanda_light_client/src/domain/oh_fetch_status.dart';
-import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
-import 'package:redpanda_light_client/src/domain/peer_oh_update.dart';
-import 'package:redpanda_light_client/src/domain/routing_ack.dart';
+import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/garlic/node_scorer.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/peer_stats_snapshot.dart';
@@ -23,6 +18,11 @@ class MockRedPandaClient implements RedPandaClient {
       StreamController<ConnectionStatus>.broadcast();
   final _incomingMessageController =
       StreamController<DecryptedMessage>.broadcast();
+
+  /// Broadcast on purpose: the app attaches several independent listeners to
+  /// the state channel (MessageSyncService, channel_health, GroupService), and
+  /// a single-subscription stream would throw on the second one.
+  final _stateController = StreamController<StateUpdate>.broadcast();
 
   @override
   Stream<ConnectionStatus> get connectionStatus =>
@@ -133,23 +133,13 @@ class MockRedPandaClient implements RedPandaClient {
       _incomingMessageController.stream;
 
   @override
-  Stream<OhMailboxUpdate> get ohMailboxUpdates => const Stream.empty();
-
-  @override
-  Stream<OhFetchStatus> get ohFetchStatus => const Stream.empty();
+  Stream<StateUpdate> get stateUpdates => _stateController.stream;
 
   @override
   void onPause() {}
 
   @override
   void onResume() {}
-
-  @override
-  Stream<List<OHRegistration>> get ohRegistrationUpdates =>
-      const Stream.empty();
-
-  @override
-  Stream<PeerOhUpdate> get peerOhUpdates => const Stream.empty();
 
   @override
   Future<void> ensureOhRedundancy(String channelId) async {
@@ -172,21 +162,6 @@ class MockRedPandaClient implements RedPandaClient {
   }) {
     // Mock: no-op
   }
-
-  @override
-  Stream<RatchetStateUpdate> get ratchetStateUpdates => const Stream.empty();
-
-  @override
-  Stream<GarlicSessionUpdate> get garlicSessionUpdates => const Stream.empty();
-
-  @override
-  Stream<RoutingAckUpdate> get routingAckUpdates => const Stream.empty();
-
-  @override
-  Stream<ChannelAckUpdate> get channelAckUpdates => const Stream.empty();
-
-  @override
-  Stream<List<NodeScore>> get nodeScoreUpdates => const Stream.empty();
 
   @override
   void restoreNodeScores(List<NodeScore> scores) {
@@ -232,10 +207,4 @@ class MockRedPandaClient implements RedPandaClient {
   Future<void> sendGroupInfoUpdate(String groupId, String label) async {
     // Mock: no-op
   }
-
-  @override
-  Stream<GroupStateUpdate> get groupStateUpdates => const Stream.empty();
-
-  @override
-  Stream<GroupHandshakeEvent> get groupHandshakeEvents => const Stream.empty();
 }

@@ -4,6 +4,7 @@ import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
 import 'package:redpanda_light_client/src/domain/oh_fetch_status.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
+import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
 
@@ -37,7 +38,7 @@ void main() {
       );
 
       final events = <OhFetchStatus>[];
-      final sub = client.ohFetchStatus.listen(events.add);
+      final sub = client.stateUpdates.of<OhFetchStatus>().listen(events.add);
 
       // No connected peer -> the attempt fails, but unlike ohMailboxUpdates
       // (state changes only) the outcome must still be reported.

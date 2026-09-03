@@ -4,25 +4,19 @@ import 'dart:math' as math;
 
 import 'dart:typed_data';
 
-import 'package:hex/hex.dart';
-
 import 'package:redpanda_light_client/src/client/isolate_protocol.dart';
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
+import 'package:redpanda_light_client/src/client/worker_replay_state.dart';
 import 'package:redpanda_light_client/src/client_facade.dart';
 import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
-import 'package:redpanda_light_client/src/crypto/ratchet.dart';
 import 'package:redpanda_light_client/src/domain/channel_doctor_report.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
-import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
 import 'package:redpanda_light_client/src/domain/group_state.dart';
 import 'package:redpanda_light_client/src/domain/loopback_result.dart';
-import 'package:redpanda_light_client/src/domain/oh_fetch_status.dart';
-import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
-import 'package:redpanda_light_client/src/domain/peer_oh_update.dart';
-import 'package:redpanda_light_client/src/domain/routing_ack.dart';
 import 'package:redpanda_light_client/src/domain/send_exceptions.dart';
+import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/garlic/node_scorer.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
@@ -62,14 +56,10 @@ class RedPandaIsolateClient implements RedPandaClient {
   NodeId? _initNodeId;
   KeyPair? _initKeys;
 
-  // Replay caches: the last state-establishing command per key, kept current
-  // from worker events (ratchet/garlic/mailbox updates), so a respawned
-  // worker is transparently re-initialized without stale crypto state.
-  final Map<String, CmdAddChannelKeys> _channelReplay = {};
-  final Map<String, CmdRestoreOutboundHandle> _ohReplay = {};
-  final Map<String, CmdRegisterGroup> _groupReplay = {};
-  final Set<String> _peerReplay = {};
-  List<NodeScore>? _nodeScoreReplay;
+  // Replay projection: the last state-establishing command per key, kept
+  // current from the state channel, so a respawned worker is transparently
+  // re-initialized without stale crypto state.
+  final WorkerReplayState _replay = WorkerReplayState();
 
   /// Worker entry point override — exists only so tests can inject a fake
   /// worker; must be a top-level or static function.
@@ -85,29 +75,9 @@ class RedPandaIsolateClient implements RedPandaClient {
   final _incomingMessageController =
       StreamController<DecryptedMessage>.broadcast();
 
-  final _ohMailboxUpdateController =
-      StreamController<OhMailboxUpdate>.broadcast();
-
-  final _ohFetchStatusController = StreamController<OhFetchStatus>.broadcast();
-
-  final _ohRegistrationController =
-      StreamController<List<OHRegistration>>.broadcast();
-
-  final _peerOhUpdateController = StreamController<PeerOhUpdate>.broadcast();
-
-  final _ratchetStateController =
-      StreamController<RatchetStateUpdate>.broadcast();
-
-  final _garlicSessionController =
-      StreamController<GarlicSessionUpdate>.broadcast();
-
-  final _routingAckController = StreamController<RoutingAckUpdate>.broadcast();
-  final _channelAckController = StreamController<ChannelAckUpdate>.broadcast();
-  final _nodeScoreController = StreamController<List<NodeScore>>.broadcast();
-
-  final _groupStateController = StreamController<GroupStateUpdate>.broadcast();
-  final _groupHandshakeController =
-      StreamController<GroupHandshakeEvent>.broadcast();
+  /// The single state channel: everything the worker publishes about changed
+  /// state arrives as one [EventStateUpdate] and is forwarded here unchanged.
+  final _stateController = StreamController<StateUpdate>.broadcast();
 
   // Pending OH registrations awaiting their isolate response, by requestId.
   final Map<int, Completer<OHRegistration>> _pendingOhRegistrations = {};
@@ -281,21 +251,8 @@ class RedPandaIsolateClient implements RedPandaClient {
   /// keys (with the latest ratchet/garlic state), OH registrations, groups,
   /// node scores and the connect/lifecycle flags.
   void _replayState(SendPort port) {
-    for (final address in _peerReplay) {
-      port.send(CmdAddPeer(address));
-    }
-    for (final cmd in _channelReplay.values) {
+    for (final cmd in _replay.replayCommands()) {
       port.send(cmd);
-    }
-    for (final cmd in _ohReplay.values) {
-      port.send(cmd);
-    }
-    for (final cmd in _groupReplay.values) {
-      port.send(cmd);
-    }
-    final scores = _nodeScoreReplay;
-    if (scores != null && scores.isNotEmpty) {
-      port.send(CmdRestoreNodeScores(scores));
     }
     if (_connectRequested) {
       port.send(CmdConnect());
@@ -324,12 +281,14 @@ class RedPandaIsolateClient implements RedPandaClient {
       _incomingMessageController.add(event.message);
     } else if (event is EventOhRegistered) {
       // Keep the registration replayable for a respawned worker.
-      _ohReplay[HEX.encode(event.ohId)] = CmdRestoreOutboundHandle(
-        ohId: event.ohId,
-        privateKeyBytes: event.privateKeyBytes,
-        expiresAtMs: event.expiresAtMs,
-        channelId: event.channelId,
-        serverEndpoint: event.serverEndpoint,
+      _replay.recordOutboundHandle(
+        CmdRestoreOutboundHandle(
+          ohId: event.ohId,
+          privateKeyBytes: event.privateKeyBytes,
+          expiresAtMs: event.expiresAtMs,
+          channelId: event.channelId,
+          serverEndpoint: event.serverEndpoint,
+        ),
       );
       final completer = _pendingOhRegistrations.remove(event.requestId);
       if (completer != null && !completer.isCompleted) {
@@ -407,204 +366,19 @@ class RedPandaIsolateClient implements RedPandaClient {
           );
         }
       }
-    } else if (event is EventGroupStateUpdate) {
-      _groupStateController.add(event.update);
-    } else if (event is EventGroupHandshake) {
-      _groupHandshakeController.add(event.event);
-    } else if (event is EventOhFetchStatus) {
-      _ohFetchStatusController.add(
-        OhFetchStatus(
-          ohId: event.ohId,
-          channelId: event.channelId,
-          success: event.success,
-          atMs: event.atMs,
-          detail: event.detail,
-        ),
-      );
-    } else if (event is EventOhMailboxUpdate) {
-      final replay = _ohReplay[HEX.encode(event.ohId)];
-      if (replay != null) {
-        _ohReplay[HEX.encode(event.ohId)] = CmdRestoreOutboundHandle(
-          ohId: replay.ohId,
-          privateKeyBytes: replay.privateKeyBytes,
-          expiresAtMs: event.expiresAtMs,
-          channelId: replay.channelId,
-          serverEndpoint: replay.serverEndpoint,
-          lastCursor: event.lastCursor,
-        );
+    } else if (event is EventStateUpdate) {
+      // ONE branch for every state change: keep the worker-restore projection
+      // current, then republish unchanged. Adding a state event costs nothing
+      // here.
+      _replay.apply(event.update);
+      if (!_stateController.isClosed) {
+        _stateController.add(event.update);
       }
-      _ohMailboxUpdateController.add(
-        OhMailboxUpdate(
-          ohId: event.ohId,
-          channelId: event.channelId,
-          lastCursor: event.lastCursor,
-          expiresAtMs: event.expiresAtMs,
-          mailboxOverflow: event.mailboxOverflow,
-        ),
-      );
-    } else if (event is EventOhRegistrationUpdate) {
-      // T21 failover / T42 multi-OH: the worker changed a channel's own-OH
-      // SET. Rebuild the replay entries for that channel from exactly this set
-      // — a respawned worker must restore the current handles, not dead ones.
-      final channelId = event.channelId;
-      if (channelId != null) {
-        _ohReplay.removeWhere((_, cmd) => cmd.channelId == channelId);
-      }
-      for (final h in event.handles) {
-        _ohReplay[HEX.encode(h.ohId)] = CmdRestoreOutboundHandle(
-          ohId: h.ohId,
-          privateKeyBytes: h.keypairPrivateBytes,
-          expiresAtMs: h.expiresAtMs,
-          channelId: channelId,
-          serverEndpoint: h.serverEndpoint,
-          lastCursor: h.lastCursor,
-        );
-      }
-      unawaited(_emitOhRegistration(event));
-    } else if (event is EventPeerOhUpdate) {
-      // T42: the partner announced a new mailbox set — keep the replay cache's
-      // primary in sync so a respawned worker sends to the current mailbox,
-      // and forward the full set for persistence.
-      final primary = event.descriptors.isNotEmpty
-          ? event.descriptors.first
-          : null;
-      if (primary != null) {
-        _patchChannelReplay(
-          event.channelId,
-          peerOhId: primary.ohId,
-          peerOhEndpoint: primary.endpoint,
-          peerOhSet: event.descriptors,
-          patchPeerOh: true,
-        );
-      }
-      _peerOhUpdateController.add(
-        PeerOhUpdate(
-          channelId: event.channelId,
-          descriptors: [
-            for (final d in event.descriptors)
-              OHDescriptor(
-                serverEndpoint: d.endpoint,
-                handleId: d.ohId,
-                authPublicKey: d.authPublicKey,
-              ),
-          ],
-        ),
-      );
-    } else if (event is EventRatchetStateUpdate) {
-      _patchChannelReplay(event.channelId, ratchetState: event.stateJson);
-      _ratchetStateController.add(
-        RatchetStateUpdate(
-          channelId: event.channelId,
-          stateJson: event.stateJson,
-        ),
-      );
-    } else if (event is EventGarlicSessionUpdate) {
-      _patchChannelReplay(
-        event.channelId,
-        sessionTags: event.sessionTags,
-        pendingRgbHex: event.pendingRgbHex,
-        patchGarlic: true,
-      );
-      _garlicSessionController.add(
-        GarlicSessionUpdate(
-          channelId: event.channelId,
-          sessionTags: event.sessionTags,
-          pendingRgbHex: event.pendingRgbHex,
-        ),
-      );
-    } else if (event is EventRoutingAckUpdate) {
-      _routingAckController.add(
-        event.timedOut
-            ? RoutingAckUpdate.timeout(
-                channelId: event.channelId,
-                messageIdHex: event.messageIdHex,
-              )
-            : RoutingAckUpdate.ack(
-                channelId: event.channelId,
-                messageIdHex: event.messageIdHex,
-                status: event.status!,
-                latencyMs: event.latencyMs!,
-              ),
-      );
-    } else if (event is EventChannelAckUpdate) {
-      _channelAckController.add(
-        ChannelAckUpdate(
-          channelId: event.channelId,
-          messageIdHex: event.messageIdHex,
-          timestampMs: event.timestampMs,
-        ),
-      );
-    } else if (event is EventNodeScores) {
-      _nodeScoreReplay = event.scores;
-      _nodeScoreController.add(event.scores);
     } else if (event is EventLog) {
       // The worker forwards only LogLevel.info lines (privacy-sensitive
       // debug details never leave the worker), so re-emit at info here —
       // the app's sink decides whether they become visible (T17).
       RpLog.info('[worker] ${event.message}');
-    }
-  }
-
-  /// Updates the cached [CmdAddChannelKeys] for [channelId] with newer
-  /// ratchet, garlic or peer-OH state, so a worker respawn never replays
-  /// stale state (which would break the ratchet chain or resurrect a dead
-  /// peer mailbox).
-  void _patchChannelReplay(
-    String channelId, {
-    String? ratchetState,
-    Map<String, int>? sessionTags,
-    String? pendingRgbHex,
-    bool patchGarlic = false,
-    List<int>? peerOhId,
-    String? peerOhEndpoint,
-    List<OhDescriptorData>? peerOhSet,
-    bool patchPeerOh = false,
-  }) {
-    final old = _channelReplay[channelId];
-    if (old == null) return;
-    _channelReplay[channelId] = CmdAddChannelKeys(
-      old.channelId,
-      old.encryptionKey,
-      channelSecret: old.channelSecret,
-      ownDisplayName: old.ownDisplayName,
-      peerOhId: patchPeerOh ? peerOhId : old.peerOhId,
-      peerOhEndpoint: patchPeerOh ? peerOhEndpoint : old.peerOhEndpoint,
-      peerOhSet: patchPeerOh ? peerOhSet : old.peerOhSet,
-      isChannelCreator: old.isChannelCreator,
-      ratchetState: ratchetState ?? old.ratchetState,
-      // A garlic update is an authoritative snapshot: pendingRgbHex may
-      // legitimately become null (block consumed).
-      sessionTags: patchGarlic ? sessionTags : old.sessionTags,
-      pendingRgbHex: patchGarlic ? pendingRgbHex : old.pendingRgbHex,
-    );
-  }
-
-  /// Rebuilds the own-OH SET carried by an update event (async — the keypair
-  /// reconstruction is async) and forwards it to the app layer (T42).
-  Future<void> _emitOhRegistration(EventOhRegistrationUpdate event) async {
-    try {
-      final set = <OHRegistration>[];
-      for (final h in event.handles) {
-        set.add(
-          OHRegistration(
-            ohId: h.ohId,
-            keypair: await OHKeypair.fromPrivateKeyBytes(
-              Uint8List.fromList(h.keypairPrivateBytes),
-            ),
-            expiresAtMs: h.expiresAtMs,
-            channelId: event.channelId,
-            serverEndpoint: h.serverEndpoint,
-            lastCursor: h.lastCursor,
-          ),
-        );
-      }
-      if (!_ohRegistrationController.isClosed) {
-        _ohRegistrationController.add(set);
-      }
-    } catch (e) {
-      RpLog.info(
-        'RedPandaIsolateClient: failed to rebuild own-OH set update: $e',
-      );
     }
   }
 
@@ -652,7 +426,7 @@ class RedPandaIsolateClient implements RedPandaClient {
 
   @override
   Future<void> addPeer(String address) async {
-    _peerReplay.add(address);
+    _replay.recordPeer(address);
     _send(CmdAddPeer(address));
   }
 
@@ -753,23 +527,12 @@ class RedPandaIsolateClient implements RedPandaClient {
       serverEndpoint: registration.serverEndpoint,
       lastCursor: registration.lastCursor,
     );
-    _ohReplay[HEX.encode(registration.ohId)] = cmd;
+    _replay.recordOutboundHandle(cmd);
     _send(cmd);
   }
 
   @override
-  Stream<OhMailboxUpdate> get ohMailboxUpdates =>
-      _ohMailboxUpdateController.stream;
-
-  @override
-  Stream<OhFetchStatus> get ohFetchStatus => _ohFetchStatusController.stream;
-
-  @override
-  Stream<List<OHRegistration>> get ohRegistrationUpdates =>
-      _ohRegistrationController.stream;
-
-  @override
-  Stream<PeerOhUpdate> get peerOhUpdates => _peerOhUpdateController.stream;
+  Stream<StateUpdate> get stateUpdates => _stateController.stream;
 
   @override
   Future<void> ensureOhRedundancy(String channelId) async {
@@ -812,32 +575,13 @@ class RedPandaIsolateClient implements RedPandaClient {
       sessionTags: sessionTags,
       pendingRgbHex: pendingRgbHex,
     );
-    _channelReplay[channelId] = cmd;
+    _replay.recordChannelKeys(cmd);
     _send(cmd);
   }
 
   @override
-  Stream<RatchetStateUpdate> get ratchetStateUpdates =>
-      _ratchetStateController.stream;
-
-  @override
-  Stream<GarlicSessionUpdate> get garlicSessionUpdates =>
-      _garlicSessionController.stream;
-
-  @override
-  Stream<RoutingAckUpdate> get routingAckUpdates =>
-      _routingAckController.stream;
-
-  @override
-  Stream<ChannelAckUpdate> get channelAckUpdates =>
-      _channelAckController.stream;
-
-  @override
-  Stream<List<NodeScore>> get nodeScoreUpdates => _nodeScoreController.stream;
-
-  @override
   void restoreNodeScores(List<NodeScore> scores) {
-    _nodeScoreReplay = scores;
+    _replay.recordNodeScores(scores);
     _send(CmdRestoreNodeScores(scores));
   }
 
@@ -865,8 +609,9 @@ class RedPandaIsolateClient implements RedPandaClient {
 
   @override
   void registerGroup(GroupRegistration registration) {
-    _groupReplay[registration.groupId] = CmdRegisterGroup(registration);
-    _send(CmdRegisterGroup(registration));
+    final cmd = CmdRegisterGroup(registration);
+    _replay.recordGroup(cmd);
+    _send(cmd);
   }
 
   @override
@@ -945,14 +690,6 @@ class RedPandaIsolateClient implements RedPandaClient {
     );
   }
 
-  @override
-  Stream<GroupStateUpdate> get groupStateUpdates =>
-      _groupStateController.stream;
-
-  @override
-  Stream<GroupHandshakeEvent> get groupHandshakeEvents =>
-      _groupHandshakeController.stream;
-
   // Lifecycle hooks proxied
   @override
   void onPause() {
@@ -1023,120 +760,11 @@ void _runWorker(SendPort mainSendPort) {
         mainSendPort.send(EventIncomingMessage(msg));
       });
 
-      // Forward advanced ratchet state (MS03b) for on-device persistence
-      client!.ratchetStateUpdates.listen((update) {
-        mainSendPort.send(
-          EventRatchetStateUpdate(
-            channelId: update.channelId,
-            stateJson: update.stateJson,
-          ),
-        );
-      });
-
-      // Forward reverse-garlic session state (MS05) for on-device persistence
-      client!.garlicSessionUpdates.listen((update) {
-        mainSendPort.send(
-          EventGarlicSessionUpdate(
-            channelId: update.channelId,
-            sessionTags: update.sessionTags,
-            pendingRgbHex: update.pendingRgbHex,
-          ),
-        );
-      });
-
-      // Forward fetch attempt outcomes (per-channel health display)
-      client!.ohFetchStatus.listen((status) {
-        mainSendPort.send(
-          EventOhFetchStatus(
-            ohId: status.ohId,
-            channelId: status.channelId,
-            success: status.success,
-            atMs: status.atMs,
-            detail: status.detail,
-          ),
-        );
-      });
-
-      // Forward OH mailbox updates (cursor/expiry/overflow) to main isolate
-      client!.ohMailboxUpdates.listen((update) {
-        mainSendPort.send(
-          EventOhMailboxUpdate(
-            ohId: update.ohId,
-            channelId: update.channelId,
-            lastCursor: update.lastCursor,
-            expiresAtMs: update.expiresAtMs,
-            mailboxOverflow: update.mailboxOverflow,
-          ),
-        );
-      });
-
-      // Forward own-OH set changes (T21 failover / T42 top-up) + peer mailbox
-      // set announcements (T42) to the main isolate.
-      client!.ohRegistrationUpdates.listen((set) {
-        mainSendPort.send(
-          EventOhRegistrationUpdate(
-            channelId: set.isNotEmpty ? set.first.channelId : null,
-            handles: [
-              for (final registration in set)
-                OwnOhData(
-                  ohId: registration.ohId,
-                  keypairPrivateBytes: registration.keypair.privateKeyBytes
-                      .toList(),
-                  expiresAtMs: registration.expiresAtMs,
-                  serverEndpoint: registration.serverEndpoint,
-                  lastCursor: registration.lastCursor,
-                ),
-            ],
-          ),
-        );
-      });
-      client!.peerOhUpdates.listen((update) {
-        mainSendPort.send(
-          EventPeerOhUpdate(
-            channelId: update.channelId,
-            descriptors: [
-              for (final d in update.descriptors)
-                OhDescriptorData(
-                  endpoint: d.serverEndpoint,
-                  ohId: d.handleId,
-                  authPublicKey: d.authPublicKey,
-                ),
-            ],
-          ),
-        );
-      });
-
-      // Forward routing/channel ACK feedback and node scores (MS06)
-      client!.routingAckUpdates.listen((update) {
-        mainSendPort.send(
-          EventRoutingAckUpdate(
-            channelId: update.channelId,
-            messageIdHex: update.messageIdHex,
-            status: update.status,
-            latencyMs: update.latencyMs,
-            timedOut: update.timedOut,
-          ),
-        );
-      });
-      client!.channelAckUpdates.listen((update) {
-        mainSendPort.send(
-          EventChannelAckUpdate(
-            channelId: update.channelId,
-            messageIdHex: update.messageIdHex,
-            timestampMs: update.timestampMs,
-          ),
-        );
-      });
-      client!.nodeScoreUpdates.listen((scores) {
-        mainSendPort.send(EventNodeScores(scores));
-      });
-
-      // Forward group state snapshots and handshakes (MS08)
-      client!.groupStateUpdates.listen((update) {
-        mainSendPort.send(EventGroupStateUpdate(update));
-      });
-      client!.groupHandshakeEvents.listen((event) {
-        mainSendPort.send(EventGroupHandshake(event));
+      // ONE forwarder for every state change (ratchet, garlic, OH mailbox/
+      // fetch/own-set/peer-set, ACKs, node scores, group state + handshakes).
+      // A new state event needs no new listener here.
+      client!.stateUpdates.listen((update) {
+        mainSendPort.send(EventStateUpdate(update));
       });
 
       // Send periodic peer stats snapshots to main thread
