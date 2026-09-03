@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 import 'package:drift/drift.dart' as drift;
 import 'package:flutter/material.dart';
@@ -9,12 +8,10 @@ import 'package:redpanda/repositories/group_repository.dart';
 import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/screens/chat/share_qr_dialog.dart';
 import 'package:redpanda/services/message_sync_service.dart';
-import 'package:redpanda/services/send_retry_queue.dart';
+import 'package:redpanda/services/outbox_service.dart';
 import 'package:redpanda/shared/providers.dart';
 import 'package:redpanda/shared/widgets/glass_backdrop.dart';
 import 'package:redpanda/shared/widgets/glass_surface.dart';
-import 'package:redpanda_light_client/redpanda_light_client.dart'
-    show DepositException, GroupSendException, UnknownPeerException;
 
 /// Floating, blurred top bar (glass chrome): the message list scrolls
 /// beneath it (`extendBodyBehindAppBar`) instead of sitting under a flat
@@ -118,6 +115,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     super.dispose();
   }
 
+  /// T112: the composer ENQUEUES, it does not send. Handing the message to
+  /// the network — with the retry cap, the backoff and one policy per
+  /// failure — is the outbox's job; this method used to be the second,
+  /// slightly different implementation of it (no retry cap, no
+  /// QUOTA_EXCEEDED penalty, its own exception handling).
   void _sendMessage() async {
     final content = _messageController.text.trim();
     if (content.isEmpty) return;
@@ -129,86 +131,35 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final currentUser = await db.select(db.users).getSingleOrNull();
     if (currentUser == null) return;
 
-    final messages = ref.read(messageRepositoryProvider);
-    final isGroup = await ref
-        .read(groupRepositoryProvider)
-        .isGroup(widget.peerUuid);
+    await ref
+        .read(outboxServiceProvider)
+        .enqueue(
+          conversationId: widget.peerUuid,
+          senderId: currentUser.uuid,
+          content: content,
+        );
+  }
 
-    // Insert message locally with pending status
-    final rowId = await messages.insertOutgoing(
-      conversationId: widget.peerUuid,
-      senderId: currentUser.uuid,
-      content: content,
-    );
-
-    // Send via network. On failure the message stays pending and the
-    // SendRetryQueue re-sends it with backoff, reusing the same network
-    // message id so retries deduplicate at the receiver. MS02b: the node now
-    // reports deposit rejections (FlaschenpostPutResponse) — surface those to
-    // the user, analogous to the mailbox-overflow warning.
-    try {
-      final client = ref.read(redPandaClientProvider);
-      final usedId = isGroup
-          ? await client.sendGroupMessage(widget.peerUuid, content)
-          : await client.sendMessage(widget.peerUuid, content);
-      await messages.setNetworkMessageId(rowId, usedId);
-      await messages.markSent(rowId);
-    } on GroupSendException catch (e) {
-      // MS08: some members were not reached — the retry queue re-fans-out
-      // with the SAME message id (receivers deduplicate), so persist the id
-      // the partial fan-out already used.
-      if (e.messageIdHex != null) {
-        await messages.setNetworkMessageId(rowId, e.messageIdHex!);
-      }
-      await messages.markRetryAttempt(rowId);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              '${e.failedMemberIds.length} member(s) not reached yet — '
-              'will retry.',
-            ),
-          ),
-        );
-      }
-    } on DepositException catch (e) {
-      if (e.isBadRequest) {
-        // Over the per-item size limit — retrying can never succeed.
-        await messages.updateMessageStatus(rowId, MessageStatus.failed);
-      } else {
-        await messages.markRetryAttempt(rowId);
-      }
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              e.isBadRequest
-                  ? 'Message too large to deliver.'
-                  : e.isQuotaExceeded
-                  ? "Recipient's mailbox is full — will retry later."
-                  : 'Message could not be delivered yet — will retry later.',
-            ),
-          ),
-        );
-      }
-    } on UnknownPeerException catch (_) {
-      // The channel's partner OH mailbox isn't known yet (e.g. right after
-      // adding a contact, before the first handshake round-trip). Sending
-      // anyway would deposit with an empty oh_id, which the node silently
-      // drops (REDPANDAJ-2DR) — keep the message pending instead so the
-      // retry queue delivers it once the peer OH is known.
-      await messages.markRetryAttempt(rowId);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Recipient not reachable yet — will retry automatically.',
-            ),
-          ),
-        );
-      }
-    } catch (_) {
-      await messages.markRetryAttempt(rowId);
+  /// Snackbar text for a failed FIRST attempt, i.e. the send the user just
+  /// triggered from this screen (later retries are silent, as before).
+  /// Null means "say nothing" — a transport failure is what the pending
+  /// clock icon and the retry queue are for.
+  static String? _failureMessage(DeliveryAttempt attempt) {
+    switch (attempt.failure) {
+      case DeliveryFailure.groupPartial:
+        return '${attempt.unreachedMembers} member(s) not reached yet — '
+            'will retry.';
+      case DeliveryFailure.tooLarge:
+        return 'Message too large to deliver.';
+      case DeliveryFailure.mailboxFull:
+        return "Recipient's mailbox is full — will retry later.";
+      case DeliveryFailure.depositRejected:
+        return 'Message could not be delivered yet — will retry later.';
+      case DeliveryFailure.unknownCounterpart:
+        return 'Recipient not reachable yet — will retry automatically.';
+      case DeliveryFailure.transport:
+      case null:
+        return null;
     }
   }
 
@@ -239,7 +190,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         msg.status == MessageStatus.failed;
     final nextAttempt =
         msg.status == MessageStatus.pending && msg.lastRetryAt != null
-        ? msg.lastRetryAt!.add(SendRetryQueue.backoffFor(msg.retryCount))
+        ? msg.lastRetryAt!.add(OutboxService.backoffFor(msg.retryCount))
         : null;
 
     showModalBottomSheet<void>(
@@ -295,17 +246,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _retryNow(int messageRowId) async {
-    await ref
-        .read(messageRepositoryProvider)
-        .resetForImmediateRetry(messageRowId);
-    // Kick the queue instead of waiting for its next periodic pass.
-    unawaited(
-      ref.read(sendRetryQueueProvider).retryPending().catchError((Object _) {}),
-    );
+    // The details sheet decides whether to offer "send again" from a
+    // SNAPSHOT of the row; an ACK can land between rendering that button and
+    // the tap, in which case the outbox refuses to re-queue a message the
+    // recipient already has. Say so instead of claiming a send.
+    final requeued = await ref
+        .read(outboxServiceProvider)
+        .retryNow(messageRowId);
     if (mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Sending again…')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            requeued
+                ? 'Sending again…'
+                : 'Already confirmed — nothing to send again.',
+          ),
+        ),
+      );
     }
   }
 
@@ -394,6 +351,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ),
         ),
       );
+    });
+
+    // T112: the outbox reports what became of the message the user just
+    // sent. Only the FIRST attempt of a message of THIS conversation is
+    // surfaced — that is exactly the attempt the composer used to make
+    // inline and report on; the queue's later retries stay silent.
+    ref.listen(deliveryAttemptProvider, (_, next) {
+      final attempt = next.value;
+      if (attempt == null) return;
+      if (attempt.conversationId != widget.peerUuid) return;
+      if (attempt.attempt != 1 || attempt.succeeded) return;
+      final message = _failureMessage(attempt);
+      if (message == null) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
     });
 
     // T111: no network orchestration here. `build()` used to re-register the

@@ -4,7 +4,7 @@ import 'package:redpanda/repositories/channel_repository.dart';
 import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/repositories/outbound_handle_repository.dart';
 import 'package:redpanda/services/message_sync_service.dart';
-import 'package:redpanda/services/send_retry_queue.dart';
+import 'package:redpanda/services/outbox_service.dart';
 import 'package:redpanda/shared/providers.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
 
@@ -42,7 +42,7 @@ void main() {
         container.read(outboundHandleRepositoryProvider),
         isA<OutboundHandleRepository>(),
       );
-      expect(container.read(sendRetryQueueProvider), isA<SendRetryQueue>());
+      expect(container.read(outboxServiceProvider), isA<OutboxService>());
       expect(
         container.read(messageSyncServiceProvider),
         isA<MessageSyncService>(),

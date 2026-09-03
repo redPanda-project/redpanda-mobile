@@ -5,6 +5,7 @@ import 'package:redpanda/repositories/group_repository.dart';
 import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/repositories/outbound_handle_repository.dart';
 import 'package:redpanda/services/message_sync_service.dart';
+import 'package:redpanda/services/outbox_service.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
 
 import '../helpers/fake_redpanda_client.dart';
@@ -18,6 +19,7 @@ void main() {
   late FakeRedPandaClient client;
   late MessageRepository messages;
   late GroupRepository groups;
+  late OutboxService outbox;
   late MessageSyncService service;
 
   final groupId = 'ab' * 32;
@@ -31,12 +33,14 @@ void main() {
     client = FakeRedPandaClient();
     messages = MessageRepository(db);
     groups = GroupRepository(db);
+    outbox = OutboxService(messages, client, groups);
     service = MessageSyncService(
       client,
       messages,
       OutboundHandleRepository(db),
       db,
       groups,
+      outbox,
     );
     service.start();
 
@@ -82,6 +86,7 @@ void main() {
 
   tearDown(() async {
     await service.stop();
+    await outbox.dispose();
     await client.disconnect();
     await db.close();
   });
@@ -93,7 +98,7 @@ void main() {
   }
 
   test('routed only after ALL other members confirmed via R-ACK', () async {
-    await service.handleRoutingAckUpdate(
+    await outbox.onRoutingAck(
       RoutingAckUpdate.ack(
         channelId: groupId,
         messageIdHex: messageIdHex,
@@ -104,7 +109,7 @@ void main() {
     );
     expect((await messageRow()).status, MessageStatus.sent);
 
-    await service.handleRoutingAckUpdate(
+    await outbox.onRoutingAck(
       RoutingAckUpdate.ack(
         channelId: groupId,
         messageIdHex: messageIdHex,
@@ -117,7 +122,7 @@ void main() {
   });
 
   test('delivered only after ALL other members sent a Channel-ACK', () async {
-    await service.handleChannelAckUpdate(
+    await outbox.onChannelAck(
       ChannelAckUpdate(
         channelId: groupId,
         messageIdHex: messageIdHex,
@@ -127,7 +132,7 @@ void main() {
     );
     expect((await messageRow()).status, MessageStatus.sent);
 
-    await service.handleChannelAckUpdate(
+    await outbox.onChannelAck(
       ChannelAckUpdate(
         channelId: groupId,
         messageIdHex: messageIdHex,
@@ -139,7 +144,7 @@ void main() {
   });
 
   test('a member R-ACK timeout re-queues the fan-out', () async {
-    await service.handleRoutingAckUpdate(
+    await outbox.onRoutingAck(
       RoutingAckUpdate.timeout(
         channelId: groupId,
         messageIdHex: messageIdHex,
@@ -170,7 +175,7 @@ void main() {
     expect(row.conversationId, groupId);
 
     // Receipts for foreign messages never downgrade received rows.
-    await service.handleChannelAckUpdate(
+    await outbox.onChannelAck(
       ChannelAckUpdate(
         channelId: groupId,
         messageIdHex: 'ffee' * 8,
@@ -178,7 +183,7 @@ void main() {
         memberIdHex: carol,
       ),
     );
-    await service.handleChannelAckUpdate(
+    await outbox.onChannelAck(
       ChannelAckUpdate(
         channelId: groupId,
         messageIdHex: 'ffee' * 8,

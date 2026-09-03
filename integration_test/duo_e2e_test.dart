@@ -323,7 +323,7 @@ Future<void> runAlice(WidgetTester tester) async {
 
   // Generous window: on a fresh channel the first send attempt can fail
   // (garlic session not yet established) and delivery then rides the
-  // SendRetryQueue's exponential backoff (2^n minutes).
+  // the outbox's exponential backoff (2^n minutes).
   if (!await pumpUntilVisible(
     tester,
     find.text(bobMessage),

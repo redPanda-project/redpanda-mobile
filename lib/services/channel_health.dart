@@ -2,7 +2,7 @@ import 'package:drift/drift.dart' show OrderingTerm;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:redpanda/database/database.dart';
 import 'package:redpanda/repositories/message_repository.dart';
-import 'package:redpanda/services/send_retry_queue.dart';
+import 'package:redpanda/services/outbox_service.dart';
 import 'package:redpanda/shared/providers.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart' hide Channel;
 
@@ -96,10 +96,10 @@ class ConversationStats {
       switch (msg.status) {
         case MessageStatus.pending:
           pending++;
-          // Mirrors SendRetryQueue.isDue: no lastRetryAt means due now.
+          // Mirrors OutboxService.isDue: no lastRetryAt means due now.
           final due = msg.lastRetryAt == null
               ? now
-              : msg.lastRetryAt!.add(SendRetryQueue.backoffFor(msg.retryCount));
+              : msg.lastRetryAt!.add(OutboxService.backoffFor(msg.retryCount));
           if (nextRetryAt == null || due.isBefore(nextRetryAt)) {
             nextRetryAt = due;
           }

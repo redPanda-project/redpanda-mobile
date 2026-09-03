@@ -222,7 +222,7 @@ void main() {
           msg.lastRetryAt,
           equals(backdated),
           reason:
-              'lastRetryAt must stay at its old value — SendRetryQueue'
+              'lastRetryAt must stay at its old value — OutboxService'
               '.isDue() reads it against the new retryCount to decide '
               'whether the backoff window has elapsed',
         );

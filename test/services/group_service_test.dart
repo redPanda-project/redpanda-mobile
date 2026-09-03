@@ -6,6 +6,7 @@ import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/repositories/outbound_handle_repository.dart';
 import 'package:redpanda/services/group_service.dart';
 import 'package:redpanda/services/message_sync_service.dart';
+import 'package:redpanda/services/outbox_service.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
 
 import '../helpers/fake_redpanda_client.dart';
@@ -206,12 +207,14 @@ void main() {
     final groupId = await service.createGroup('Runde', const []);
 
     // GroupStateUpdates are consumed by the MessageSyncService.
+    final messages = MessageRepository(db);
     final sync = MessageSyncService(
       client,
-      MessageRepository(db),
+      messages,
       OutboundHandleRepository(db),
       db,
       groups,
+      OutboxService(messages, client, groups),
     );
     sync.start();
     client.stateController.add(

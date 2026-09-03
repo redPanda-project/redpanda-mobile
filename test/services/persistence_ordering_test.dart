@@ -7,6 +7,7 @@ import 'package:redpanda/repositories/group_repository.dart';
 import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/repositories/outbound_handle_repository.dart';
 import 'package:redpanda/services/message_sync_service.dart';
+import 'package:redpanda/services/outbox_service.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
 
 import '../helpers/fake_redpanda_client.dart';
@@ -36,10 +37,12 @@ class _RecordingSyncService extends MessageSyncService {
     super.outboundHandles,
     super.db,
     super.groups,
+    super.outbox,
+    this.order,
   );
 
   /// Write-order log, one entry per handler entry/exit.
-  final List<String> order = [];
+  final List<String> order;
 
   /// When set, [handleRatchetStateUpdate] throws instead of writing.
   bool failRatchetWrite = false;
@@ -58,17 +61,27 @@ class _RecordingSyncService extends MessageSyncService {
   }
 
   @override
-  Future<void> handleChannelAckUpdate(ChannelAckUpdate update) async {
-    order.add('channelAck:start');
-    await super.handleChannelAckUpdate(update);
-    order.add('channelAck:done');
-  }
-
-  @override
   Future<void> handleMailboxUpdate(OhMailboxUpdate update) async {
     order.add('mailbox:start');
     await super.handleMailboxUpdate(update);
     order.add('mailbox:done');
+  }
+}
+
+/// T112: the Channel-ACK write lives in the outbox now, so the write-order
+/// log has to be shared between the two — the invariant under test is that
+/// the persistence chain applies them in emission order, no matter which
+/// class owns the individual write.
+class _RecordingOutbox extends OutboxService {
+  _RecordingOutbox(super.messages, super.client, super.groups, this.order);
+
+  final List<String> order;
+
+  @override
+  Future<void> onChannelAck(ChannelAckUpdate update) async {
+    order.add('channelAck:start');
+    await super.onChannelAck(update);
+    order.add('channelAck:done');
   }
 }
 
@@ -84,12 +97,15 @@ void main() {
     db = createTestDatabase();
     client = FakeRedPandaClient();
     messages = MessageRepository(db);
+    final order = <String>[];
     service = _RecordingSyncService(
       client,
       messages,
       OutboundHandleRepository(db),
       db,
       GroupRepository(db),
+      _RecordingOutbox(messages, client, GroupRepository(db), order),
+      order,
     );
   });
 

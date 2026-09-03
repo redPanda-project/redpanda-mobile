@@ -13,6 +13,12 @@ class FakeRedPandaClient implements RedPandaClient {
   /// When set, [sendMessage] throws this error instead of succeeding.
   Object? sendError;
 
+  /// Awaited at the start of every [sendMessage]/[sendGroupMessage] — lets a
+  /// test hold a send open (T112: prove that a message enqueued during a
+  /// running pass still goes out) or interleave an ACK with an in-flight
+  /// send.
+  Future<void> Function()? beforeSend;
+
   final List<({String channelId, String content, String? messageId})>
   sentMessages = [];
   final List<OHRegistration> restoredHandles = [];
@@ -81,6 +87,7 @@ class FakeRedPandaClient implements RedPandaClient {
     String content, {
     String? messageId,
   }) async {
+    await beforeSend?.call();
     final error = sendError;
     if (error != null) throw error;
     sentMessages.add((
@@ -226,6 +233,7 @@ class FakeRedPandaClient implements RedPandaClient {
     String content, {
     String? messageId,
   }) async {
+    await beforeSend?.call();
     final error = groupSendError;
     if (error != null) throw error;
     sentGroupMessages.add((

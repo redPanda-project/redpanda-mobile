@@ -6,6 +6,7 @@ import 'package:redpanda/repositories/group_repository.dart';
 import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/repositories/outbound_handle_repository.dart';
 import 'package:redpanda/services/message_sync_service.dart';
+import 'package:redpanda/services/outbox_service.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
 
 import '../helpers/fake_redpanda_client.dart';
@@ -23,12 +24,15 @@ void main() {
     db = createTestDatabase();
     client = FakeRedPandaClient();
     ohRepo = OutboundHandleRepository(db);
+    final messages = MessageRepository(db);
+    final groups = GroupRepository(db);
     service = MessageSyncService(
       client,
-      MessageRepository(db),
+      messages,
       ohRepo,
       db,
-      GroupRepository(db),
+      groups,
+      OutboxService(messages, client, groups),
     );
   });
 
