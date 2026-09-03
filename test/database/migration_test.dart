@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:drift/drift.dart' as drift;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:redpanda/database/database.dart';
+import 'package:redpanda/repositories/message_repository.dart';
 
 import '../helpers/test_database.dart';
 
@@ -18,8 +19,8 @@ void main() {
       await db.close();
     });
 
-    test('schema version is 17', () {
-      expect(db.schemaVersion, equals(17));
+    test('schema version is 18', () {
+      expect(db.schemaVersion, equals(18));
     });
 
     // T114 renamed the Dart-side names of these columns (peer* → counterpart*,
@@ -460,6 +461,85 @@ void main() {
       expect(member.displayName, equals('Me'));
 
       await legacy.close();
+    });
+
+    test('v17 → v18 backfills message direction from the two old heuristics '
+        '(T114)', () async {
+      // Reshape a fresh database into the v17 layout.
+      final legacy = createTestDatabase();
+      await legacy.customStatement(
+        'ALTER TABLE messages DROP COLUMN direction;',
+      );
+      await legacy.customStatement(
+        "INSERT INTO channels (uuid, label, encryption_key, auth_public_key) "
+        "VALUES ('chan', 'Chat', '${'aa' * 32}', '${'bb' * 32}');",
+      );
+      // 1:1 incoming: the channel id stands in for "them" (status received).
+      await legacy.customStatement(
+        "INSERT INTO messages (conversation_id, sender_id, content, "
+        "timestamp, status, type) VALUES ('chan', 'chan', 'theirs', 0, 4, 0);",
+      );
+      // Own outgoing 1:1 message, already delivered.
+      await legacy.customStatement(
+        "INSERT INTO messages (conversation_id, sender_id, content, "
+        "timestamp, status, type) VALUES ('chan', 'my-uuid', 'mine', 0, 3, "
+        "0);",
+      );
+      // Group incoming: sender is a member id, so only the status says it is
+      // theirs — this is the row the 1:1 heuristic would have got wrong.
+      await legacy.customStatement(
+        "INSERT INTO messages (conversation_id, sender_id, content, "
+        "timestamp, status, type, sender_member_id) VALUES ('grp', "
+        "'${'ee' * 32}', 'group theirs', 0, 4, 0, '${'ee' * 32}');",
+      );
+      // Own outgoing group message, still pending.
+      await legacy.customStatement(
+        "INSERT INTO messages (conversation_id, sender_id, content, "
+        "timestamp, status, type) VALUES ('grp', 'my-uuid', 'group mine', 0, "
+        "0, 0);",
+      );
+
+      await legacy.migration.onUpgrade(legacy.createMigrator(), 17, 18);
+
+      final byContent = {
+        for (final row in await legacy.select(legacy.messages).get())
+          row.content: row.direction,
+      };
+      expect(byContent['theirs'], equals(MessageDirection.incoming));
+      expect(byContent['mine'], equals(MessageDirection.outgoing));
+      expect(byContent['group theirs'], equals(MessageDirection.incoming));
+      expect(byContent['group mine'], equals(MessageDirection.outgoing));
+
+      await legacy.close();
+    });
+
+    // Every other test in this file calls onUpgrade with ADJACENT versions,
+    // which is not what a real device does: a phone that has not opened the
+    // app for a while runs one onUpgrade(from, 18) covering several steps.
+    // The v18 column would then be added to a `messages` table the v17 step
+    // had just re-created from the CURRENT schema — `duplicate column name:
+    // direction`, thrown from inside onUpgrade, i.e. the database never
+    // opens and `user_version` is never bumped: a crash loop on every launch.
+    test('a multi-version jump reaches v18 without adding direction twice '
+        '(T114)', () async {
+      for (final from in [16, 17]) {
+        final legacy = createTestDatabase();
+        await legacy.customStatement(
+          'ALTER TABLE messages DROP COLUMN direction;',
+        );
+
+        await legacy.migration.onUpgrade(legacy.createMigrator(), from, 18);
+
+        final columns = await legacy
+            .customSelect('PRAGMA table_info(messages)')
+            .get();
+        expect(
+          columns.map((row) => row.read<String>('name')),
+          contains('direction'),
+          reason: 'onUpgrade($from, 18) must leave the column in place',
+        );
+        await legacy.close();
+      }
     });
   });
 }

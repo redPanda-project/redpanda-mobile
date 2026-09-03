@@ -24,6 +24,7 @@ Message _message({
     timestamp: timestamp ?? now,
     status: status,
     type: 0,
+    direction: MessageDirection.outgoing,
     retryCount: retryCount,
   ).copyWith(lastRetryAt: Value(lastRetryAt));
 }

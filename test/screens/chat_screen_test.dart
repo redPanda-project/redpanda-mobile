@@ -171,18 +171,15 @@ void main() {
     testWidgets('received messages from the counterpart show no status icon', (
       tester,
     ) async {
-      await db
-          .into(db.messages)
-          .insert(
-            MessagesCompanion.insert(
-              conversationId: conversationUuid,
-              senderId: conversationUuid, // sent by the counterpart
-              content: 'their msg',
-              timestamp: DateTime.now(),
-              status: MessageStatus.received,
-              type: 0,
-            ),
-          );
+      // Through the real incoming path, so the direction the repository
+      // stamps is the one the screen reads.
+      await MessageRepository(db).insertIncomingIfNew(
+        messageId: 'aa' * 8,
+        conversationId: conversationUuid,
+        senderId: conversationUuid, // sent by the counterpart
+        content: 'their msg',
+        timestamp: DateTime.now(),
+      );
 
       await tester.pumpWidget(app());
       await tester.pump();
@@ -191,6 +188,55 @@ void main() {
       expect(find.byIcon(Icons.access_time), findsNothing);
       expect(find.byIcon(Icons.check), findsNothing);
       expect(find.byIcon(Icons.close), findsNothing);
+      expect(_alignmentOf(tester, 'their msg'), equals(Alignment.centerLeft));
+
+      await unmount(tester);
+    });
+
+    // T114: direction is a stored fact now, not `senderId != conversationId`.
+    // This row is exactly the case the old 1:1 heuristic got wrong — an
+    // incoming message whose sender is NOT the conversation id (which is what
+    // every group message looks like) — and it must still render as theirs.
+    testWidgets('the stored direction decides the side, not the sender id', (
+      tester,
+    ) async {
+      await db
+          .into(db.messages)
+          .insert(
+            MessagesCompanion.insert(
+              conversationId: conversationUuid,
+              senderId: 'ee' * 32, // a member id, not the conversation id
+              content: 'from a member',
+              timestamp: DateTime.now(),
+              status: MessageStatus.received,
+              type: 0,
+              direction: const Value(MessageDirection.incoming),
+            ),
+          );
+      // …and the mirror image: an outgoing row whose sender id happens to be
+      // the conversation id would have rendered as theirs before.
+      await db
+          .into(db.messages)
+          .insert(
+            MessagesCompanion.insert(
+              conversationId: conversationUuid,
+              senderId: conversationUuid,
+              content: 'still mine',
+              timestamp: DateTime.now(),
+              status: MessageStatus.sent,
+              type: 0,
+              direction: const Value(MessageDirection.outgoing),
+            ),
+          );
+
+      await tester.pumpWidget(app());
+      await tester.pump();
+
+      expect(
+        _alignmentOf(tester, 'from a member'),
+        equals(Alignment.centerLeft),
+      );
+      expect(_alignmentOf(tester, 'still mine'), equals(Alignment.centerRight));
 
       await unmount(tester);
     });
@@ -503,4 +549,13 @@ void main() {
       await unmount(tester);
     });
   });
+}
+
+/// The side a message bubble is rendered on: the nearest [Align] above the
+/// message text.
+Alignment _alignmentOf(WidgetTester tester, String text) {
+  final align = tester.widget<Align>(
+    find.ancestor(of: find.text(text), matching: find.byType(Align)).first,
+  );
+  return align.alignment as Alignment;
 }

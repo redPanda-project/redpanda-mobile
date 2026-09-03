@@ -1,6 +1,7 @@
 import 'package:drift/drift.dart' as drift;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:redpanda/database/database.dart';
+import 'package:redpanda/domain/message_direction.dart';
 import 'package:redpanda/domain/message_lifecycle.dart';
 import 'package:redpanda/shared/providers.dart';
 
@@ -9,6 +10,10 @@ import 'package:redpanda/shared/providers.dart';
 // working and the state machine is available wherever a status is written.
 export 'package:redpanda/domain/message_lifecycle.dart'
     show MessageStatus, MessageLifecycle;
+
+// T114: direction is a property of the message, not something the UI derives
+// from senderId/status. Re-exported here for the same reason as the status.
+export 'package:redpanda/domain/message_direction.dart' show MessageDirection;
 
 /// Data access for chat messages: pending-send queries, retry bookkeeping
 /// and deduplicated inserts of fetched messages.
@@ -35,6 +40,7 @@ class MessageRepository {
             timestamp: DateTime.now(),
             status: MessageStatus.pending,
             type: 0,
+            direction: const drift.Value(MessageDirection.outgoing),
             messageId: drift.Value(messageId),
           ),
         );
@@ -79,6 +85,7 @@ class MessageRepository {
               timestamp: timestamp,
               status: MessageStatus.received,
               type: 0,
+              direction: const drift.Value(MessageDirection.incoming),
               // Store NULL (not empty string) for empty ids so the unique
               // index never groups malformed items together.
               messageId: drift.Value(messageId.isEmpty ? null : messageId),

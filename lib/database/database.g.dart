@@ -1293,6 +1293,18 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _directionMeta = const VerificationMeta(
+    'direction',
+  );
+  @override
+  late final GeneratedColumn<int> direction = GeneratedColumn<int>(
+    'direction',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(MessageDirection.outgoing),
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -1306,6 +1318,7 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     retryCount,
     lastRetryAt,
     senderMemberId,
+    direction,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -1403,6 +1416,12 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
         ),
       );
     }
+    if (data.containsKey('direction')) {
+      context.handle(
+        _directionMeta,
+        direction.isAcceptableOrUnknown(data['direction']!, _directionMeta),
+      );
+    }
     return context;
   }
 
@@ -1456,6 +1475,10 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
         DriftSqlType.string,
         data['${effectivePrefix}sender_member_id'],
       ),
+      direction: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}direction'],
+      )!,
     );
   }
 
@@ -1477,6 +1500,7 @@ class Message extends DataClass implements Insertable<Message> {
   final int retryCount;
   final DateTime? lastRetryAt;
   final String? senderMemberId;
+  final int direction;
   const Message({
     required this.id,
     required this.conversationId,
@@ -1489,6 +1513,7 @@ class Message extends DataClass implements Insertable<Message> {
     required this.retryCount,
     this.lastRetryAt,
     this.senderMemberId,
+    required this.direction,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -1510,6 +1535,7 @@ class Message extends DataClass implements Insertable<Message> {
     if (!nullToAbsent || senderMemberId != null) {
       map['sender_member_id'] = Variable<String>(senderMemberId);
     }
+    map['direction'] = Variable<int>(direction);
     return map;
   }
 
@@ -1532,6 +1558,7 @@ class Message extends DataClass implements Insertable<Message> {
       senderMemberId: senderMemberId == null && nullToAbsent
           ? const Value.absent()
           : Value(senderMemberId),
+      direction: Value(direction),
     );
   }
 
@@ -1552,6 +1579,7 @@ class Message extends DataClass implements Insertable<Message> {
       retryCount: serializer.fromJson<int>(json['retryCount']),
       lastRetryAt: serializer.fromJson<DateTime?>(json['lastRetryAt']),
       senderMemberId: serializer.fromJson<String?>(json['senderMemberId']),
+      direction: serializer.fromJson<int>(json['direction']),
     );
   }
   @override
@@ -1569,6 +1597,7 @@ class Message extends DataClass implements Insertable<Message> {
       'retryCount': serializer.toJson<int>(retryCount),
       'lastRetryAt': serializer.toJson<DateTime?>(lastRetryAt),
       'senderMemberId': serializer.toJson<String?>(senderMemberId),
+      'direction': serializer.toJson<int>(direction),
     };
   }
 
@@ -1584,6 +1613,7 @@ class Message extends DataClass implements Insertable<Message> {
     int? retryCount,
     Value<DateTime?> lastRetryAt = const Value.absent(),
     Value<String?> senderMemberId = const Value.absent(),
+    int? direction,
   }) => Message(
     id: id ?? this.id,
     conversationId: conversationId ?? this.conversationId,
@@ -1598,6 +1628,7 @@ class Message extends DataClass implements Insertable<Message> {
     senderMemberId: senderMemberId.present
         ? senderMemberId.value
         : this.senderMemberId,
+    direction: direction ?? this.direction,
   );
   Message copyWithCompanion(MessagesCompanion data) {
     return Message(
@@ -1620,6 +1651,7 @@ class Message extends DataClass implements Insertable<Message> {
       senderMemberId: data.senderMemberId.present
           ? data.senderMemberId.value
           : this.senderMemberId,
+      direction: data.direction.present ? data.direction.value : this.direction,
     );
   }
 
@@ -1636,7 +1668,8 @@ class Message extends DataClass implements Insertable<Message> {
           ..write('messageId: $messageId, ')
           ..write('retryCount: $retryCount, ')
           ..write('lastRetryAt: $lastRetryAt, ')
-          ..write('senderMemberId: $senderMemberId')
+          ..write('senderMemberId: $senderMemberId, ')
+          ..write('direction: $direction')
           ..write(')'))
         .toString();
   }
@@ -1654,6 +1687,7 @@ class Message extends DataClass implements Insertable<Message> {
     retryCount,
     lastRetryAt,
     senderMemberId,
+    direction,
   );
   @override
   bool operator ==(Object other) =>
@@ -1669,7 +1703,8 @@ class Message extends DataClass implements Insertable<Message> {
           other.messageId == this.messageId &&
           other.retryCount == this.retryCount &&
           other.lastRetryAt == this.lastRetryAt &&
-          other.senderMemberId == this.senderMemberId);
+          other.senderMemberId == this.senderMemberId &&
+          other.direction == this.direction);
 }
 
 class MessagesCompanion extends UpdateCompanion<Message> {
@@ -1684,6 +1719,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
   final Value<int> retryCount;
   final Value<DateTime?> lastRetryAt;
   final Value<String?> senderMemberId;
+  final Value<int> direction;
   const MessagesCompanion({
     this.id = const Value.absent(),
     this.conversationId = const Value.absent(),
@@ -1696,6 +1732,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     this.retryCount = const Value.absent(),
     this.lastRetryAt = const Value.absent(),
     this.senderMemberId = const Value.absent(),
+    this.direction = const Value.absent(),
   });
   MessagesCompanion.insert({
     this.id = const Value.absent(),
@@ -1709,6 +1746,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     this.retryCount = const Value.absent(),
     this.lastRetryAt = const Value.absent(),
     this.senderMemberId = const Value.absent(),
+    this.direction = const Value.absent(),
   }) : conversationId = Value(conversationId),
        senderId = Value(senderId),
        content = Value(content),
@@ -1727,6 +1765,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Expression<int>? retryCount,
     Expression<DateTime>? lastRetryAt,
     Expression<String>? senderMemberId,
+    Expression<int>? direction,
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
@@ -1740,6 +1779,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       if (retryCount != null) 'retry_count': retryCount,
       if (lastRetryAt != null) 'last_retry_at': lastRetryAt,
       if (senderMemberId != null) 'sender_member_id': senderMemberId,
+      if (direction != null) 'direction': direction,
     });
   }
 
@@ -1755,6 +1795,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Value<int>? retryCount,
     Value<DateTime?>? lastRetryAt,
     Value<String?>? senderMemberId,
+    Value<int>? direction,
   }) {
     return MessagesCompanion(
       id: id ?? this.id,
@@ -1768,6 +1809,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       retryCount: retryCount ?? this.retryCount,
       lastRetryAt: lastRetryAt ?? this.lastRetryAt,
       senderMemberId: senderMemberId ?? this.senderMemberId,
+      direction: direction ?? this.direction,
     );
   }
 
@@ -1807,6 +1849,9 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     if (senderMemberId.present) {
       map['sender_member_id'] = Variable<String>(senderMemberId.value);
     }
+    if (direction.present) {
+      map['direction'] = Variable<int>(direction.value);
+    }
     return map;
   }
 
@@ -1823,7 +1868,8 @@ class MessagesCompanion extends UpdateCompanion<Message> {
           ..write('messageId: $messageId, ')
           ..write('retryCount: $retryCount, ')
           ..write('lastRetryAt: $lastRetryAt, ')
-          ..write('senderMemberId: $senderMemberId')
+          ..write('senderMemberId: $senderMemberId, ')
+          ..write('direction: $direction')
           ..write(')'))
         .toString();
   }
@@ -6501,6 +6547,7 @@ typedef $$MessagesTableCreateCompanionBuilder =
       Value<int> retryCount,
       Value<DateTime?> lastRetryAt,
       Value<String?> senderMemberId,
+      Value<int> direction,
     });
 typedef $$MessagesTableUpdateCompanionBuilder =
     MessagesCompanion Function({
@@ -6515,6 +6562,7 @@ typedef $$MessagesTableUpdateCompanionBuilder =
       Value<int> retryCount,
       Value<DateTime?> lastRetryAt,
       Value<String?> senderMemberId,
+      Value<int> direction,
     });
 
 final class $$MessagesTableReferences
@@ -6603,6 +6651,11 @@ class $$MessagesTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
+  ColumnFilters<int> get direction => $composableBuilder(
+    column: $table.direction,
+    builder: (column) => ColumnFilters(column),
+  );
+
   $$ChannelsTableFilterComposer get conversationId {
     final $$ChannelsTableFilterComposer composer = $composerBuilder(
       composer: this,
@@ -6686,6 +6739,11 @@ class $$MessagesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get direction => $composableBuilder(
+    column: $table.direction,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   $$ChannelsTableOrderingComposer get conversationId {
     final $$ChannelsTableOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -6755,6 +6813,9 @@ class $$MessagesTableAnnotationComposer
     builder: (column) => column,
   );
 
+  GeneratedColumn<int> get direction =>
+      $composableBuilder(column: $table.direction, builder: (column) => column);
+
   $$ChannelsTableAnnotationComposer get conversationId {
     final $$ChannelsTableAnnotationComposer composer = $composerBuilder(
       composer: this,
@@ -6818,6 +6879,7 @@ class $$MessagesTableTableManager
                 Value<int> retryCount = const Value.absent(),
                 Value<DateTime?> lastRetryAt = const Value.absent(),
                 Value<String?> senderMemberId = const Value.absent(),
+                Value<int> direction = const Value.absent(),
               }) => MessagesCompanion(
                 id: id,
                 conversationId: conversationId,
@@ -6830,6 +6892,7 @@ class $$MessagesTableTableManager
                 retryCount: retryCount,
                 lastRetryAt: lastRetryAt,
                 senderMemberId: senderMemberId,
+                direction: direction,
               ),
           createCompanionCallback:
               ({
@@ -6844,6 +6907,7 @@ class $$MessagesTableTableManager
                 Value<int> retryCount = const Value.absent(),
                 Value<DateTime?> lastRetryAt = const Value.absent(),
                 Value<String?> senderMemberId = const Value.absent(),
+                Value<int> direction = const Value.absent(),
               }) => MessagesCompanion.insert(
                 id: id,
                 conversationId: conversationId,
@@ -6856,6 +6920,7 @@ class $$MessagesTableTableManager
                 retryCount: retryCount,
                 lastRetryAt: lastRetryAt,
                 senderMemberId: senderMemberId,
+                direction: direction,
               ),
           withReferenceMapper: (p0) => p0
               .map(
