@@ -112,10 +112,23 @@ class RedPandaLightClient implements RedPandaClient {
 
   // State for mobile Optimization
   // bool _isBackgrounded = false; // To be set by flutter lifecycle
-  bool _isBadInternetDetected = false;
-  DateTime _lastGlobalConnectionAttempt = DateTime.fromMillisecondsSinceEpoch(
-    0,
-  );
+
+  /// Clock behind the retry-backoff and not-connected-log decisions —
+  /// exactly [_waitInBackoff], [_handleBackoff] and [_logNotConnected], and
+  /// nothing else.
+  ///
+  /// Injectable (constructor parameter `now`, default [DateTime.now]) because
+  /// the retry backoff is otherwise only testable by wall-clock waiting: the
+  /// dial loop awaits real DNS lookups, so `fake_async` cannot drive it
+  /// either (TD079). Tests hand in a variable they advance by hand and get
+  /// backoff expiry in microseconds instead of seconds.
+  ///
+  /// NOT the clock of the whole connection routine: the roaming-rotation age
+  /// check in [_runConnectionCheck] still reads [DateTime.now] directly, as do
+  /// the polling loop and every duration measured across an await inside one
+  /// operation (latency, timeouts). Do not assume a test that pins this clock
+  /// has frozen rotation as well.
+  final DateTime Function() _now;
 
   // Backoff state
   final Map<String, DateTime> _nextRetryTime = {};
@@ -232,7 +245,10 @@ class RedPandaLightClient implements RedPandaClient {
     this.fetchResponseTimeout = const Duration(seconds: 10),
     // Extra predicate for garlic hop candidates (tests pin local nodes).
     bool Function(PeerStats peer)? hopCandidateFilter,
-  }) : _socketFactory =
+    // Clock for the connection routine's time-based decisions (see [_now]).
+    DateTime Function()? now,
+  }) : _now = now ?? DateTime.now,
+       _socketFactory =
            socketFactory ??
            // The explicit timeout matters (T27): without one, a dial started
            // while the network is down hangs for the OS SYN timeout (~2 min
@@ -272,7 +288,6 @@ class RedPandaLightClient implements RedPandaClient {
   @override
   void onResume() {
     // _isBackgrounded = false;
-    _isBadInternetDetected = false; // transform optimism
     _connectionTimer?.cancel();
     _connectionTimer = Timer.periodic(
       const Duration(seconds: 3),
@@ -467,7 +482,7 @@ class RedPandaLightClient implements RedPandaClient {
       _lastNotConnectedLog = null;
       return;
     }
-    final now = DateTime.now();
+    final now = _now();
     final last = _lastNotConnectedLog;
     if (last != null && now.difference(last) < const Duration(seconds: 15)) {
       return;
@@ -485,16 +500,6 @@ class RedPandaLightClient implements RedPandaClient {
 
   Future<void> _runConnectionCheck() async {
     _logNotConnected();
-
-    // 0. If bad internet detected, throttle
-    if (_isBadInternetDetected) {
-      if (DateTime.now().difference(_lastGlobalConnectionAttempt).inSeconds <
-          10) {
-        return; // Wait 10s before trying again if we think logic is bad
-      }
-      _isBadInternetDetected = false; // Reset and try again
-    }
-    _lastGlobalConnectionAttempt = DateTime.now();
 
     RpLog.debug(
       'RedPandaLightClient: Running connection check. Known peers: ${_peerRepository.knownAddresses.length}',
@@ -587,19 +592,13 @@ class RedPandaLightClient implements RedPandaClient {
 
       if (!_peers.containsKey(candidate.address) &&
           !_dialsInFlight.contains(candidate.address)) {
-        // Check backoff
-        if (_nextRetryTime.containsKey(candidate.address)) {
-          if (DateTime.now().isBefore(_nextRetryTime[candidate.address]!)) {
-            continue;
-          }
-        }
+        if (_waitInBackoff(candidate.address)) continue;
         toConnect.add(candidate.address);
         connectedCount++;
       }
     }
 
     // Random filling if we still have space (Roaming)
-    int backoffSkipped = 0;
     if (connectedCount < maxConnections) {
       final all = _peerRepository.knownAddresses.toList()..shuffle();
       for (final addr in all) {
@@ -607,24 +606,29 @@ class RedPandaLightClient implements RedPandaClient {
         if (!_peers.containsKey(addr) &&
             !_dialsInFlight.contains(addr) &&
             !toConnect.contains(addr)) {
-          // Check backoff
-          if (_waitInBackoff(addr)) {
-            backoffSkipped++;
-            continue;
-          }
+          if (_waitInBackoff(addr)) continue;
           toConnect.add(addr);
           connectedCount++;
         }
       }
     }
 
+    // Nothing to dial and nothing connected: every known address is either
+    // occupied or still inside its retry backoff. Nothing left for this cycle.
+    //
+    // There is deliberately no extra "bad internet" throttle here (TD078).
+    // An earlier one set a flag in this branch and made the next ~10 s of
+    // checks return immediately. It never fired where it was meant to — after
+    // an outage every address sits in backoff, and the flag was gated on
+    // *no* address having been skipped for backoff — and switching it on
+    // would have been a regression: the 3 s timer keeps ticking either way,
+    // so the throttle saves no wakeup and no traffic (this branch does pure
+    // in-memory bookkeeping, the dial suppression is entirely the backoff
+    // map's work), while it would delay the first redial after a 2 s backoff
+    // expires by up to ~9 s — the opposite of what T27 tuned the 30 s backoff
+    // cap for. See the outage-cycle test in connection_logic_test.dart.
     if (toConnect.isEmpty && _peers.isEmpty) {
-      if (_peerRepository.knownAddresses.isNotEmpty && backoffSkipped == 0) {
-        RpLog.debug(
-          'RedPandaLightClient: No peers to connect to. Bad Internet?',
-        );
-        _isBadInternetDetected = true;
-      }
+      RpLog.debug('RedPandaLightClient: No peer left to dial this cycle.');
       return;
     }
 
@@ -667,8 +671,7 @@ class RedPandaLightClient implements RedPandaClient {
                 _intentionalDisconnects.remove(address);
                 _handleBackoff(address); // Still backoff to ensure we rotate
               } else {
-                _peerRepository.updatePeer(address, isFailure: true);
-                _handleBackoff(address);
+                _recordConnectionFailure(address);
               }
             },
             onPeersReceived: (peers) {
@@ -713,7 +716,11 @@ class RedPandaLightClient implements RedPandaClient {
           RpLog.debug(
             'RedPandaLightClient: Failed to initiate peer $address: $e',
           );
-          _peerRepository.updatePeer(address, isFailure: true);
+          // Same failure bookkeeping as a dropped connection: this peer never
+          // reached _peers, so its onDisconnect will never fire and only the
+          // backoff armed here keeps the next check from redialling it on the
+          // very next 3 s tick.
+          _recordConnectionFailure(address);
         } finally {
           // Released in the same synchronous step that inserted into [_peers]
           // (and on the alias-skip / error paths), so there is never a moment
@@ -733,13 +740,28 @@ class RedPandaLightClient implements RedPandaClient {
 
   // --- Helper Methods ---
 
+  /// Whether [address] is still inside its retry backoff and must not be
+  /// dialled in this cycle.
   bool _waitInBackoff(String address) {
-    if (_nextRetryTime.containsKey(address)) {
-      if (DateTime.now().isBefore(_nextRetryTime[address]!)) {
-        return true;
-      }
-    }
-    return false;
+    final next = _nextRetryTime[address];
+    return next != null && _now().isBefore(next);
+  }
+
+  /// Records a lost/failed connection to [address]: arms the retry backoff
+  /// AND scores the failure against the peer, in that order and in ONE
+  /// synchronous step (TD080).
+  ///
+  /// The order is the contract, not an accident. `updatePeer(isFailure: true)`
+  /// is the client's outward "this dial failed" signal; anything that reacts
+  /// to it — a repository listener, a connection check kicked off from one —
+  /// must already see the backoff, otherwise it immediately re-dials the
+  /// address that just failed. Both halves must also stay in the same
+  /// synchronous step: an `await` between them reopens the same window.
+  /// `connection_logic_test.dart` pins this by re-entering a connection check
+  /// from inside the failure report.
+  void _recordConnectionFailure(String address) {
+    _handleBackoff(address);
+    _peerRepository.updatePeer(address, isFailure: true);
   }
 
   void _handleBackoff(String address) {
@@ -755,7 +777,7 @@ class RedPandaLightClient implements RedPandaClient {
     // TCP dial per address per 30 s, negligible traffic/battery.
     if (seconds > 30) seconds = 30;
 
-    _nextRetryTime[address] = DateTime.now().add(Duration(seconds: seconds));
+    _nextRetryTime[address] = _now().add(Duration(seconds: seconds));
   }
 
   /// Tears down a suspected half-open connection and redials immediately
