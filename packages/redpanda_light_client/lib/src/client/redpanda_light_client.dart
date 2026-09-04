@@ -113,8 +113,9 @@ class RedPandaLightClient implements RedPandaClient {
   // State for mobile Optimization
   // bool _isBackgrounded = false; // To be set by flutter lifecycle
 
-  /// Clock behind every time-based decision of the connection routine
-  /// ([_logNotConnected], [_waitInBackoff], [_handleBackoff]).
+  /// Clock behind the retry-backoff and not-connected-log decisions —
+  /// exactly [_waitInBackoff], [_handleBackoff] and [_logNotConnected], and
+  /// nothing else.
   ///
   /// Injectable (constructor parameter `now`, default [DateTime.now]) because
   /// the retry backoff is otherwise only testable by wall-clock waiting: the
@@ -122,8 +123,11 @@ class RedPandaLightClient implements RedPandaClient {
   /// either (TD079). Tests hand in a variable they advance by hand and get
   /// backoff expiry in microseconds instead of seconds.
   ///
-  /// Deliberately NOT used for durations measured across an await inside one
-  /// operation (latency, timeouts) — those stay on the real clock.
+  /// NOT the clock of the whole connection routine: the roaming-rotation age
+  /// check in [_runConnectionCheck] still reads [DateTime.now] directly, as do
+  /// the polling loop and every duration measured across an await inside one
+  /// operation (latency, timeouts). Do not assume a test that pins this clock
+  /// has frozen rotation as well.
   final DateTime Function() _now;
 
   // Backoff state
