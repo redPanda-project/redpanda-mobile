@@ -7,7 +7,7 @@ import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
 import 'package:test/test.dart';
 
 /// Cross-check vectors generated from the reference `redpanda.jar`
-/// (`im.redpanda.outbound.ChannelDht`, T43 release cdc726ab…) for
+/// (`im.redpanda.dht.ChannelDht`, T43 release cdc726ab…) for
 /// channelSecret = bytes 0x00..0x1f. See the task's vector generator.
 const _skHex =
     '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f';

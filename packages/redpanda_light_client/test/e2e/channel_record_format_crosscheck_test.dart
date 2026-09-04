@@ -330,7 +330,7 @@ Future<_BackendFormat> _runProbe() async {
         'This is NOT a format skew: either the JDK is missing/too old for the '
         'single-file source launcher (Java 11+ required; the e2e node launcher '
         'needs a JVM anyway), or the JAR no longer exposes '
-        'im.redpanda.outbound.ChannelDht with the API this probe uses. In the '
+        'im.redpanda.dht.ChannelDht with the API this probe uses. In the '
         'latter case the backend changed the rendezvous API and this suite has '
         'to follow.',
       );
@@ -387,9 +387,9 @@ const String _probeMarker = 'RPVEC:';
 /// and the other missed — a false red that points at the wrong repo.
 String _probeSource() =>
     '''
-import im.redpanda.crypt.Utils;
-import im.redpanda.kademlia.KadContent;
-import im.redpanda.outbound.ChannelDht;
+import im.redpanda.identity.crypt.Utils;
+import im.redpanda.dht.ChannelDht;
+import im.redpanda.dht.KadContent;
 import java.util.Arrays;
 
 /**
