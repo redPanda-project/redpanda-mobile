@@ -49,6 +49,36 @@ List<OHDescriptor>? decodeCounterpartOhSet(String? json) {
   }
 }
 
+/// The counterpart mailboxes [row] knows.
+///
+/// Normally that is the persisted set. Rows written before this file existed
+/// can have the three primary columns filled while `counterpartOhSet` is still
+/// NULL (that WAS TD118: `addChannel` never wrote the set) — for those the
+/// primary is reconstructed, so a later re-scan does not drop the only mailbox
+/// the row ever knew. A row whose primary columns do not decode is treated as
+/// knowing nothing rather than failing the join.
+List<OHDescriptor> knownCounterpartMailboxes(ChannelRow row) {
+  final set = decodeCounterpartOhSet(row.counterpartOhSet);
+  if (set != null) return set;
+  final endpoint = row.counterpartOhEndpoint;
+  final id = row.counterpartOhId;
+  final publicKey = row.counterpartOhPublicKey;
+  if (endpoint == null || id == null || publicKey == null) {
+    return const <OHDescriptor>[];
+  }
+  try {
+    return [
+      OHDescriptor(
+        serverEndpoint: endpoint,
+        handleId: HEX.decode(id),
+        authPublicKey: HEX.decode(publicKey),
+      ),
+    ];
+  } catch (_) {
+    return const <OHDescriptor>[];
+  }
+}
+
 /// [primary] promoted to the head of [existing], which is the shape
 /// [counterpartOhColumns] expects. Mailboxes already known stay in the set —
 /// they are only ever added, never dropped by a re-scan — but the one the QR

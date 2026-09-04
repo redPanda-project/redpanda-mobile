@@ -211,6 +211,48 @@ void main() {
         },
       );
 
+      // Review finding (T124): rows written BEFORE the fix have the three
+      // primary columns filled and `counterpartOhSet` still NULL — that was
+      // exactly TD118. A re-scan must not throw the only mailbox such a row
+      // ever knew away just because it never made it into a set.
+      test(
+        'a re-scan keeps the primary of a row that has no set yet',
+        () async {
+          final created = await Channel.generate('Pre-fix row');
+          await repo.addChannel(created);
+
+          final old = mailbox('node-1:59558', 1);
+          await (db.update(
+            db.channels,
+          )..where((t) => t.conversationId.equals(created.id))).write(
+            ChannelsCompanion(
+              counterpartOhEndpoint: drift.Value(old.serverEndpoint),
+              counterpartOhId: drift.Value(HEX.encode(old.handleId)),
+              counterpartOhPublicKey: drift.Value(
+                HEX.encode(old.authPublicKey),
+              ),
+            ),
+          );
+
+          final fresh = mailbox('node-2:59558', 2);
+          final rescanned = (await Channel.fromJson(
+            created.toJson(),
+          )).copyWith(counterpartOhDescriptor: fresh);
+          expect(await repo.addChannel(rescanned), isFalse);
+
+          await expectPrimaryIsHeadOfSet(created.id);
+          final row = await (db.select(
+            db.channels,
+          )..where((t) => t.conversationId.equals(created.id))).getSingle();
+          expect(
+            decodeCounterpartOhSet(
+              row.counterpartOhSet,
+            )!.map((d) => d.serverEndpoint),
+            equals(['node-2:59558', 'node-1:59558']),
+          );
+        },
+      );
+
       test(
         'a re-scan promotes the new mailbox and keeps the known ones',
         () async {

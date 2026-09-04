@@ -9,11 +9,16 @@
 /// cannot reach the old versions, whose tables were dropped and re-created
 /// twice since.
 ///
-/// [ddlForSchemaVersion] replays the DDL a fresh install of that version
-/// executed. The statements are hand-written rather than snapshotted, because
-/// drift's generated DDL is not in the repository at those commits; they are
-/// derived from `lib/database/database.dart` at the commit that introduced
-/// each version:
+/// [ddlForSchemaVersion] reconstructs the layout of version `v` by replaying
+/// the v2 tables and then, in order, the delta each later version introduced —
+/// including the destructive re-creations of v5, v9 and v17. The result is the
+/// layout (tables, columns, indexes), not the byte-identical DDL a fresh
+/// install would have emitted: column ORDER after an `ALTER TABLE ADD COLUMN`
+/// differs from a `CREATE TABLE` that lists the column in the middle, which
+/// nothing in a migration depends on. The statements are hand-written rather
+/// than snapshotted, because drift's generated DDL is not in the repository at
+/// those commits; they are derived from `lib/database/database.dart` at the
+/// commit that introduced each version:
 ///
 /// | v  | commit    | change                                              |
 /// |----|-----------|-----------------------------------------------------|
@@ -92,7 +97,7 @@ const _convMessageIdIndex =
     'CREATE UNIQUE INDEX idx_messages_conv_message_id '
     'ON messages (conversation_id, message_id)';
 
-/// What a fresh install at version `v` did on top of version `v - 1`.
+/// The DDL delta from version `v - 1` to version `v`.
 const _steps = <int, List<String>>{
   3: <String>[
     'CREATE TABLE peers ('
@@ -267,7 +272,7 @@ const _steps = <int, List<String>>{
 /// The lowest schema version a real database can have (see the library doc).
 const int oldestReachableSchemaVersion = 2;
 
-/// The DDL a fresh install at [version] executed, in order.
+/// The DDL that reproduces the layout of schema [version], in order.
 List<String> ddlForSchemaVersion(int version) {
   assert(version >= oldestReachableSchemaVersion);
   return <String>[..._v2, for (var v = 3; v <= version; v++) ..._steps[v]!];

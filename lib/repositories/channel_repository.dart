@@ -54,7 +54,7 @@ class DriftChannelRepository implements ChannelRepository {
               ? const <OHDescriptor>[]
               : promoteToPrimary(
                   descriptor,
-                  decodeCounterpartOhSet(existing.counterpartOhSet),
+                  knownCounterpartMailboxes(existing),
                 ),
         );
         await (_db.update(_db.channels)

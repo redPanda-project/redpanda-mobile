@@ -556,6 +556,14 @@ void main() {
   // Each of them is an app that never starts again after the update, so the
   // parametrisation stays: a new step with a missing lower bound turns this
   // red for exactly the versions it breaks.
+  //
+  // What it does NOT catch, for the three tables the v17 step re-creates
+  // (channels, messages, outbound_handles): a lower bound that is too HIGH,
+  // so a column is skipped without an error — v17 hands it back from the
+  // current schema, and the end state looks right. Only the crash direction
+  // is covered there. For every other table (peers, session_tags,
+  // node_scores, the group tables) nothing re-creates them afterwards, so
+  // both directions are covered.
   group('multi-version jump to the current schema (T124)', () {
     Future<Map<String, Set<String>>> layoutOf(AppDatabase db) async {
       final tables = await db
