@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
+import 'package:redpanda/database/counterpart_oh.dart';
 import 'package:redpanda/database/database.dart' as db;
 import 'package:drift/drift.dart' as drift;
 import 'package:hex/hex.dart';
@@ -39,35 +40,33 @@ class DriftChannelRepository implements ChannelRepository {
       )..where((t) => t.conversationId.equals(channel.id))).getSingleOrNull();
 
       if (existing != null) {
-        await (_db.update(
-          _db.channels,
-        )..where((t) => t.conversationId.equals(channel.id))).write(
-          db.ChannelsCompanion(
-            label: drift.Value(channel.label),
-            // The counterpart descriptor is only ever added, never cleared: a
-            // re-scan carries no OH data and must not drop what the
-            // rendezvous lookup already found. `authPrivateKey` is
-            // deliberately absent — a creator re-scanning their own QR is a
-            // joiner as far as `Channel.fromJson` is concerned, and losing
-            // the role marker would break the ratchet asymmetry.
-            counterpartOhEndpoint: _valueOrAbsent(
-              channel.counterpartOhDescriptor?.serverEndpoint,
-            ),
-            counterpartOhId: _valueOrAbsent(
-              channel.counterpartOhDescriptor != null
-                  ? HEX.encode(channel.counterpartOhDescriptor!.handleId)
-                  : null,
-            ),
-            counterpartOhPublicKey: _valueOrAbsent(
-              channel.counterpartOhDescriptor != null
-                  ? HEX.encode(channel.counterpartOhDescriptor!.authPublicKey)
-                  : null,
-            ),
-          ),
+        // The counterpart descriptor is only ever added, never cleared: a
+        // re-scan carries no OH data and must not drop what the rendezvous
+        // lookup already found. When it does carry one, it becomes the
+        // primary and the already known mailboxes stay behind it, so the
+        // "first entry mirrors the primary" invariant holds (TD118).
+        // `authPrivateKey` is deliberately absent — a creator re-scanning
+        // their own QR is a joiner as far as `Channel.fromJson` is concerned,
+        // and losing the role marker would break the ratchet asymmetry.
+        final descriptor = channel.counterpartOhDescriptor;
+        final ohColumns = counterpartOhColumns(
+          descriptor == null
+              ? const <OHDescriptor>[]
+              : promoteToPrimary(
+                  descriptor,
+                  knownCounterpartMailboxes(existing),
+                ),
         );
+        await (_db.update(_db.channels)
+              ..where((t) => t.conversationId.equals(channel.id)))
+            .write(ohColumns.copyWith(label: drift.Value(channel.label)));
         return false;
       }
 
+      final newDescriptor = channel.counterpartOhDescriptor;
+      final newOhColumns = counterpartOhColumns(
+        newDescriptor == null ? const <OHDescriptor>[] : [newDescriptor],
+      );
       await _db
           .into(_db.channels)
           .insert(
@@ -82,31 +81,18 @@ class DriftChannelRepository implements ChannelRepository {
                     : null,
               ),
               authPublicKey: HEX.encode(channel.authPublicKey),
-              counterpartOhEndpoint: drift.Value(
-                channel.counterpartOhDescriptor?.serverEndpoint,
-              ),
-              counterpartOhId: drift.Value(
-                channel.counterpartOhDescriptor != null
-                    ? HEX.encode(channel.counterpartOhDescriptor!.handleId)
-                    : null,
-              ),
-              counterpartOhPublicKey: drift.Value(
-                channel.counterpartOhDescriptor != null
-                    ? HEX.encode(channel.counterpartOhDescriptor!.authPublicKey)
-                    : null,
-              ),
+              // All four counterpart mailbox columns come from one place so
+              // the primary stays the head of the set (TD118).
+              counterpartOhEndpoint: newOhColumns.counterpartOhEndpoint,
+              counterpartOhId: newOhColumns.counterpartOhId,
+              counterpartOhPublicKey: newOhColumns.counterpartOhPublicKey,
+              counterpartOhSet: newOhColumns.counterpartOhSet,
               lastSeen: drift.Value(DateTime.now()),
             ),
           );
       return true;
     });
   }
-
-  /// `Value(v)` for a non-null [v], `Value.absent()` otherwise — an absent
-  /// value leaves the existing column untouched in an UPDATE. The nullable type
-  /// argument matches the nullable companion fields this feeds.
-  static drift.Value<String?> _valueOrAbsent(String? value) =>
-      value == null ? const drift.Value.absent() : drift.Value(value);
 
   @override
   Future<List<Channel>> getChannels() async {
@@ -121,7 +107,7 @@ class DriftChannelRepository implements ChannelRepository {
     });
   }
 
-  Channel _mapToDomain(db.Channel data) {
+  Channel _mapToDomain(db.ChannelRow data) {
     OHDescriptor? ohDescriptor;
     if (data.counterpartOhEndpoint != null &&
         data.counterpartOhId != null &&

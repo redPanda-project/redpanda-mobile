@@ -6,6 +6,7 @@ import 'package:redpanda/database/database.dart';
 import 'package:redpanda/repositories/message_repository.dart';
 
 import '../helpers/test_database.dart';
+import 'historic_schemas.dart';
 
 void main() {
   group('AppDatabase schema v9 (MS03)', () {
@@ -541,5 +542,100 @@ void main() {
         await legacy.close();
       }
     });
+  });
+
+  // T124 (TD149). The test above covers the two versions T114 happened to
+  // touch; this one covers EVERY historic version, against a database that
+  // really is at that version (historic_schemas.dart) instead of a current
+  // one reshaped with DROP COLUMN. Three more steps died the same way:
+  //
+  //   v2/v3  -> `duplicate column name: node_id`       (peers, v4 step)
+  //   v2..v5 -> `duplicate column name: last_cursor`   (outbound_handles, v7)
+  //   v2..v8 -> `duplicate column name: peer_oh_set`   (channels, v16)
+  //
+  // Each of them is an app that never starts again after the update, so the
+  // parametrisation stays: a new step with a missing lower bound turns this
+  // red for exactly the versions it breaks.
+  //
+  // What it does NOT catch, for the three tables the v17 step re-creates
+  // (channels, messages, outbound_handles): a lower bound that is too HIGH,
+  // so a column is skipped without an error — v17 hands it back from the
+  // current schema, and the end state looks right. Only the crash direction
+  // is covered there. For every other table (peers, session_tags,
+  // node_scores, the group tables) nothing re-creates them afterwards, so
+  // both directions are covered.
+  group('multi-version jump to the current schema (T124)', () {
+    Future<Map<String, Set<String>>> layoutOf(AppDatabase db) async {
+      final tables = await db
+          .customSelect(
+            "SELECT name FROM sqlite_master WHERE type = 'table' "
+            "AND name NOT LIKE 'sqlite_%'",
+          )
+          .get();
+      return {
+        for (final table in tables)
+          table.read<String>('name'): {
+            for (final column
+                in await db
+                    .customSelect(
+                      'PRAGMA table_info(${table.read<String>('name')})',
+                    )
+                    .get())
+              column.read<String>('name'),
+          },
+      };
+    }
+
+    late Map<String, Set<String>> current;
+
+    setUpAll(() async {
+      final fresh = createTestDatabase();
+      current = await layoutOf(fresh);
+      await fresh.close();
+    });
+
+    for (
+      var from = oldestReachableSchemaVersion;
+      from < AppDatabase.currentSchemaVersion;
+      from++
+    ) {
+      test('v$from opens on the current schema', () async {
+        final legacy = createTestDatabaseAtVersion(
+          from,
+          ddlForSchemaVersion(from),
+        );
+        addTearDown(legacy.close);
+
+        // The first statement opens the database, which is what runs
+        // onUpgrade(from, 18). A failing step throws right here.
+        final version = await legacy
+            .customSelect('PRAGMA user_version')
+            .getSingle();
+
+        expect(
+          version.read<int>('user_version'),
+          equals(AppDatabase.currentSchemaVersion),
+          reason: 'a migration that throws never bumps user_version',
+        );
+        // Not just "it did not crash": the upgraded database must have the
+        // same tables and columns a fresh install gets, or the app reads
+        // NULLs out of columns that silently stayed behind.
+        expect(await layoutOf(legacy), equals(current));
+
+        // Indexes are not part of PRAGMA table_info, and dedup silently
+        // stops working without this one.
+        final indexes = await legacy
+            .customSelect(
+              "SELECT name FROM sqlite_master WHERE type = 'index' "
+              "AND tbl_name = 'messages'",
+            )
+            .get();
+        expect(
+          indexes.map((row) => row.read<String>('name')),
+          contains('idx_messages_conv_message_id'),
+          reason: 'v$from must end up with the per-conversation dedup index',
+        );
+      });
+    }
   });
 }

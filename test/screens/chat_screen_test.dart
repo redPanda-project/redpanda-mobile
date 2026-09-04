@@ -10,7 +10,7 @@ import 'package:redpanda/screens/chat/chat_screen.dart';
 import 'package:redpanda/services/message_sync_service.dart';
 import 'package:redpanda/services/outbox_service.dart';
 import 'package:redpanda/shared/providers.dart';
-import 'package:redpanda_light_client/redpanda_light_client.dart' hide Channel;
+import 'package:redpanda_light_client/redpanda_light_client.dart';
 
 import '../helpers/fake_redpanda_client.dart';
 import '../helpers/test_database.dart';

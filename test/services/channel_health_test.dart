@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:redpanda/database/database.dart';
 import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/services/channel_health.dart';
-import 'package:redpanda_light_client/redpanda_light_client.dart' hide Channel;
+import 'package:redpanda_light_client/redpanda_light_client.dart';
 
 final now = DateTime(2026, 7, 15, 12);
 

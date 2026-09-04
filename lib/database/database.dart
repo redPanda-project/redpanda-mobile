@@ -15,6 +15,11 @@ class Users extends Table {
   Set<Column> get primaryKey => {uuid};
 }
 
+// T152: the row class is named `ChannelRow` so it does not collide with the
+// light client's domain `Channel` — app files used to import one of the two
+// libraries with `hide Channel`. Same pattern as `GroupChannelRow` and
+// `NodeScoreRow`.
+@DataClassName('ChannelRow')
 class Channels extends Table {
   /// The conversation id: `SHA256(channel_pk)` as hex (spec Decision 1).
   ///
@@ -296,8 +301,13 @@ class AppDatabase extends _$AppDatabase {
   /// For tests: run against an in-memory executor instead of the device DB.
   AppDatabase.forTesting(super.executor);
 
+  /// The schema every migration path has to arrive at. A constant so tests
+  /// can enumerate the historic versions (`2 .. currentSchemaVersion - 1`)
+  /// without an instance (T124).
+  static const int currentSchemaVersion = 18;
+
   @override
-  int get schemaVersion => 18;
+  int get schemaVersion => currentSchemaVersion;
 
   @override
   MigrationStrategy get migration {
@@ -306,6 +316,18 @@ class AppDatabase extends _$AppDatabase {
         await m.createAll();
       },
       onUpgrade: (Migrator m, int from, int to) async {
+        // T124 (TD149): a device runs ONE onUpgrade(from, schemaVersion), so
+        // every step below sees the database as the PREVIOUS steps left it —
+        // not as the app of that version left it. `createTable` always uses
+        // the CURRENT Dart schema, so a table (re-)created by an earlier step
+        // already carries every column a later step would add: an unguarded
+        // `addColumn` after such a step throws `duplicate column name`, and
+        // because `user_version` is only bumped after a successful migration
+        // that is a crash loop on every launch, not a one-off error.
+        // Therefore EVERY `addColumn` carries a lower bound naming the version
+        // at which the table stopped being (re-)created underneath it. The
+        // multi-jump test in test/database/migration_test.dart runs
+        // onUpgrade(v, schemaVersion) for every historic v and is the guard.
         if (from < 2) {
           await m.createTable(channels);
         }
@@ -313,7 +335,12 @@ class AppDatabase extends _$AppDatabase {
           await m.createTable(peers);
         }
         if (from < 4) {
-          await m.addColumn(peers, peers.nodeId);
+          // `peers` is created from the CURRENT schema above, which already
+          // has node_id — only a database that already had the v3 table needs
+          // the column added.
+          if (from >= 3) {
+            await m.addColumn(peers, peers.nodeId);
+          }
         }
         if (from < 5) {
           // Destructive migration for dev: Recreate Channels table to match new schema
@@ -325,13 +352,16 @@ class AppDatabase extends _$AppDatabase {
           await m.createTable(channels);
         }
         if (from < 6) {
-          // Add OH columns to Channels and create OutboundHandles table
-          try {
+          // Add OH columns to Channels and create OutboundHandles table.
+          // Only a database that already had the v5 `channels` table needs
+          // them; below that the step above re-created the table from the
+          // current schema, which has the columns. This used to be a
+          // try/catch that swallowed the duplicate-column error (and, with
+          // it, the second and third ALTER plus any unrelated failure).
+          if (from >= 5) {
             await m.addColumn(channels, channels.counterpartOhEndpoint);
             await m.addColumn(channels, channels.counterpartOhId);
             await m.addColumn(channels, channels.counterpartOhPublicKey);
-          } catch (e) {
-            // Columns might already exist if channels was recreated in step 5
           }
           await m.createTable(outboundHandles);
         }
@@ -340,7 +370,12 @@ class AppDatabase extends _$AppDatabase {
           await m.addColumn(messages, messages.messageId);
           await m.addColumn(messages, messages.retryCount);
           await m.addColumn(messages, messages.lastRetryAt);
-          await m.addColumn(outboundHandles, outboundHandles.lastCursor);
+          // `outbound_handles` is created from the CURRENT schema in the v6
+          // step above, which already has last_cursor — only a database that
+          // already had the v6 table needs the column added.
+          if (from >= 6) {
+            await m.addColumn(outboundHandles, outboundHandles.lastCursor);
+          }
           // The global-unique message-id index from MS02 (idx_messages_message_id)
           // is replaced in v8 below by a per-conversation composite index, so
           // for fresh installs that started at v7 we still create the old one
@@ -437,7 +472,12 @@ class AppDatabase extends _$AppDatabase {
         }
         if (from < 16 && to >= 16) {
           // T42 multi-OH: full counterpart mailbox set (JSON array). Non-destructive.
-          if (from >= 2) {
+          // The lower bound is 9, not 2: the v9 step above re-creates
+          // `channels` from the current schema, which already declares
+          // peer_oh_set. With `from >= 2` every v2..v8 database died here
+          // with `duplicate column name: peer_oh_set` — the same crash T114
+          // fixed for `direction` (TD149).
+          if (from >= 9) {
             await m.addColumn(channels, channels.counterpartOhSet);
           }
         }

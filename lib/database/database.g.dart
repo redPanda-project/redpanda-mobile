@@ -317,7 +317,8 @@ class UsersCompanion extends UpdateCompanion<User> {
   }
 }
 
-class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
+class $ChannelsTable extends Channels
+    with TableInfo<$ChannelsTable, ChannelRow> {
   @override
   final GeneratedDatabase attachedDatabase;
   final String? _alias;
@@ -486,7 +487,7 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
   static const String $name = 'channels';
   @override
   VerificationContext validateIntegrity(
-    Insertable<Channel> instance, {
+    Insertable<ChannelRow> instance, {
     bool isInserting = false,
   }) {
     final context = VerificationContext();
@@ -613,9 +614,9 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
   @override
   Set<GeneratedColumn> get $primaryKey => {conversationId};
   @override
-  Channel map(Map<String, dynamic> data, {String? tablePrefix}) {
+  ChannelRow map(Map<String, dynamic> data, {String? tablePrefix}) {
     final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
-    return Channel(
+    return ChannelRow(
       conversationId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}uuid'],
@@ -677,7 +678,7 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
   }
 }
 
-class Channel extends DataClass implements Insertable<Channel> {
+class ChannelRow extends DataClass implements Insertable<ChannelRow> {
   /// The conversation id: `SHA256(channel_pk)` as hex (spec Decision 1).
   ///
   /// T114: this is THE identifier of a 1:1 conversation. It used to be called
@@ -698,7 +699,7 @@ class Channel extends DataClass implements Insertable<Channel> {
   final DateTime? lastSeen;
   final String? ratchetState;
   final String? pendingRgb;
-  const Channel({
+  const ChannelRow({
     required this.conversationId,
     required this.label,
     required this.encryptionKey,
@@ -786,12 +787,12 @@ class Channel extends DataClass implements Insertable<Channel> {
     );
   }
 
-  factory Channel.fromJson(
+  factory ChannelRow.fromJson(
     Map<String, dynamic> json, {
     ValueSerializer? serializer,
   }) {
     serializer ??= driftRuntimeOptions.defaultSerializer;
-    return Channel(
+    return ChannelRow(
       conversationId: serializer.fromJson<String>(json['conversationId']),
       label: serializer.fromJson<String>(json['label']),
       encryptionKey: serializer.fromJson<String>(json['encryptionKey']),
@@ -835,7 +836,7 @@ class Channel extends DataClass implements Insertable<Channel> {
     };
   }
 
-  Channel copyWith({
+  ChannelRow copyWith({
     String? conversationId,
     String? label,
     String? encryptionKey,
@@ -849,7 +850,7 @@ class Channel extends DataClass implements Insertable<Channel> {
     Value<DateTime?> lastSeen = const Value.absent(),
     Value<String?> ratchetState = const Value.absent(),
     Value<String?> pendingRgb = const Value.absent(),
-  }) => Channel(
+  }) => ChannelRow(
     conversationId: conversationId ?? this.conversationId,
     label: label ?? this.label,
     encryptionKey: encryptionKey ?? this.encryptionKey,
@@ -876,8 +877,8 @@ class Channel extends DataClass implements Insertable<Channel> {
     ratchetState: ratchetState.present ? ratchetState.value : this.ratchetState,
     pendingRgb: pendingRgb.present ? pendingRgb.value : this.pendingRgb,
   );
-  Channel copyWithCompanion(ChannelsCompanion data) {
-    return Channel(
+  ChannelRow copyWithCompanion(ChannelsCompanion data) {
+    return ChannelRow(
       conversationId: data.conversationId.present
           ? data.conversationId.value
           : this.conversationId,
@@ -918,7 +919,7 @@ class Channel extends DataClass implements Insertable<Channel> {
 
   @override
   String toString() {
-    return (StringBuffer('Channel(')
+    return (StringBuffer('ChannelRow(')
           ..write('conversationId: $conversationId, ')
           ..write('label: $label, ')
           ..write('encryptionKey: $encryptionKey, ')
@@ -955,7 +956,7 @@ class Channel extends DataClass implements Insertable<Channel> {
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      (other is Channel &&
+      (other is ChannelRow &&
           other.conversationId == this.conversationId &&
           other.label == this.label &&
           other.encryptionKey == this.encryptionKey &&
@@ -971,7 +972,7 @@ class Channel extends DataClass implements Insertable<Channel> {
           other.pendingRgb == this.pendingRgb);
 }
 
-class ChannelsCompanion extends UpdateCompanion<Channel> {
+class ChannelsCompanion extends UpdateCompanion<ChannelRow> {
   final Value<String> conversationId;
   final Value<String> label;
   final Value<String> encryptionKey;
@@ -1021,7 +1022,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
        label = Value(label),
        encryptionKey = Value(encryptionKey),
        authPublicKey = Value(authPublicKey);
-  static Insertable<Channel> custom({
+  static Insertable<ChannelRow> custom({
     Expression<String>? conversationId,
     Expression<String>? label,
     Expression<String>? encryptionKey,
@@ -5990,7 +5991,7 @@ typedef $$ChannelsTableUpdateCompanionBuilder =
     });
 
 final class $$ChannelsTableReferences
-    extends BaseReferences<_$AppDatabase, $ChannelsTable, Channel> {
+    extends BaseReferences<_$AppDatabase, $ChannelsTable, ChannelRow> {
   $$ChannelsTableReferences(super.$_db, super.$_table, super.$_typedResult);
 
   static MultiTypedResultKey<$MessagesTable, List<Message>> _messagesRefsTable(
@@ -6366,14 +6367,14 @@ class $$ChannelsTableTableManager
         RootTableManager<
           _$AppDatabase,
           $ChannelsTable,
-          Channel,
+          ChannelRow,
           $$ChannelsTableFilterComposer,
           $$ChannelsTableOrderingComposer,
           $$ChannelsTableAnnotationComposer,
           $$ChannelsTableCreateCompanionBuilder,
           $$ChannelsTableUpdateCompanionBuilder,
-          (Channel, $$ChannelsTableReferences),
-          Channel,
+          (ChannelRow, $$ChannelsTableReferences),
+          ChannelRow,
           PrefetchHooks Function({bool messagesRefs, bool sessionTagsRefs})
         > {
   $$ChannelsTableTableManager(_$AppDatabase db, $ChannelsTable table)
@@ -6472,7 +6473,7 @@ class $$ChannelsTableTableManager
                     return [
                       if (messagesRefs)
                         await $_getPrefetchedData<
-                          Channel,
+                          ChannelRow,
                           $ChannelsTable,
                           Message
                         >(
@@ -6493,7 +6494,7 @@ class $$ChannelsTableTableManager
                         ),
                       if (sessionTagsRefs)
                         await $_getPrefetchedData<
-                          Channel,
+                          ChannelRow,
                           $ChannelsTable,
                           SessionTag
                         >(
@@ -6524,14 +6525,14 @@ typedef $$ChannelsTableProcessedTableManager =
     ProcessedTableManager<
       _$AppDatabase,
       $ChannelsTable,
-      Channel,
+      ChannelRow,
       $$ChannelsTableFilterComposer,
       $$ChannelsTableOrderingComposer,
       $$ChannelsTableAnnotationComposer,
       $$ChannelsTableCreateCompanionBuilder,
       $$ChannelsTableUpdateCompanionBuilder,
-      (Channel, $$ChannelsTableReferences),
-      Channel,
+      (ChannelRow, $$ChannelsTableReferences),
+      ChannelRow,
       PrefetchHooks Function({bool messagesRefs, bool sessionTagsRefs})
     >;
 typedef $$MessagesTableCreateCompanionBuilder =

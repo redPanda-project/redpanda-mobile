@@ -1,6 +1,10 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart' as drift;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:redpanda/database/database.dart' hide Channel;
+import 'package:hex/hex.dart';
+import 'package:redpanda/database/counterpart_oh.dart';
+import 'package:redpanda/database/database.dart';
 import 'package:redpanda/repositories/channel_repository.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
 
@@ -160,6 +164,141 @@ void main() {
 
         expect(await repo.getChannels(), hasLength(2));
       });
+    });
+
+    // TD118: `counterpartOhSet` is the counterpart's full known mailbox set
+    // and the single-target `counterpartOh*` columns mirror its FIRST entry
+    // (see the column docs in database.dart). `addChannel` used to write
+    // only the three primary columns and never the set, so the primary
+    // could stop being the head of the set. Both writers now derive all
+    // four columns in `counterpartOhColumns`.
+    group('counterpart mailbox invariant (TD118)', () {
+      OHDescriptor mailbox(String endpoint, int seed) => OHDescriptor(
+        serverEndpoint: endpoint,
+        handleId: List.generate(20, (i) => (i + seed) & 0xff),
+        authPublicKey: List.generate(32, (i) => (i + seed) & 0xff),
+      );
+
+      Future<void> expectPrimaryIsHeadOfSet(String conversationId) async {
+        final row = await (db.select(
+          db.channels,
+        )..where((t) => t.conversationId.equals(conversationId))).getSingle();
+        final set = decodeCounterpartOhSet(row.counterpartOhSet);
+        expect(set, isNotNull, reason: 'the set must be written too');
+        expect(row.counterpartOhEndpoint, equals(set!.first.serverEndpoint));
+        expect(row.counterpartOhId, equals(HEX.encode(set.first.handleId)));
+        expect(
+          row.counterpartOhPublicKey,
+          equals(HEX.encode(set.first.authPublicKey)),
+        );
+      }
+
+      test(
+        'a fresh add stores the QR mailbox as the head of the set',
+        () async {
+          final descriptor = mailbox('node-1:59558', 1);
+          final channel = (await Channel.generate(
+            'With OH',
+          )).copyWith(counterpartOhDescriptor: descriptor);
+
+          await repo.addChannel(channel);
+
+          await expectPrimaryIsHeadOfSet(channel.id);
+          final row = await (db.select(
+            db.channels,
+          )..where((t) => t.conversationId.equals(channel.id))).getSingle();
+          expect(decodeCounterpartOhSet(row.counterpartOhSet), hasLength(1));
+        },
+      );
+
+      // Review finding (T124): rows written BEFORE the fix have the three
+      // primary columns filled and `counterpartOhSet` still NULL — that was
+      // exactly TD118. A re-scan must not throw the only mailbox such a row
+      // ever knew away just because it never made it into a set.
+      test(
+        'a re-scan keeps the primary of a row that has no set yet',
+        () async {
+          final created = await Channel.generate('Pre-fix row');
+          await repo.addChannel(created);
+
+          final old = mailbox('node-1:59558', 1);
+          await (db.update(
+            db.channels,
+          )..where((t) => t.conversationId.equals(created.id))).write(
+            ChannelsCompanion(
+              counterpartOhEndpoint: drift.Value(old.serverEndpoint),
+              counterpartOhId: drift.Value(HEX.encode(old.handleId)),
+              counterpartOhPublicKey: drift.Value(
+                HEX.encode(old.authPublicKey),
+              ),
+            ),
+          );
+
+          final fresh = mailbox('node-2:59558', 2);
+          final rescanned = (await Channel.fromJson(
+            created.toJson(),
+          )).copyWith(counterpartOhDescriptor: fresh);
+          expect(await repo.addChannel(rescanned), isFalse);
+
+          await expectPrimaryIsHeadOfSet(created.id);
+          final row = await (db.select(
+            db.channels,
+          )..where((t) => t.conversationId.equals(created.id))).getSingle();
+          expect(
+            decodeCounterpartOhSet(
+              row.counterpartOhSet,
+            )!.map((d) => d.serverEndpoint),
+            equals(['node-2:59558', 'node-1:59558']),
+          );
+        },
+      );
+
+      test(
+        'a re-scan promotes the new mailbox and keeps the known ones',
+        () async {
+          final created = await Channel.generate('Multi OH');
+          await repo.addChannel(created);
+
+          // What an `oh_update` announce left behind: two known mailboxes,
+          // the first mirrored into the primary columns.
+          final known = [
+            mailbox('node-1:59558', 1),
+            mailbox('node-2:59558', 2),
+          ];
+          await (db.update(
+            db.channels,
+          )..where((t) => t.conversationId.equals(created.id))).write(
+            ChannelsCompanion(
+              counterpartOhEndpoint: drift.Value(known.first.serverEndpoint),
+              counterpartOhId: drift.Value(HEX.encode(known.first.handleId)),
+              counterpartOhPublicKey: drift.Value(
+                HEX.encode(known.first.authPublicKey),
+              ),
+              counterpartOhSet: drift.Value(
+                jsonEncode([for (final d in known) d.toJsonMap()]),
+              ),
+            ),
+          );
+
+          // A QR code naming the second mailbox: it becomes the primary ...
+          final rescanned = (await Channel.fromJson(
+            created.toJson(),
+          )).copyWith(counterpartOhDescriptor: known[1]);
+          expect(await repo.addChannel(rescanned), isFalse);
+
+          await expectPrimaryIsHeadOfSet(created.id);
+          final row = await (db.select(
+            db.channels,
+          )..where((t) => t.conversationId.equals(created.id))).getSingle();
+          final set = decodeCounterpartOhSet(row.counterpartOhSet)!;
+          expect(row.counterpartOhEndpoint, equals('node-2:59558'));
+          // ... and the other known mailbox is kept, not dropped.
+          expect(
+            set.map((d) => d.serverEndpoint),
+            equals(['node-2:59558', 'node-1:59558']),
+          );
+        },
+      );
     });
 
     test('watchChannels emits the current channel list', () async {
