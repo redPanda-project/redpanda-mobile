@@ -579,7 +579,7 @@ final messagesStreamProvider = StreamProvider.family<List<Message>, String>((
       .watch();
 });
 
-final channelProvider = FutureProvider.family<Channel?, String>((
+final channelProvider = FutureProvider.family<ChannelRow?, String>((
   ref,
   conversationId,
 ) async {

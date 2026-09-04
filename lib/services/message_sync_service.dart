@@ -1,19 +1,17 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:drift/drift.dart' show InsertMode, Value;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hex/hex.dart';
+import 'package:redpanda/database/counterpart_oh.dart';
 import 'package:redpanda/database/database.dart';
 import 'package:redpanda/repositories/group_repository.dart';
 import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/repositories/outbound_handle_repository.dart';
 import 'package:redpanda/services/outbox_service.dart';
 import 'package:redpanda/shared/providers.dart';
-// `hide Channel`: the light client's domain `Channel` collides with the Drift
-// row class of the same name, and this file only ever handles the row.
-import 'package:redpanda_light_client/redpanda_light_client.dart' hide Channel;
+import 'package:redpanda_light_client/redpanda_light_client.dart';
 
 /// The app's persistence channel: it owns the ONE subscription to the network
 /// client's [RedPandaClient.stateUpdates] and writes every state change to the
@@ -239,37 +237,9 @@ class MessageSyncService {
   /// a restart. The primary (first) also feeds the single-target columns.
   Future<void> handleCounterpartOhUpdate(CounterpartOhUpdate update) async {
     if (update.descriptors.isEmpty) return;
-    final primary = update.descriptors.first;
-    final setJson = jsonEncode(
-      update.descriptors.map((d) => d.toJsonMap()).toList(),
-    );
-    await (_db.update(
-      _db.channels,
-    )..where((c) => c.conversationId.equals(update.channelId))).write(
-      ChannelsCompanion(
-        counterpartOhEndpoint: Value(primary.serverEndpoint),
-        counterpartOhId: Value(HEX.encode(primary.handleId)),
-        counterpartOhPublicKey: Value(HEX.encode(primary.authPublicKey)),
-        counterpartOhSet: Value(setJson),
-      ),
-    );
-  }
-
-  /// Decodes the persisted counterpart OH set JSON (T42) into descriptors, or null
-  /// when absent/malformed (the client then falls back to the primary OH).
-  static List<OHDescriptor>? decodeCounterpartOhSet(String? json) {
-    if (json == null || json.isEmpty) return null;
-    try {
-      final decoded = jsonDecode(json);
-      if (decoded is! List) return null;
-      final out = [
-        for (final entry in decoded)
-          OHDescriptor.fromJsonMap(entry as Map<String, dynamic>),
-      ];
-      return out.isEmpty ? null : out;
-    } catch (_) {
-      return null;
-    }
+    await (_db.update(_db.channels)
+          ..where((c) => c.conversationId.equals(update.channelId)))
+        .write(counterpartOhColumns(update.descriptors));
   }
 
   /// Persists advanced ratchet state (MS03b) so the channel ratchet
@@ -396,7 +366,7 @@ class MessageSyncService {
   /// The ONE place that translates a persisted channel row into the network
   /// worker's restore call — with the COMPLETE argument set. Anything that
   /// registers a channel with fewer arguments is a bug, not an optimization.
-  void _registerChannel(Channel channel, Map<String, int> sessionTags) {
+  void _registerChannel(ChannelRow channel, Map<String, int> sessionTags) {
     _registeredChannelIds.add(channel.conversationId);
     _client.addChannelKeys(
       channel.conversationId,

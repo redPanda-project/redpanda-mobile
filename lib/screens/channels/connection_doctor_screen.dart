@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:redpanda/shared/providers.dart';
-import 'package:redpanda_light_client/redpanda_light_client.dart' hide Channel;
+import 'package:redpanda_light_client/redpanda_light_client.dart';
 
 /// Verbindungs-Doctor (T25): runs the per-channel diagnostic stages
 /// sequentially and renders each with a traffic-light dot, its runtime and a

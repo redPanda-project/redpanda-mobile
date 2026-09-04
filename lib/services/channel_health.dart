@@ -4,7 +4,7 @@ import 'package:redpanda/database/database.dart';
 import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/services/outbox_service.dart';
 import 'package:redpanda/shared/providers.dart';
-import 'package:redpanda_light_client/redpanda_light_client.dart' hide Channel;
+import 'package:redpanda_light_client/redpanda_light_client.dart';
 
 /// Latest mailbox fetch state of one channel. In-memory only — the polling
 /// loop repopulates it within one cycle (30 s) after an app restart, so
@@ -155,7 +155,7 @@ final ownHandleProvider = StreamProvider.family<OutboundHandle?, String>((
 });
 
 /// One channels-table row, live.
-final channelRowProvider = StreamProvider.family<Channel?, String>((
+final channelRowProvider = StreamProvider.family<ChannelRow?, String>((
   ref,
   conversationId,
 ) {

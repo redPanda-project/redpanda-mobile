@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:redpanda/services/channel_health.dart';
 import 'package:redpanda/shared/providers.dart';
-import 'package:redpanda_light_client/redpanda_light_client.dart' hide Channel;
+import 'package:redpanda_light_client/redpanda_light_client.dart';
 
 /// Per-channel transparency page: shows when the important background jobs
 /// for this channel last ran (mailbox checks, own-mailbox renewal, send
