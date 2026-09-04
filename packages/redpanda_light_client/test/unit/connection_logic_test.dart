@@ -73,10 +73,16 @@ class MockPeerRepository implements PeerRepository {
   /// Addresses reported with `isFailure: true`, in call order.
   ///
   /// This is the client's own "the dial failed" signal (it runs through
-  /// `ActivePeer._shutdown` -> `onDisconnect`), and it is armed in the same
-  /// step as the retry backoff. Tests use it to wait for the failure to have
-  /// landed instead of guessing a delay.
+  /// `ActivePeer._shutdown` -> `onDisconnect` -> `_recordConnectionFailure`),
+  /// and the retry backoff is armed in the same synchronous step, just before
+  /// it. Tests use it to wait for the failure to have landed instead of
+  /// guessing a delay.
   final List<String> failures = [];
+
+  /// Invoked synchronously from inside `updatePeer(isFailure: true)`, i.e.
+  /// from inside the client's failure report. Lets a test observe the state
+  /// the client is in at exactly that instant (TD080).
+  void Function(String address)? onFailure;
 
   @override
   void updatePeer(
@@ -92,7 +98,10 @@ class MockPeerRepository implements PeerRepository {
       () => PeerStats(address: address),
     );
     if (latencyMs != null) stats.averageLatencyMs = latencyMs;
-    if (isFailure == true) failures.add(address);
+    if (isFailure == true) {
+      failures.add(address);
+      onFailure?.call(address);
+    }
     // stats.successCount/failureCount logic ignored for simplicity unless needed
   }
 
@@ -396,6 +405,143 @@ void main() {
         await Future.delayed(const Duration(milliseconds: 100));
 
         expect(socketAttempts.length, 1);
+      },
+    );
+  });
+
+  // TD078/TD079/TD080: what the client really does across a full outage.
+  //
+  // These tests hand the client an injected clock (`now:`) instead of waiting
+  // on the wall clock. `fake_async` is not an option here: the dial loop
+  // awaits real `InternetAddress.lookup` calls, so the zone's fake timers
+  // never advance past them (TD079).
+  group('Outage cycle', () {
+    RedPandaLightClient? client;
+    late MockPeerRepository mockRepo;
+    // Reassigned by the tests to move the client's clock forward.
+    late DateTime fakeNow;
+
+    setUp(() {
+      fakeNow = DateTime.utc(2026, 1, 1, 12);
+      mockRepo = MockPeerRepository();
+      for (var i = 1; i <= 6; i++) {
+        mockRepo.setPeerScore('127.0.0.1:100$i', i * 50);
+      }
+    });
+
+    tearDown(() async {
+      await client?.disconnect();
+    });
+
+    test('total outage: backoff alone stops the dials, and the first redial '
+        'happens as soon as it expires', () async {
+      final socketAttempts = <String>[];
+      client = RedPandaLightClient(
+        selfNodeId: NodeId.fromPublicKey(await KeyPair.generate()),
+        selfKeys: await KeyPair.generate(),
+        peerRepository: mockRepo,
+        socketFactory: recordingFactory(socketAttempts, failing: true),
+        seeds: [],
+        now: () => fakeNow,
+      );
+
+      // Outage, phase 1: the fast-boot check fills all five slots, every
+      // dial is refused. The sixth (worst) address is left untried.
+      await waitFor(
+        () => socketAttempts.length >= 5,
+        description: 'fast-boot burst (5 dials)',
+      );
+      await waitFor(
+        () => mockRepo.failures.length >= 5,
+        description: '5 failures recorded',
+      );
+
+      // Outage, phase 2: one more check picks up the last untried address —
+      // now every known address has failed once and sits in its 2 s backoff.
+      await client!.addPeer('127.0.0.1:1001');
+      await waitFor(
+        () => mockRepo.failures.length >= 6,
+        description: 'the sixth address failed too (total outage)',
+      );
+      expect(socketAttempts.toSet().length, 6);
+
+      // Outage, phase 3: this is the state TD078 is about — nothing
+      // connected, nothing dialable, every candidate in backoff. Three
+      // further checks must produce no dial at all. A fixed window is the
+      // right tool for a "nothing happens" assertion: too short only
+      // weakens it, it can never redden it.
+      for (var i = 0; i < 3; i++) {
+        await client!.addPeer('127.0.0.1:1001');
+      }
+      await Future.delayed(const Duration(milliseconds: 100));
+      expect(
+        socketAttempts.length,
+        6,
+        reason:
+            'during the outage the backoff map alone suppresses every dial '
+            '— no extra global throttle is involved',
+      );
+
+      // Recovery: the 2 s backoff expires. The very next check must dial
+      // again immediately. A 10 s "bad internet" throttle keyed on this
+      // state (TD078) would swallow this redial for another ~8 s.
+      fakeNow = fakeNow.add(const Duration(seconds: 3));
+      await client!.addPeer('127.0.0.1:1001');
+      await waitFor(
+        () => socketAttempts.length > 6,
+        description: 'redial in the first check after backoff expiry',
+      );
+    });
+
+    test(
+      'TD080: the retry backoff is armed before the failure is reported',
+      () async {
+        // One address only, so the sole thing a re-entrant check could do is
+        // re-dial the address that just failed.
+        final socketAttempts = <String>[];
+        mockRepo = MockPeerRepository();
+        mockRepo.setPeerScore('127.0.0.1:9001', 50);
+
+        var reentered = false;
+        mockRepo.onFailure = (address) {
+          if (reentered) return; // a re-dial loop would otherwise not end
+          reentered = true;
+          // This runs INSIDE the client's failure report
+          // (`updatePeer(isFailure: true)`), and `addPeer` picks the next
+          // cycle's dial candidates synchronously, before its first await.
+          // So this is the exact instant TD080 is about: if the backoff were
+          // armed *after* the report, this check would see an address that
+          // failed but is not in backoff, and dial it again.
+          unawaited(client!.addPeer(address));
+        };
+
+        client = RedPandaLightClient(
+          selfNodeId: NodeId.fromPublicKey(await KeyPair.generate()),
+          selfKeys: await KeyPair.generate(),
+          peerRepository: mockRepo,
+          socketFactory: recordingFactory(socketAttempts, failing: true),
+          seeds: [],
+          now: () => fakeNow,
+        );
+
+        await waitFor(
+          () => mockRepo.failures.isNotEmpty,
+          description: 'the single dial failed',
+        );
+        await Future.delayed(const Duration(milliseconds: 100));
+
+        expect(
+          reentered,
+          isTrue,
+          reason: 'the re-entrant connection check must really have run',
+        );
+        expect(
+          socketAttempts.length,
+          1,
+          reason:
+              'a check re-entered from the failure report must already see '
+              'the backoff (_recordConnectionFailure arms it first)',
+        );
       },
     );
   });
