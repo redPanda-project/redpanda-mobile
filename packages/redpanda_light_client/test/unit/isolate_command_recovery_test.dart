@@ -166,6 +166,25 @@ void main() {
     );
   });
 
+  test('a queued command is either request-bound or knowingly not', () {
+    // `requestId` decides whether a buffered command survives a worker death
+    // (see PendingCommandQueue.discardRequestBound). A new fire-and-forget
+    // command therefore has to be added here deliberately instead of
+    // inheriting the death policy by accident.
+    const knownFireAndForget = {CmdEnsureOhRedundancy};
+    for (final cmd in samples.values.where(
+      (c) => c.recovery == CommandRecovery.queuedUntilWorkerReady,
+    )) {
+      expect(
+        cmd.requestId != null,
+        !knownFireAndForget.contains(cmd.runtimeType),
+        reason:
+            '${cmd.runtimeType}: a queued command either carries the request '
+            'id of a waiting caller or is listed as fire-and-forget here',
+      );
+    }
+  });
+
   test('every queuedUntilWorkerReady command can be buffered', () {
     final queue = PendingCommandQueue();
     final queued = samples.values
@@ -222,6 +241,22 @@ void main() {
       // never queued is not mistaken for it.
       expect(queue.remove(CmdSendMessage(1, 'chan', 'first attempt')), isFalse);
       expect(queue.drain(), [alive]);
+    });
+
+    test('a worker death discards requests but keeps fire-and-forget', () {
+      final queue = PendingCommandQueue();
+      final request = CmdSendMessage(1, 'chan', 'hi');
+      final fireAndForget = CmdEnsureOhRedundancy('chan');
+      queue
+        ..add(request)
+        ..add(fireAndForget);
+
+      // The request's caller was just failed by `_failPendingRequests`;
+      // re-running it after the respawn would execute a request nobody
+      // awaits. The top-up has no caller, so dropping it would be exactly
+      // the silent loss TD115 removes.
+      expect(queue.discardRequestBound(), [request]);
+      expect(queue.drain(), [fireAndForget]);
     });
 
     test('a reestablished command must not be buffered', () {

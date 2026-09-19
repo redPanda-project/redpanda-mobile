@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:isolate';
 
 import 'package:redpanda_light_client/src/client/isolate_client.dart';
@@ -170,6 +171,90 @@ void main() {
 
       await waitForLogCount('cmd:CmdInit', 2);
       await waitForLogCount('cmd:CmdEnsureOhRedundancy', 1);
+
+      // Delivered AFTER the state replay of the respawn, never before it: a
+      // one-off may depend on the channel keys and handles the replay
+      // re-establishes.
+      final secondInit = capturedLogs.lastIndexWhere(
+        (l) => l.contains('cmd:CmdInit'),
+      );
+      final flushed = capturedLogs.indexWhere(
+        (l) => l.contains('cmd:CmdEnsureOhRedundancy'),
+      );
+      expect(flushed, greaterThan(secondInit));
+    },
+  );
+
+  test(
+    'TD115: a buffered command does not overtake a caller awaiting readiness',
+    () async {
+      final client = RedPandaIsolateClient(
+        seeds: const [],
+        workerEntryPoint: crashableWorkerEntry,
+      );
+      addTearDown(client.dispose);
+
+      // Both are issued before the worker is up: the top-up goes through the
+      // queue, the OH registration through `await _isolateReady`. The queue
+      // must not jump the queue — the app restores its persisted handles that
+      // way, and a top-up that runs first sees zero own mailboxes.
+      // ignore: unawaited_futures
+      client.ensureOhRedundancy('chan1');
+      // The fake worker never answers; the registration fails on dispose (or
+      // in its 15 s timeout, long after this test) — both are irrelevant
+      // here, only the command ORDER is.
+      unawaited(
+        client
+            .registerOutboundHandle(channelId: 'chan1')
+            .then<void>((_) {}, onError: (Object _) {}),
+      );
+
+      await waitForLogCount('cmd:CmdEnsureOhRedundancy', 1);
+      final registration = capturedLogs.indexWhere(
+        (l) => l.contains('cmd:CmdRegisterOutboundHandle'),
+      );
+      final topUp = capturedLogs.indexWhere(
+        (l) => l.contains('cmd:CmdEnsureOhRedundancy'),
+      );
+      expect(registration, isNot(-1));
+      expect(registration, lessThan(topUp));
+    },
+  );
+
+  test(
+    'the connect/lifecycle FLAGS drive the replay, in both directions',
+    () async {
+      final client = RedPandaIsolateClient(
+        seeds: const [],
+        workerEntryPoint: crashableWorkerEntry,
+      );
+      addTearDown(client.dispose);
+
+      await client.connect();
+      client.onPause();
+      await waitForLogCount('cmd:CmdInit', 1);
+      await waitForLogCount('cmd:CmdLifecyclePause', 1);
+      final connectsBeforeCrash = capturedLogs
+          .where((l) => l.contains('cmd:CmdConnect'))
+          .length;
+
+      // Crashes the worker AND clears `_connectRequested`.
+      await client.disconnect();
+
+      await waitForLogCount('cmd:CmdInit', 2);
+      // `_lifecyclePaused` is still true ⇒ replayed …
+      await waitForLogCount('cmd:CmdLifecyclePause', 2);
+      // … and the cleared connect flag is replayed as an ABSENCE. The pause
+      // above is sent after the connect would have been (`_replayState`
+      // order), so by now a third CmdConnect would already be in the log.
+      expect(
+        capturedLogs.where((l) => l.contains('cmd:CmdConnect')).length,
+        connectsBeforeCrash,
+      );
+      expect(
+        capturedLogs.where((l) => l.contains('cmd:CmdLifecycleResume')),
+        isEmpty,
+      );
     },
   );
 

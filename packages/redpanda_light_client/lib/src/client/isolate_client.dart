@@ -49,6 +49,14 @@ class RedPandaIsolateClient implements RedPandaClient {
   int _spawnGeneration = 0;
   int _respawnAttempts = 0;
   bool _respawnScheduled = false;
+
+  /// Bumped every time a worker death is observed. [_onWorkerReady] awaits
+  /// the identity generation on the FIRST start, and a worker can die inside
+  /// that await — attaching its dead port afterwards would send CmdInit, the
+  /// replay and the queue flush into a closed port AND cancel the pending
+  /// respawn (`_sendPort != null`), leaving networking dead until the app
+  /// restarts. The epoch makes that attach detectable.
+  int _workerEpoch = 0;
   bool _connectRequested = false;
   bool _lifecyclePaused = false;
 
@@ -198,36 +206,58 @@ class RedPandaIsolateClient implements RedPandaClient {
   }
 
   Future<void> _onWorkerReady(SendPort port) async {
+    final epoch = _workerEpoch;
     _respawnAttempts = 0;
     _initKeys ??= _explicitKeys ?? await KeyPair.generate();
     _initNodeId ??= _explicitNodeId ?? NodeId.fromPublicKey(_initKeys!);
+    if (_disposed || epoch != _workerEpoch) {
+      // The worker died while we were generating the identity (or the client
+      // was disposed). Attaching now would publish a closed port as the live
+      // one and swallow everything sent through it; the respawn already
+      // scheduled in [_onWorkerDied] takes over instead.
+      RpLog.info(
+        'RedPandaIsolateClient: worker died before it was initialized; '
+        'not attaching its port',
+      );
+      return;
+    }
     _sendPort = port;
     port.send(CmdInit(nodeId: _initNodeId, keyPair: _initKeys, seeds: seeds));
     _replayState(port);
-    // After the replay, never before: a queued one-off (a send, an OH
-    // registration) may depend on the channel keys and handles the replay
-    // re-establishes.
-    for (final cmd in _pending.drain()) {
-      port.send(cmd);
-    }
     if (!_isolateReady.isCompleted) {
       _isolateReady.complete();
+    }
+    // The queue is flushed LAST, in a microtask, so a buffered command cannot
+    // overtake either the state replay above or a caller that was waiting on
+    // `_isolateReady` (the app restores its persisted handles that way, and a
+    // queued top-up must not run before them). This orders DELIVERY only —
+    // the worker's command handlers are async and may still interleave their
+    // awaits, which is pre-existing worker behaviour, not something the flush
+    // point can fix.
+    scheduleMicrotask(() => _flushPending(port));
+  }
+
+  /// Sends everything buffered while no worker was attached (TD115).
+  void _flushPending(SendPort port) {
+    if (_disposed || _sendPort != port) return; // worker changed again
+    for (final cmd in _pending.drain()) {
+      port.send(cmd);
     }
   }
 
   void _onWorkerDied() {
     if (_disposed) return;
+    _workerEpoch++;
     _sendPort = null;
     _failPendingRequests();
-    // Their callers were just failed above; flushing them into the respawned
-    // worker would run a request whose future already completed with an error.
-    // Commands queued from here on belong to callers that are still waiting.
-    if (!_pending.isEmpty) {
+    // Buffered REQUESTS go with their completers, which `_failPendingRequests`
+    // just failed; fire-and-forget commands stay queued for the next worker.
+    final discarded = _pending.discardRequestBound();
+    if (discarded.isNotEmpty) {
       RpLog.debug(
-        'RedPandaIsolateClient: dropping ${_pending.length} queued command(s) '
-        'of failed requests',
+        'RedPandaIsolateClient: dropped ${discarded.length} queued request(s) '
+        'whose callers were just failed',
       );
-      _pending.clear();
     }
     if (_respawnScheduled) return;
     _respawnScheduled = true;
@@ -429,6 +459,14 @@ class RedPandaIsolateClient implements RedPandaClient {
   /// (TD115): a command is either re-established by [_onWorkerReady] or
   /// buffered here until it can be delivered.
   void _send(IsolateCommand cmd) {
+    if (_disposed) {
+      // Nothing will ever flush the queue again — buffering here would just
+      // pin the command until the caller's own timeout.
+      RpLog.debug(
+        'RedPandaIsolateClient: disposed; discarding ${cmd.runtimeType}',
+      );
+      return;
+    }
     final port = _sendPort;
     if (port != null) {
       port.send(cmd);

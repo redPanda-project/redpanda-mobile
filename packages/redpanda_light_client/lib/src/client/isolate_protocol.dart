@@ -42,6 +42,20 @@ abstract class IsolateCommand {
   /// How the isolate client must treat this command while no worker is
   /// attached. Abstract on purpose — see [CommandRecovery].
   CommandRecovery get recovery;
+
+  /// The request id when exactly one caller is waiting for an answer to this
+  /// command (the isolate client holds its completer), null when the command
+  /// is fire-and-forget.
+  ///
+  /// Every request/response command already declares `final int requestId`,
+  /// which implements this getter — so the distinction needs no second
+  /// declaration and cannot drift from the request id actually sent. It
+  /// decides what happens to a BUFFERED command when the worker dies: a
+  /// request-bound one must go (its completer was just failed, re-running it
+  /// would execute a request nobody awaits any more), a fire-and-forget one
+  /// must stay (dropping it would be the silent loss of TD115, one respawn
+  /// later).
+  int? get requestId => null;
 }
 
 class CmdInit extends IsolateCommand {
@@ -88,6 +102,7 @@ class CmdSendMessage extends IsolateCommand {
   @override
   CommandRecovery get recovery => CommandRecovery.queuedUntilWorkerReady;
 
+  @override
   final int requestId;
   final String channelId;
   final String content;
@@ -108,6 +123,7 @@ class CmdRunLoopbackTest extends IsolateCommand {
   @override
   CommandRecovery get recovery => CommandRecovery.queuedUntilWorkerReady;
 
+  @override
   final int requestId;
   final String channelId;
   CmdRunLoopbackTest(this.requestId, this.channelId);
@@ -118,6 +134,7 @@ class CmdRunChannelDoctor extends IsolateCommand {
   @override
   CommandRecovery get recovery => CommandRecovery.queuedUntilWorkerReady;
 
+  @override
   final int requestId;
   final String channelId;
   CmdRunChannelDoctor(this.requestId, this.channelId);
@@ -127,6 +144,7 @@ class CmdRegisterOutboundHandle extends IsolateCommand {
   @override
   CommandRecovery get recovery => CommandRecovery.queuedUntilWorkerReady;
 
+  @override
   final int requestId;
   final String? channelId;
   CmdRegisterOutboundHandle(this.requestId, {this.channelId});
@@ -278,6 +296,7 @@ class CmdSendGroupMessage extends IsolateCommand {
   @override
   CommandRecovery get recovery => CommandRecovery.queuedUntilWorkerReady;
 
+  @override
   final int requestId;
   final String groupId;
   final String content;
@@ -296,6 +315,7 @@ class CmdRotateGroupKey extends IsolateCommand {
   @override
   CommandRecovery get recovery => CommandRecovery.queuedUntilWorkerReady;
 
+  @override
   final int requestId;
   final String groupId;
   final List<GroupMemberInfo> members;
@@ -309,6 +329,7 @@ class CmdRetryPendingRotations extends IsolateCommand {
   @override
   CommandRecovery get recovery => CommandRecovery.queuedUntilWorkerReady;
 
+  @override
   final int requestId;
   final String groupId;
   CmdRetryPendingRotations(this.requestId, this.groupId);
@@ -320,6 +341,7 @@ class CmdSendGroupHandshake extends IsolateCommand {
   @override
   CommandRecovery get recovery => CommandRecovery.queuedUntilWorkerReady;
 
+  @override
   final int requestId;
   final String channelId;
   final List<int> handshake;
@@ -332,6 +354,7 @@ class CmdSendGroupInfoUpdate extends IsolateCommand {
   @override
   CommandRecovery get recovery => CommandRecovery.queuedUntilWorkerReady;
 
+  @override
   final int requestId;
   final String groupId;
   final String label;

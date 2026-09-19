@@ -54,10 +54,21 @@ class PendingCommandQueue {
   /// message the retry cannot deduplicate.
   bool remove(IsolateCommand cmd) => _commands.remove(cmd);
 
-  /// Discards everything buffered — used when the worker dies, because the
-  /// callers waiting on those commands have just been failed; re-running
-  /// their requests after the respawn would execute a request whose future
-  /// already completed with an error (a duplicate send).
+  /// Applies the worker-death policy and returns the commands it discarded:
+  /// every request-bound command goes (its caller was just failed by
+  /// `_failPendingRequests`, so executing it after the respawn would run a
+  /// request nobody awaits any more — for a first send attempt that means a
+  /// second, undedupable message), while fire-and-forget commands stay
+  /// buffered for the next worker — dropping those would be exactly the
+  /// silent loss TD115 removes, one respawn later.
+  List<IsolateCommand> discardRequestBound() {
+    final discarded = _commands.where((c) => c.requestId != null).toList();
+    _commands.removeWhere((c) => c.requestId != null);
+    return discarded;
+  }
+
+  /// Discards everything buffered (dispose only — after that nothing will
+  /// ever flush the queue again).
   void clear() => _commands.clear();
 
   int get length => _commands.length;

@@ -339,6 +339,23 @@ void main() {
       expect(cmd.ratchetState, equals('ratchet-v7'));
     });
 
+    test('a re-register with a NEW display name updates the projection', () {
+      // The one field a re-registration is allowed to CHANGE: the user
+      // renamed themselves. The worker applies it (`RendezvousManager
+      // .register`), so the projection must too — otherwise a respawn
+      // replays the old name and the rename disappears from the DHT record.
+      final replay = WorkerReplayState()..recordChannelKeys(channelCmd('c1'));
+      replay.recordChannelKeys(
+        CmdAddChannelKeys(
+          'c1',
+          List<int>.filled(32, 1),
+          ownDisplayName: 'renamed',
+          isChannelCreator: true,
+        ),
+      );
+      expect(onlyChannel(replay).ownDisplayName, equals('renamed'));
+    });
+
     test('a stale re-register never moves the counterpart mailbox back', () {
       final replay = WorkerReplayState()..recordChannelKeys(channelCmd('c1'));
       replay.apply(

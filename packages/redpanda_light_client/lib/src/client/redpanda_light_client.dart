@@ -3000,11 +3000,15 @@ class RedPandaLightClient implements RedPandaClient {
         now,
       );
       // TD117: the merge state is the only place the counterpart's entry_ts
-      // lives, and a resolved record is the ONLY way it grows — publishing
-      // merely re-stamps our own entry from live state. Emit before the
-      // early-outs below: a record can advance a third participant (or a
-      // counterpart entry that carries no newer OH list) without changing the
-      // deposit set, and that knowledge must still survive a respawn.
+      // lives, and a resolved record is the only way we learn about OTHER
+      // participants (publishing also touches the state, but only to re-stamp
+      // our own entry from live state, which a respawned worker regenerates).
+      // Emit before the early-outs below: a record can advance a third
+      // participant (or a counterpart entry that carries no newer OH list)
+      // without changing the deposit set, and that knowledge must still
+      // survive a respawn. Two lookups in flight (today's + yesterday's key)
+      // may both emit; each snapshot is the full current state, so a
+      // duplicate is harmless.
       final mergeStateAfter = _rendezvous.exportMergeState(channelId);
       if (mergeStateAfter != null && mergeStateAfter != mergeStateBefore) {
         _emitState(

@@ -64,7 +64,14 @@ class WorkerReplayState {
       old.channelId,
       old.encryptionKey,
       channelSecret: old.channelSecret ?? cmd.channelSecret,
-      ownDisplayName: old.ownDisplayName ?? cmd.ownDisplayName,
+      // The display name is the ONE field a re-registration legitimately
+      // CHANGES (the user renamed themselves): null means "unchanged" here
+      // exactly as in `RendezvousManager.register`, a non-null name is the
+      // newest one and wins. Keeping the old name would replay a name the
+      // app has already replaced — and since a re-register sent while no
+      // worker is attached is dropped in favour of this projection, the
+      // rename would be lost until the next one.
+      ownDisplayName: cmd.ownDisplayName ?? old.ownDisplayName,
       counterpartOhId: knowsCounterpartOh
           ? old.counterpartOhId
           : cmd.counterpartOhId,
