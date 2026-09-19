@@ -14,6 +14,7 @@ import 'package:test/test.dart';
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/domain/channel.dart';
 import 'package:redpanda_light_client/src/domain/counterpart_oh_update.dart';
+import 'package:redpanda_light_client/src/domain/rendezvous_state_update.dart';
 import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
@@ -154,6 +155,14 @@ void main() async {
           counterpartOhMoves.add,
         );
         addTearDown(sub.cancel);
+        // TD117: the merge state behind that adoption must leave the worker,
+        // otherwise a respawn loses the counterpart's entry_ts (newest-wins
+        // guard) and republishes a record without Alice in it.
+        final mergeStates = <RendezvousStateUpdate>[];
+        final mergeSub = bob.stateUpdates.of<RendezvousStateUpdate>().listen(
+          mergeStates.add,
+        );
+        addTearDown(mergeSub.cancel);
 
         // Bob's first send finds no counterpart OH and triggers a rendezvous recovery.
         // Retry: the lookup + reverse-garlic answer + fetch cycle takes a few
@@ -176,6 +185,20 @@ void main() async {
           counterpartOhMoves.last.descriptors.map((d) => d.serverEndpoint),
           contains(nodeA),
           reason: 'Bob must learn Alice\'s node-A mailbox from the DHT record',
+        );
+
+        // The merge state travelled with it (TD117): one snapshot per
+        // resolved record, carrying Alice's participant entry.
+        expect(mergeStates, isNotEmpty);
+        expect(
+          mergeStates.last.channelId,
+          channel.id,
+          reason: 'the snapshot must name the channel it belongs to',
+        );
+        expect(
+          mergeStates.last.mergeStateJson,
+          contains(nodeA),
+          reason: 'the snapshot must carry the mailbox Bob just adopted',
         );
 
         // And the channel now works: Bob's send reaches Alice.

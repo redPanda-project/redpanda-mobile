@@ -184,6 +184,161 @@ void main() {
     expect(await m.buildSignedStore(chan, 1000), isNull);
   });
 
+  group('TD117: the merge state survives a worker respawn', () {
+    final now = DateTime.utc(2026, 7, 19, 12).millisecondsSinceEpoch;
+
+    /// Bob's record as Alice resolves it — gives Alice a merge state with
+    /// Bob's entry and its `entry_ts`.
+    Future<RendezvousManager> aliceWhoKnowsBob({
+      required int bobTs,
+      required String bobEndpoint,
+    }) async {
+      final bob = RendezvousManager()
+        ..register(chan, channelSecret: sk, isCreator: true, ownName: 'Bob');
+      bob.setOwnOhs(chan, [_oh(bobEndpoint)]);
+      final store = (await bob.buildSignedStore(chan, bobTs))!;
+      final alice = joiner();
+      final adopted = await alice.applyResolvedRecord(
+        chan,
+        RendezvousManager.recordFromStoreBytes(store),
+        bobTs + 1000,
+      );
+      expect(adopted, isNotNull);
+      return alice;
+    }
+
+    test('export is null without state, and round-trips otherwise', () async {
+      expect(creator().exportMergeState(chan), isNull);
+      expect(creator().exportMergeState('unknown'), isNull);
+
+      final alice = await aliceWhoKnowsBob(
+        bobTs: now,
+        bobEndpoint: '1.1.1.1:59558',
+      );
+      final exported = alice.exportMergeState(chan)!;
+
+      // The respawned worker: same channel, empty merge state.
+      final respawned = joiner()..restoreMergeState(chan, exported);
+      expect(respawned.exportMergeState(chan), exported);
+    });
+
+    test(
+      'a respawned worker keeps the newest-wins guard for the counterpart',
+      () async {
+        // Bob published twice; Alice saw the NEW record before the crash.
+        final bob = RendezvousManager()
+          ..register(chan, channelSecret: sk, isCreator: true, ownName: 'Bob');
+        bob.setOwnOhs(chan, [_oh('1.1.1.1:59558')]);
+        final oldStore = (await bob.buildSignedStore(chan, now))!;
+        bob.setOwnOhs(chan, [_oh('2.2.2.2:59558')]);
+        final newStore = (await bob.buildSignedStore(chan, now + 60000))!;
+
+        final alice = joiner();
+        expect(
+          (await alice.applyResolvedRecord(
+            chan,
+            RendezvousManager.recordFromStoreBytes(newStore),
+            now + 61000,
+          ))!.single.serverEndpoint,
+          '2.2.2.2:59558',
+        );
+        final exported = alice.exportMergeState(chan)!;
+
+        // Without the restore the fresh worker has no entry_ts to compare
+        // against and adopts the OLD record — a mailbox rollback.
+        final naive = joiner();
+        expect(
+          (await naive.applyResolvedRecord(
+            chan,
+            RendezvousManager.recordFromStoreBytes(oldStore),
+            now + 62000,
+          ))!.single.serverEndpoint,
+          '1.1.1.1:59558',
+        );
+
+        final respawned = joiner()..restoreMergeState(chan, exported);
+        expect(
+          await respawned.applyResolvedRecord(
+            chan,
+            RendezvousManager.recordFromStoreBytes(oldStore),
+            now + 62000,
+          ),
+          isNull,
+          reason: 'the restored entry_ts must still beat the stale record',
+        );
+      },
+    );
+
+    test('a respawned worker republishes a record that still carries the '
+        'counterpart', () async {
+      final alice = await aliceWhoKnowsBob(
+        bobTs: now,
+        bobEndpoint: '1.1.1.1:59558',
+      );
+      final exported = alice.exportMergeState(chan)!;
+
+      Future<int> participantsInPublishedRecord(RendezvousManager m) async {
+        m.setOwnOhs(chan, [_oh('9.9.9.9:59558')]);
+        final store = (await m.buildSignedStore(chan, now + 120000))!;
+        final record = RendezvousManager.recordFromStoreBytes(store);
+        final entries = await ChannelRendezvous.decryptRecordContent(
+          sk,
+          record.content,
+        );
+        return entries.length;
+      }
+
+      // A fresh worker drops Bob out of the record it publishes; with the
+      // restored merge state the record carries both participants again.
+      expect(await participantsInPublishedRecord(joiner()), 1);
+      final respawned = joiner()..restoreMergeState(chan, exported);
+      expect(await participantsInPublishedRecord(respawned), 2);
+    });
+
+    test('restore only adds knowledge — live state wins', () async {
+      final older = await aliceWhoKnowsBob(
+        bobTs: now,
+        bobEndpoint: '1.1.1.1:59558',
+      );
+      final snapshotOfOlder = older.exportMergeState(chan)!;
+
+      // The respawned worker already resolved a NEWER record before the
+      // restore command arrived.
+      final live = await aliceWhoKnowsBob(
+        bobTs: now + 60000,
+        bobEndpoint: '2.2.2.2:59558',
+      );
+      live.restoreMergeState(chan, snapshotOfOlder);
+      expect(live.exportMergeState(chan), contains('2.2.2.2:59558'));
+      expect(live.exportMergeState(chan), isNot(contains('1.1.1.1:59558')));
+    });
+
+    test(
+      'a malformed or foreign snapshot leaves the live state alone',
+      () async {
+        final alice = await aliceWhoKnowsBob(
+          bobTs: now,
+          bobEndpoint: '1.1.1.1:59558',
+        );
+        final before = alice.exportMergeState(chan)!;
+        for (final junk in [
+          'not json',
+          '{}',
+          '[{"pid":"zz","name":"x","ts":1,"ohs":[]}]', // not hex
+          '[{"pid":"aa","name":"x","ts":1,"ohs":[]}]', // pid not 32 bytes
+          '[{"name":"x","ts":1,"ohs":[]}]', // missing pid
+          '[{"pid":"${'aa' * 32}","name":"x","ts":"soon","ohs":[]}]', // ts type
+        ]) {
+          alice.restoreMergeState(chan, junk);
+          expect(alice.exportMergeState(chan), before, reason: 'junk: $junk');
+        }
+        // An unknown channel is ignored rather than resurrected.
+        alice.restoreMergeState('unknown-channel', before);
+        expect(alice.exportMergeState('unknown-channel'), isNull);
+      },
+    );
+  });
+
   group('T111: re-registration and the advertised display name', () {
     test('a re-register without a name keeps the published one', () {
       final m = creator();

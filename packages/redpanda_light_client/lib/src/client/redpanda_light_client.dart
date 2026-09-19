@@ -26,6 +26,7 @@ import 'package:redpanda_light_client/src/domain/group_state.dart';
 import 'package:redpanda_light_client/src/domain/loopback_result.dart';
 import 'package:redpanda_light_client/src/domain/oh_fetch_status.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
+import 'package:redpanda_light_client/src/domain/rendezvous_state_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/domain/counterpart_oh_update.dart';
@@ -1213,6 +1214,18 @@ class RedPandaLightClient implements RedPandaClient {
   /// record (read-only view, for tests and diagnostics).
   String? rendezvousOwnNameOf(String channelId) =>
       _rendezvous.ownNameOf(channelId);
+
+  /// TD117: restores a channel's rendezvous merge state after a worker
+  /// respawn (driven by `CmdRestoreRendezvousState`, whose payload came from
+  /// [rendezvousMergeStateOf] before the old worker died). Newest-wins, so it
+  /// can only add knowledge.
+  void restoreRendezvousMergeState(String channelId, String mergeStateJson) =>
+      _rendezvous.restoreMergeState(channelId, mergeStateJson);
+
+  /// The serialized rendezvous merge state of [channelId] (for the worker
+  /// -restore projection and for tests), or null when there is nothing known.
+  String? rendezvousMergeStateOf(String channelId) =>
+      _rendezvous.exportMergeState(channelId);
 
   /// The partner's currently known mailbox ids for [channelId], primary
   /// first (read-only view, for tests and diagnostics — mirrors
@@ -2980,11 +2993,27 @@ class RedPandaLightClient implements RedPandaClient {
       }
       final record = RendezvousManager.recordFromStoreBytes(payload.sublist(1));
       final now = DateTime.now().millisecondsSinceEpoch;
+      final mergeStateBefore = _rendezvous.exportMergeState(channelId);
       final counterpartOhs = await _rendezvous.applyResolvedRecord(
         channelId,
         record,
         now,
       );
+      // TD117: the merge state is the only place the counterpart's entry_ts
+      // lives, and a resolved record is the ONLY way it grows — publishing
+      // merely re-stamps our own entry from live state. Emit before the
+      // early-outs below: a record can advance a third participant (or a
+      // counterpart entry that carries no newer OH list) without changing the
+      // deposit set, and that knowledge must still survive a respawn.
+      final mergeStateAfter = _rendezvous.exportMergeState(channelId);
+      if (mergeStateAfter != null && mergeStateAfter != mergeStateBefore) {
+        _emitState(
+          RendezvousStateUpdate(
+            channelId: channelId,
+            mergeStateJson: mergeStateAfter,
+          ),
+        );
+      }
       if (counterpartOhs == null || counterpartOhs.isEmpty) return;
       final changed = _replaceCounterpartOhSet(channelId, counterpartOhs);
       if (changed) {

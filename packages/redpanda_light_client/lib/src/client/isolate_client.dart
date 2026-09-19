@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:redpanda_light_client/src/client/isolate_protocol.dart';
+import 'package:redpanda_light_client/src/client/pending_command_queue.dart';
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/client/worker_replay_state.dart';
 import 'package:redpanda_light_client/src/client_facade.dart';
@@ -60,6 +61,29 @@ class RedPandaIsolateClient implements RedPandaClient {
   // current from the state channel, so a respawned worker is transparently
   // re-initialized without stale crypto state.
   final WorkerReplayState _replay = WorkerReplayState();
+
+  /// Commands handed to [_send] while no worker was attached and which
+  /// nothing else re-sends (TD115). Flushed after the state replay as soon as
+  /// a worker is ready.
+  final PendingCommandQueue _pending = PendingCommandQueue();
+
+  /// The command types whose post-respawn state is carried by a client FLAG
+  /// or by the init path instead of by [WorkerReplayState]: [CmdInit] from
+  /// [_initNodeId]/[_initKeys], connect/disconnect from [_connectRequested],
+  /// pause/resume from [_lifecyclePaused] — see [_onWorkerReady] and
+  /// [_replayState]. Together with `WorkerReplayState.replayCommands()` this
+  /// is the complete set of commands the worker-ready path re-establishes;
+  /// `isolate_command_recovery_test.dart` holds every
+  /// [CommandRecovery.reestablishedOnWorkerReady] command against exactly
+  /// that union, so a command cannot merely CLAIM to be replayed. Public for
+  /// that test only (`package:meta` is not a dependency of this package).
+  static const Set<Type> flagOrInitReestablishedCommands = {
+    CmdInit,
+    CmdConnect,
+    CmdDisconnect,
+    CmdLifecyclePause,
+    CmdLifecycleResume,
+  };
 
   /// Worker entry point override — exists only so tests can inject a fake
   /// worker; must be a top-level or static function.
@@ -169,6 +193,7 @@ class RedPandaIsolateClient implements RedPandaClient {
     _errorPort?.close();
     _receivePort.close();
     _sendPort = null;
+    _pending.clear();
     _failPendingRequests();
   }
 
@@ -179,6 +204,12 @@ class RedPandaIsolateClient implements RedPandaClient {
     _sendPort = port;
     port.send(CmdInit(nodeId: _initNodeId, keyPair: _initKeys, seeds: seeds));
     _replayState(port);
+    // After the replay, never before: a queued one-off (a send, an OH
+    // registration) may depend on the channel keys and handles the replay
+    // re-establishes.
+    for (final cmd in _pending.drain()) {
+      port.send(cmd);
+    }
     if (!_isolateReady.isCompleted) {
       _isolateReady.complete();
     }
@@ -188,6 +219,16 @@ class RedPandaIsolateClient implements RedPandaClient {
     if (_disposed) return;
     _sendPort = null;
     _failPendingRequests();
+    // Their callers were just failed above; flushing them into the respawned
+    // worker would run a request whose future already completed with an error.
+    // Commands queued from here on belong to callers that are still waiting.
+    if (!_pending.isEmpty) {
+      RpLog.debug(
+        'RedPandaIsolateClient: dropping ${_pending.length} queued command(s) '
+        'of failed requests',
+      );
+      _pending.clear();
+    }
     if (_respawnScheduled) return;
     _respawnScheduled = true;
     final delayMs = math.min(
@@ -382,14 +423,34 @@ class RedPandaIsolateClient implements RedPandaClient {
     }
   }
 
+  /// Hands [cmd] to the worker, or — while no worker is attached (startup
+  /// window, respawn gap) — does whatever the command's
+  /// [IsolateCommand.recovery] demands. There is no silent-drop branch left
+  /// (TD115): a command is either re-established by [_onWorkerReady] or
+  /// buffered here until it can be delivered.
   void _send(IsolateCommand cmd) {
-    if (_sendPort != null) {
-      _sendPort!.send(cmd);
-    } else {
-      // If isolate isn't ready, maybe queue? For now just log.
-      RpLog.debug(
-        'RedPandaIsolateClient: Warning - Isolate not ready. Dropping command $cmd',
-      );
+    final port = _sendPort;
+    if (port != null) {
+      port.send(cmd);
+      return;
+    }
+    switch (cmd.recovery) {
+      case CommandRecovery.reestablishedOnWorkerReady:
+        // Not a loss: the ready path re-sends the CURRENT state, which is
+        // strictly better than this copy of an old one.
+        RpLog.debug(
+          'RedPandaIsolateClient: no worker attached; ${cmd.runtimeType} is '
+          're-established on worker ready',
+        );
+      case CommandRecovery.queuedUntilWorkerReady:
+        final evicted = _pending.add(cmd);
+        if (evicted != null) {
+          RpLog.info(
+            'RedPandaIsolateClient: command queue full '
+            '(${PendingCommandQueue.capacity}); dropped '
+            '${evicted.runtimeType} to queue ${cmd.runtimeType}',
+          );
+        }
     }
   }
 
@@ -440,11 +501,18 @@ class RedPandaIsolateClient implements RedPandaClient {
     final requestId = _nextRequestId++;
     final completer = Completer<String>();
     _pendingSends[requestId] = completer;
-    _send(CmdSendMessage(requestId, channelId, content, messageId: messageId));
+    final cmd = CmdSendMessage(
+      requestId,
+      channelId,
+      content,
+      messageId: messageId,
+    );
+    _send(cmd);
     return completer.future.timeout(
       const Duration(seconds: 15),
       onTimeout: () {
         _pendingSends.remove(requestId);
+        _pending.remove(cmd);
         throw TimeoutException(
           'sendMessage timed out',
           const Duration(seconds: 15),
@@ -459,13 +527,15 @@ class RedPandaIsolateClient implements RedPandaClient {
     final requestId = _nextRequestId++;
     final completer = Completer<LoopbackResult>();
     _pendingLoopbackTests[requestId] = completer;
-    _send(CmdRunLoopbackTest(requestId, channelId));
+    final cmd = CmdRunLoopbackTest(requestId, channelId);
+    _send(cmd);
     // The worker-side test times out after RedPandaLightClient.loopbackTimeout
     // (60 s); this outer guard only covers a lost worker response.
     return completer.future.timeout(
       const Duration(seconds: 75),
       onTimeout: () {
         _pendingLoopbackTests.remove(requestId);
+        _pending.remove(cmd);
         return const LoopbackResult.failed('no response from network worker');
       },
     );
@@ -477,13 +547,15 @@ class RedPandaIsolateClient implements RedPandaClient {
     final requestId = _nextRequestId++;
     final completer = Completer<ChannelDoctorReport>();
     _pendingChannelDoctors[requestId] = completer;
-    _send(CmdRunChannelDoctor(requestId, channelId));
+    final cmd = CmdRunChannelDoctor(requestId, channelId);
+    _send(cmd);
     // The doctor's loopback stage is bounded by loopbackTimeout (60 s); this
     // outer guard only covers a lost worker response.
     return completer.future.timeout(
       const Duration(seconds: 90),
       onTimeout: () {
         _pendingChannelDoctors.remove(requestId);
+        _pending.remove(cmd);
         return _doctorErrorReport('no response from network worker');
       },
     );
@@ -495,11 +567,13 @@ class RedPandaIsolateClient implements RedPandaClient {
     final requestId = _nextRequestId++;
     final completer = Completer<OHRegistration>();
     _pendingOhRegistrations[requestId] = completer;
-    _send(CmdRegisterOutboundHandle(requestId, channelId: channelId));
+    final cmd = CmdRegisterOutboundHandle(requestId, channelId: channelId);
+    _send(cmd);
     return completer.future.timeout(
       const Duration(seconds: 15),
       onTimeout: () {
         _pendingOhRegistrations.remove(requestId);
+        _pending.remove(cmd);
         throw TimeoutException(
           'OH registration timed out',
           const Duration(seconds: 15),
@@ -536,10 +610,10 @@ class RedPandaIsolateClient implements RedPandaClient {
 
   @override
   Future<void> ensureOhRedundancy(String channelId) async {
-    // Awaiting readiness matters: [_send] DROPS commands while the worker is
-    // still starting, and this command is not part of the replay projection,
-    // so a dropped one is simply lost.
-    await _isolateReady.future;
+    // No readiness await needed since TD115: the command is classified
+    // [CommandRecovery.queuedUntilWorkerReady], so [_send] buffers it while
+    // the worker is starting AND across a respawn gap — which awaiting
+    // `_isolateReady` (completed once, forever) never covered.
     _send(CmdEnsureOhRedundancy(channelId));
   }
 
@@ -628,13 +702,18 @@ class RedPandaIsolateClient implements RedPandaClient {
     final requestId = _nextRequestId++;
     final completer = Completer<String>();
     _pendingSends[requestId] = completer;
-    _send(
-      CmdSendGroupMessage(requestId, groupId, content, messageId: messageId),
+    final cmd = CmdSendGroupMessage(
+      requestId,
+      groupId,
+      content,
+      messageId: messageId,
     );
+    _send(cmd);
     return completer.future.timeout(
       const Duration(seconds: 60),
       onTimeout: () {
         _pendingSends.remove(requestId);
+        _pending.remove(cmd);
         throw TimeoutException(
           'sendGroupMessage timed out',
           const Duration(seconds: 60),
@@ -648,11 +727,13 @@ class RedPandaIsolateClient implements RedPandaClient {
     final requestId = _nextRequestId++;
     final completer = Completer<void>();
     _pendingGroupOps[requestId] = completer;
-    _send(build(requestId));
+    final cmd = build(requestId);
+    _send(cmd);
     return completer.future.timeout(
       const Duration(seconds: 60),
       onTimeout: () {
         _pendingGroupOps.remove(requestId);
+        _pending.remove(cmd);
         throw TimeoutException(
           'group operation timed out',
           const Duration(seconds: 60),
@@ -899,6 +980,11 @@ void _runWorker(SendPort mainSendPort) {
           client!.ensureOhRedundancy(message.channelId).catchError((Object e) {
             RpLog.info('RedPandaIsolateClient: ensureOhRedundancy failed: $e');
           }),
+        );
+      } else if (message is CmdRestoreRendezvousState) {
+        client!.restoreRendezvousMergeState(
+          message.channelId,
+          message.mergeStateJson,
         );
       } else if (message is CmdRestoreNodeScores) {
         client!.restoreNodeScores(message.scores);
