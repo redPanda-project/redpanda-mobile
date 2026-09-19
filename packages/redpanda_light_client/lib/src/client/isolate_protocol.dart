@@ -1,6 +1,7 @@
 import 'package:redpanda_light_client/src/domain/channel_doctor_report.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/group_state.dart';
+import 'package:redpanda_light_client/src/domain/rendezvous_state_update.dart';
 import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/garlic/node_scorer.dart';
 import 'package:redpanda_light_client/src/models/connection_status.dart';
@@ -9,9 +10,58 @@ import 'package:redpanda_light_client/src/models/node_id.dart';
 import 'package:redpanda_light_client/src/models/peer_stats.dart';
 
 // --- Commands (Main -> Isolate) ---
-abstract class IsolateCommand {}
+
+/// What happens to a command handed to `RedPandaIsolateClient._send` while no
+/// worker isolate is attached — during the startup window, and in the gap
+/// between a worker's death and its respawn.
+///
+/// TD115: `_send` used to drop every such command with a debug log, so
+/// whether a command survived depended on whether someone had remembered to
+/// make it replayable. The choice is now part of the command's type, so a new
+/// command cannot silently join the "dropped" class: the field is abstract on
+/// [IsolateCommand], the compiler demands a value, and
+/// `test/unit/isolate_command_recovery_test.dart` checks that the declared
+/// value is TRUE (a command that claims to be re-established must actually be
+/// produced by the worker-ready path).
+enum CommandRecovery {
+  /// The worker-ready path re-sends the CURRENT state for this command type
+  /// ([CmdInit], the `WorkerReplayState` projection) or re-derives its effect
+  /// from a client flag (`_connectRequested`, `_lifecyclePaused`). A copy sent
+  /// while no worker is attached is therefore redundant, not lost, and is
+  /// dropped — replaying the newest state beats replaying an old command.
+  reestablishedOnWorkerReady,
+
+  /// Nothing re-sends it: the command carries a one-off intent (a send, a
+  /// request/response pair, a fire-and-forget top-up). It MUST be buffered
+  /// while no worker is attached and flushed once one is ready, otherwise it
+  /// is silently lost.
+  queuedUntilWorkerReady,
+}
+
+abstract class IsolateCommand {
+  /// How the isolate client must treat this command while no worker is
+  /// attached. Abstract on purpose — see [CommandRecovery].
+  CommandRecovery get recovery;
+
+  /// The request id when exactly one caller is waiting for an answer to this
+  /// command (the isolate client holds its completer), null when the command
+  /// is fire-and-forget.
+  ///
+  /// Every request/response command already declares `final int requestId`,
+  /// which implements this getter — so the distinction needs no second
+  /// declaration and cannot drift from the request id actually sent. It
+  /// decides what happens to a BUFFERED command when the worker dies: a
+  /// request-bound one must go (its completer was just failed, re-running it
+  /// would execute a request nobody awaits any more), a fire-and-forget one
+  /// must stay (dropping it would be the silent loss of TD115, one respawn
+  /// later).
+  int? get requestId => null;
+}
 
 class CmdInit extends IsolateCommand {
+  @override
+  CommandRecovery get recovery => CommandRecovery.reestablishedOnWorkerReady;
+
   final NodeId? nodeId;
   final KeyPair? keyPair;
   // We might want to pass seeds here too if they are dynamic
@@ -20,20 +70,39 @@ class CmdInit extends IsolateCommand {
   CmdInit({this.nodeId, this.keyPair, this.seeds = const []});
 }
 
-class CmdConnect extends IsolateCommand {}
+class CmdConnect extends IsolateCommand {
+  @override
+  CommandRecovery get recovery => CommandRecovery.reestablishedOnWorkerReady;
+}
 
-class CmdDisconnect extends IsolateCommand {}
+class CmdDisconnect extends IsolateCommand {
+  @override
+  CommandRecovery get recovery => CommandRecovery.reestablishedOnWorkerReady;
+}
 
 class CmdAddPeer extends IsolateCommand {
+  @override
+  CommandRecovery get recovery => CommandRecovery.reestablishedOnWorkerReady;
+
   final String address;
   CmdAddPeer(this.address);
 }
 
-class CmdLifecyclePause extends IsolateCommand {}
+class CmdLifecyclePause extends IsolateCommand {
+  @override
+  CommandRecovery get recovery => CommandRecovery.reestablishedOnWorkerReady;
+}
 
-class CmdLifecycleResume extends IsolateCommand {}
+class CmdLifecycleResume extends IsolateCommand {
+  @override
+  CommandRecovery get recovery => CommandRecovery.reestablishedOnWorkerReady;
+}
 
 class CmdSendMessage extends IsolateCommand {
+  @override
+  CommandRecovery get recovery => CommandRecovery.queuedUntilWorkerReady;
+
+  @override
   final int requestId;
   final String channelId;
   final String content;
@@ -51,6 +120,10 @@ class CmdSendMessage extends IsolateCommand {
 
 /// Runs a loopback self-test (T20); answered with [EventLoopbackResult].
 class CmdRunLoopbackTest extends IsolateCommand {
+  @override
+  CommandRecovery get recovery => CommandRecovery.queuedUntilWorkerReady;
+
+  @override
   final int requestId;
   final String channelId;
   CmdRunLoopbackTest(this.requestId, this.channelId);
@@ -58,12 +131,20 @@ class CmdRunLoopbackTest extends IsolateCommand {
 
 /// Runs the connection doctor (T25); answered with [EventChannelDoctorResult].
 class CmdRunChannelDoctor extends IsolateCommand {
+  @override
+  CommandRecovery get recovery => CommandRecovery.queuedUntilWorkerReady;
+
+  @override
   final int requestId;
   final String channelId;
   CmdRunChannelDoctor(this.requestId, this.channelId);
 }
 
 class CmdRegisterOutboundHandle extends IsolateCommand {
+  @override
+  CommandRecovery get recovery => CommandRecovery.queuedUntilWorkerReady;
+
+  @override
   final int requestId;
   final String? channelId;
   CmdRegisterOutboundHandle(this.requestId, {this.channelId});
@@ -83,6 +164,9 @@ class OhDescriptorData {
 }
 
 class CmdAddChannelKeys extends IsolateCommand {
+  @override
+  CommandRecovery get recovery => CommandRecovery.reestablishedOnWorkerReady;
+
   final String channelId;
   final List<int> encryptionKey;
 
@@ -136,13 +220,40 @@ class CmdAddChannelKeys extends IsolateCommand {
 /// Tops a channel up to the target OH redundancy (T42, k=3). Fire-and-forget:
 /// the resulting set is published as an [OwnOhSetUpdate].
 class CmdEnsureOhRedundancy extends IsolateCommand {
+  @override
+  CommandRecovery get recovery => CommandRecovery.queuedUntilWorkerReady;
+
   final String channelId;
   CmdEnsureOhRedundancy(this.channelId);
+}
+
+/// Restores a channel's T44 rendezvous merge state (the newest-known entry
+/// per participant, serialized by `RendezvousManager.exportMergeState`) into
+/// a respawned worker — TD117.
+///
+/// Replay-only: no app-layer caller produces it. The projection is fed from
+/// the state channel ([RendezvousStateUpdate]) exactly like the mailbox
+/// cursor, and `WorkerReplayState.replayCommands` sends it AFTER the channel
+/// registrations (the worker needs the channel's rendezvous state to exist
+/// before entries can be merged into it).
+class CmdRestoreRendezvousState extends IsolateCommand {
+  @override
+  CommandRecovery get recovery => CommandRecovery.reestablishedOnWorkerReady;
+
+  final String channelId;
+
+  /// `RendezvousManager.exportMergeState` output (JSON).
+  final String mergeStateJson;
+
+  CmdRestoreRendezvousState(this.channelId, this.mergeStateJson);
 }
 
 /// Re-activates a persisted OH registration inside the isolate so it gets
 /// polled and auto-renewed again. Carries only isolate-sendable primitives.
 class CmdRestoreOutboundHandle extends IsolateCommand {
+  @override
+  CommandRecovery get recovery => CommandRecovery.reestablishedOnWorkerReady;
+
   final List<int> ohId;
   final List<int> privateKeyBytes;
   final int expiresAtMs;
@@ -162,6 +273,9 @@ class CmdRestoreOutboundHandle extends IsolateCommand {
 /// Feeds persisted node scores (MS06) back into the isolate on startup.
 /// [NodeScore] carries only primitives and is isolate-sendable.
 class CmdRestoreNodeScores extends IsolateCommand {
+  @override
+  CommandRecovery get recovery => CommandRecovery.reestablishedOnWorkerReady;
+
   final List<NodeScore> scores;
   CmdRestoreNodeScores(this.scores);
 }
@@ -169,6 +283,9 @@ class CmdRestoreNodeScores extends IsolateCommand {
 /// Registers a group (MS08). [GroupRegistration] carries only
 /// isolate-sendable primitives and plain data classes.
 class CmdRegisterGroup extends IsolateCommand {
+  @override
+  CommandRecovery get recovery => CommandRecovery.reestablishedOnWorkerReady;
+
   final GroupRegistration registration;
   CmdRegisterGroup(this.registration);
 }
@@ -176,6 +293,10 @@ class CmdRegisterGroup extends IsolateCommand {
 /// Sends a group message (MS08); answered with [EventMessageSent] /
 /// [EventMessageSendFailed] like a 1:1 send.
 class CmdSendGroupMessage extends IsolateCommand {
+  @override
+  CommandRecovery get recovery => CommandRecovery.queuedUntilWorkerReady;
+
+  @override
   final int requestId;
   final String groupId;
   final String content;
@@ -191,6 +312,10 @@ class CmdSendGroupMessage extends IsolateCommand {
 /// Rotates the group key (MS08, admin only); answered with
 /// [EventGroupOpDone].
 class CmdRotateGroupKey extends IsolateCommand {
+  @override
+  CommandRecovery get recovery => CommandRecovery.queuedUntilWorkerReady;
+
+  @override
   final int requestId;
   final String groupId;
   final List<GroupMemberInfo> members;
@@ -201,6 +326,10 @@ class CmdRotateGroupKey extends IsolateCommand {
 /// Re-sends undelivered sealed rotation boxes (MS08); answered with
 /// [EventGroupOpDone].
 class CmdRetryPendingRotations extends IsolateCommand {
+  @override
+  CommandRecovery get recovery => CommandRecovery.queuedUntilWorkerReady;
+
+  @override
   final int requestId;
   final String groupId;
   CmdRetryPendingRotations(this.requestId, this.groupId);
@@ -209,6 +338,10 @@ class CmdRetryPendingRotations extends IsolateCommand {
 /// Sends a group handshake over a 1:1 channel (MS08, Decision 8); answered
 /// with [EventGroupOpDone].
 class CmdSendGroupHandshake extends IsolateCommand {
+  @override
+  CommandRecovery get recovery => CommandRecovery.queuedUntilWorkerReady;
+
+  @override
   final int requestId;
   final String channelId;
   final List<int> handshake;
@@ -218,6 +351,10 @@ class CmdSendGroupHandshake extends IsolateCommand {
 /// Broadcasts a group rename (MS08, admin only); answered with
 /// [EventGroupOpDone].
 class CmdSendGroupInfoUpdate extends IsolateCommand {
+  @override
+  CommandRecovery get recovery => CommandRecovery.queuedUntilWorkerReady;
+
+  @override
   final int requestId;
   final String groupId;
   final String label;

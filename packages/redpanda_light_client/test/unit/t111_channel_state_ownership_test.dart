@@ -208,4 +208,43 @@ void main() {
     expect(client.counterpartMailboxIds('chan'), equals([ohId(1)]));
     expect(client.rendezvousOwnNameOf('chan'), equals('Alice'));
   });
+
+  group('TD117: the rendezvous own-OH projection after a restore', () {
+    test(
+      'restored handles feed the projection the publish path needs',
+      () async {
+        // A respawned worker: channel keys and mailboxes come back through the
+        // replay, and `restoreOutboundHandle` is deliberately NOT a publish
+        // trigger — so the rendezvous own-OH projection starts out empty and
+        // `buildSignedStore` would return null, i.e. the republish sweep would
+        // silently publish nothing (Copilot HIGH on #123).
+        client.addChannelKeys(
+          'chan',
+          channelKey,
+          channelSecret: channelSecret,
+          ownDisplayName: 'me',
+          isChannelCreator: true,
+        );
+        // Nothing to project yet.
+        expect(client.refreshRendezvousOwnOhs('chan'), isFalse);
+
+        await client.restoreOutboundHandle(
+          OHRegistration(
+            ohId: ohId(4),
+            keypair: await OHKeypair.generate(),
+            expiresAtMs: DateTime.now().millisecondsSinceEpoch + 3600 * 1000,
+            channelId: 'chan',
+            serverEndpoint: 'host-a:59558',
+          ),
+        );
+
+        // The sweep re-derives the projection from the restored handle …
+        expect(client.refreshRendezvousOwnOhs('chan'), isTrue);
+        // … and does not report a change on every later sweep.
+        expect(client.refreshRendezvousOwnOhs('chan'), isFalse);
+        // A channel without rendezvous state is untouched.
+        expect(client.refreshRendezvousOwnOhs('unknown'), isFalse);
+      },
+    );
+  });
 }

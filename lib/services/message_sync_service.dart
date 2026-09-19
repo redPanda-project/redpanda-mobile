@@ -162,8 +162,10 @@ class MessageSyncService {
       case GroupStateUpdate():
         await _groups.applyStateUpdate(update);
       default:
-        // Not persisted here: OhFetchStatus (UI-only, channel_health) and
-        // GroupHandshakeEvent (owned by GroupService).
+        // Not persisted here: OhFetchStatus (UI-only, channel_health),
+        // GroupHandshakeEvent (owned by GroupService) and
+        // RendezvousStateUpdate (consumed by the isolate client's worker
+        // -restore projection, TD117 — it never needs to outlive the app).
         break;
     }
   }

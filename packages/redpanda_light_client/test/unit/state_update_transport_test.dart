@@ -10,6 +10,7 @@ import 'package:redpanda_light_client/src/domain/oh_fetch_status.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/domain/counterpart_oh_update.dart';
+import 'package:redpanda_light_client/src/domain/rendezvous_state_update.dart';
 import 'package:redpanda_light_client/src/domain/routing_ack.dart';
 import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/garlic/node_scorer.dart';
@@ -49,6 +50,7 @@ void main() {
         RoutingAckUpdate,
         ChannelAckUpdate,
         NodeScoreUpdate,
+        RendezvousStateUpdate,
         GroupStateUpdate,
         GroupHandshakeEvent,
       ]),
@@ -152,6 +154,10 @@ Future<void> buildUpdates(SendPort port) async {
         lastUpdatedMs: 1,
       ),
     ]),
+    const RendezvousStateUpdate(
+      channelId: 'c1',
+      mergeStateJson: '[{"pid":"aa","name":"p","ts":1,"ohs":[]}]',
+    ),
     const GroupStateUpdate(
       groupId: 'g1',
       label: 'group',

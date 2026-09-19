@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:fixnum/fixnum.dart';
@@ -199,12 +200,82 @@ class RendezvousManager {
     return after.ohs;
   }
 
+  /// Serializes the merge state of [channelId] — the newest-known entry per
+  /// participant — so the main isolate can replay it into a respawned worker
+  /// (TD117). Returns null for an unknown channel or an empty merge state
+  /// (nothing worth restoring).
+  ///
+  /// On-device only: the entries are the already-decrypted contents of our own
+  /// rendezvous record, no channel secret and no key material is included.
+  String? exportMergeState(String channelId) {
+    final state = _states[channelId];
+    if (state == null || state.knownEntries.isEmpty) return null;
+    final entries = state.knownEntries.values.toList()
+      ..sort((a, b) => _hex(a.participantId).compareTo(_hex(b.participantId)));
+    return jsonEncode([
+      for (final e in entries)
+        {
+          'pid': _hex(e.participantId),
+          'name': e.name,
+          'ts': e.entryTs,
+          'ohs': [for (final oh in e.ohs) oh.toJsonMap()],
+        },
+    ]);
+  }
+
+  /// Feeds an [exportMergeState] snapshot back into [channelId] after a worker
+  /// respawn. Merged with the same newest-wins rule the DHT path uses, so a
+  /// restore can only ever ADD knowledge: anything the fresh worker already
+  /// learned (a newer record resolved before the restore arrived) wins.
+  ///
+  /// A malformed snapshot is discarded WHOLE (never half-applied): the restore
+  /// is a best-effort optimization, and a worker that cannot parse it is
+  /// exactly as well off as before this method existed. An unknown channel is
+  /// ignored too — the channel registration comes first in the replay order.
+  void restoreMergeState(String channelId, String mergeStateJson) {
+    final state = _states[channelId];
+    if (state == null) return;
+    final List<RendezvousEntry> restored = [];
+    try {
+      final decoded = jsonDecode(mergeStateJson) as List<dynamic>;
+      for (final raw in decoded) {
+        final map = raw as Map<String, dynamic>;
+        restored.add(
+          RendezvousEntry(
+            participantId: _unhex(map['pid'] as String),
+            name: map['name'] as String,
+            entryTs: map['ts'] as int,
+            ohs: [
+              for (final oh in map['ohs'] as List<dynamic>)
+                OHDescriptor.fromJsonMap(oh as Map<String, dynamic>),
+            ],
+          ),
+        );
+      }
+    } catch (_) {
+      return; // malformed snapshot — keep the live state untouched
+    }
+    if (restored.isEmpty) return;
+    state.absorb(
+      ChannelRendezvous.mergeEntries(state.knownEntries.values, restored),
+    );
+  }
+
   static bool _sameOhList(List<OHDescriptor> a, List<OHDescriptor> b) {
     if (a.length != b.length) return false;
     for (var i = 0; i < a.length; i++) {
       if (a[i] != b[i]) return false;
     }
     return true;
+  }
+
+  static Uint8List _unhex(String hex) {
+    if (hex.length.isOdd) throw FormatException('odd-length hex', hex);
+    final out = Uint8List(hex.length ~/ 2);
+    for (var i = 0; i < out.length; i++) {
+      out[i] = int.parse(hex.substring(i * 2, i * 2 + 2), radix: 16);
+    }
+    return out;
   }
 
   static String _hex(List<int> bytes) {

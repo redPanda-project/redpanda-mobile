@@ -1,9 +1,17 @@
+import 'dart:async';
 import 'dart:isolate';
 
 import 'package:redpanda_light_client/src/client/isolate_client.dart';
 import 'package:redpanda_light_client/src/client/isolate_protocol.dart';
+import 'package:redpanda_light_client/src/domain/rendezvous_state_update.dart';
 import 'package:redpanda_light_client/src/logging/logger.dart';
 import 'package:test/test.dart';
+
+/// A rendezvous merge state as `RendezvousManager.exportMergeState` produces
+/// it: one counterpart entry with its `entry_ts` and mailbox list.
+const mergeStateJson =
+    '[{"pid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"partner","ts":1700000000000,'
+    '"ohs":[{"ep":"node:59558","id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","pk":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}]}]';
 
 /// Fake worker for supervision tests: reports every received command back to
 /// the main isolate via [EventLog] and crashes (uncaught error → isolate
@@ -13,6 +21,36 @@ void crashableWorkerEntry(SendPort mainSendPort) {
   mainSendPort.send(receivePort.sendPort);
   receivePort.listen((message) {
     mainSendPort.send(EventLog('cmd:${message.runtimeType}'));
+    if (message is CmdDisconnect) {
+      throw StateError('simulated worker crash');
+    }
+  });
+}
+
+/// Fake worker for the TD117 respawn test: publishes a rendezvous merge
+/// state (as the real worker does after a resolved DHT record) when it is
+/// told to connect, reports every received command — including the payload of
+/// a rendezvous restore — and crashes on [CmdDisconnect].
+void rendezvousWorkerEntry(SendPort mainSendPort) {
+  final receivePort = ReceivePort();
+  mainSendPort.send(receivePort.sendPort);
+  receivePort.listen((message) {
+    mainSendPort.send(EventLog('cmd:${message.runtimeType}'));
+    if (message is CmdRestoreRendezvousState) {
+      mainSendPort.send(
+        EventLog('rendezvous:${message.channelId}:${message.mergeStateJson}'),
+      );
+    }
+    if (message is CmdConnect) {
+      mainSendPort.send(
+        EventStateUpdate(
+          const RendezvousStateUpdate(
+            channelId: 'chan1',
+            mergeStateJson: mergeStateJson,
+          ),
+        ),
+      );
+    }
     if (message is CmdDisconnect) {
       throw StateError('simulated worker crash');
     }
@@ -100,6 +138,165 @@ void main() {
       await waitForLogCount('cmd:CmdInit', 2);
       await waitForLogCount('cmd:CmdAddChannelKeys', 2);
       await waitForLogCount('cmd:CmdAddPeer', 2);
+    },
+  );
+
+  test(
+    'TD115: a one-off command sent in the respawn gap is delivered, not dropped',
+    () async {
+      final client = RedPandaIsolateClient(
+        seeds: const [],
+        workerEntryPoint: crashableWorkerEntry,
+      );
+      addTearDown(client.dispose);
+
+      await client.connect();
+      await waitForLogCount('cmd:CmdInit', 1);
+
+      // Crash the worker and wait until the supervisor has NOTICED — from
+      // here until the respawn (500 ms backoff) no worker is attached.
+      await client.disconnect();
+      await waitForLogCount('worker isolate died', 1);
+
+      // Fire-and-forget, not part of the replay projection: before TD115 this
+      // was logged as "Dropping command" and lost, and awaiting
+      // `_isolateReady` would not have helped — it completed long ago.
+      // ignore: unawaited_futures
+      client.ensureOhRedundancy('chan1');
+      expect(
+        capturedLogs.where((l) => l.contains('cmd:CmdEnsureOhRedundancy')),
+        isEmpty,
+        reason: 'no worker is attached yet — the command must be buffered',
+      );
+
+      await waitForLogCount('cmd:CmdInit', 2);
+      await waitForLogCount('cmd:CmdEnsureOhRedundancy', 1);
+
+      // Delivered AFTER the state replay of the respawn, never before it: a
+      // one-off may depend on the channel keys and handles the replay
+      // re-establishes.
+      final secondInit = capturedLogs.lastIndexWhere(
+        (l) => l.contains('cmd:CmdInit'),
+      );
+      final flushed = capturedLogs.indexWhere(
+        (l) => l.contains('cmd:CmdEnsureOhRedundancy'),
+      );
+      expect(flushed, greaterThan(secondInit));
+    },
+  );
+
+  test(
+    'TD115: a buffered command does not overtake a caller awaiting readiness',
+    () async {
+      final client = RedPandaIsolateClient(
+        seeds: const [],
+        workerEntryPoint: crashableWorkerEntry,
+      );
+      addTearDown(client.dispose);
+
+      // Both are issued before the worker is up: the top-up goes through the
+      // queue, the OH registration through `await _isolateReady`. The queue
+      // must not jump the queue — the app restores its persisted handles that
+      // way, and a top-up that runs first sees zero own mailboxes.
+      // ignore: unawaited_futures
+      client.ensureOhRedundancy('chan1');
+      // The fake worker never answers; the registration fails on dispose (or
+      // in its 15 s timeout, long after this test) — both are irrelevant
+      // here, only the command ORDER is.
+      unawaited(
+        client
+            .registerOutboundHandle(channelId: 'chan1')
+            .then<void>((_) {}, onError: (Object _) {}),
+      );
+
+      await waitForLogCount('cmd:CmdEnsureOhRedundancy', 1);
+      final registration = capturedLogs.indexWhere(
+        (l) => l.contains('cmd:CmdRegisterOutboundHandle'),
+      );
+      final topUp = capturedLogs.indexWhere(
+        (l) => l.contains('cmd:CmdEnsureOhRedundancy'),
+      );
+      expect(registration, isNot(-1));
+      expect(registration, lessThan(topUp));
+    },
+  );
+
+  test(
+    'the connect/lifecycle FLAGS drive the replay, in both directions',
+    () async {
+      final client = RedPandaIsolateClient(
+        seeds: const [],
+        workerEntryPoint: crashableWorkerEntry,
+      );
+      addTearDown(client.dispose);
+
+      await client.connect();
+      client.onPause();
+      await waitForLogCount('cmd:CmdInit', 1);
+      await waitForLogCount('cmd:CmdLifecyclePause', 1);
+      final connectsBeforeCrash = capturedLogs
+          .where((l) => l.contains('cmd:CmdConnect'))
+          .length;
+
+      // Crashes the worker AND clears `_connectRequested`.
+      await client.disconnect();
+
+      await waitForLogCount('cmd:CmdInit', 2);
+      // `_lifecyclePaused` is still true ⇒ replayed …
+      await waitForLogCount('cmd:CmdLifecyclePause', 2);
+      // … and the cleared connect flag is replayed as an ABSENCE. The pause
+      // above is sent after the connect would have been (`_replayState`
+      // order), so by now a third CmdConnect would already be in the log.
+      expect(
+        capturedLogs.where((l) => l.contains('cmd:CmdConnect')).length,
+        connectsBeforeCrash,
+      );
+      expect(
+        capturedLogs.where((l) => l.contains('cmd:CmdLifecycleResume')),
+        isEmpty,
+      );
+    },
+  );
+
+  test(
+    'TD117: rendezvous merge state published by the worker survives a respawn',
+    () async {
+      final client = RedPandaIsolateClient(
+        seeds: const [],
+        workerEntryPoint: rendezvousWorkerEntry,
+      );
+      addTearDown(client.dispose);
+
+      client.addChannelKeys(
+        'chan1',
+        List<int>.filled(32, 7),
+        channelSecret: List<int>.filled(32, 8),
+        isChannelCreator: true,
+      );
+      // The fake worker answers CmdConnect with the merge state a resolved
+      // rendezvous record would have produced.
+      await client.connect();
+      await waitForLogCount('cmd:CmdInit', 1);
+      await waitForLogCount('cmd:CmdAddChannelKeys', 1);
+
+      await client.disconnect(); // crashes the worker
+      await waitForLogCount('cmd:CmdInit', 2);
+      await waitForLogCount('cmd:CmdAddChannelKeys', 2);
+
+      // The merge state is replayed verbatim — before TD117 it lived only
+      // inside the dead worker's RendezvousManager.
+      await waitForLogCount('rendezvous:chan1:$mergeStateJson', 1);
+
+      // ... and only AFTER the channel registration: the worker registers a
+      // channel's rendezvous state in addChannelKeys, so entries restored
+      // before that would have nowhere to go.
+      final restoreIndex = capturedLogs.indexWhere(
+        (l) => l.contains('cmd:CmdRestoreRendezvousState'),
+      );
+      final secondChannelIndex = capturedLogs.lastIndexWhere(
+        (l) => l.contains('cmd:CmdAddChannelKeys'),
+      );
+      expect(restoreIndex, greaterThan(secondChannelIndex));
     },
   );
 }

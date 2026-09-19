@@ -26,6 +26,7 @@ import 'package:redpanda_light_client/src/domain/group_state.dart';
 import 'package:redpanda_light_client/src/domain/loopback_result.dart';
 import 'package:redpanda_light_client/src/domain/oh_fetch_status.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
+import 'package:redpanda_light_client/src/domain/rendezvous_state_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/domain/counterpart_oh_update.dart';
@@ -1213,6 +1214,37 @@ class RedPandaLightClient implements RedPandaClient {
   /// record (read-only view, for tests and diagnostics).
   String? rendezvousOwnNameOf(String channelId) =>
       _rendezvous.ownNameOf(channelId);
+
+  /// TD117: restores a channel's rendezvous merge state after a worker
+  /// respawn (driven by `CmdRestoreRendezvousState`, whose payload came from
+  /// [rendezvousMergeStateOf] before the old worker died). Newest-wins, so it
+  /// can only add knowledge.
+  void restoreRendezvousMergeState(String channelId, String mergeStateJson) =>
+      _rendezvous.restoreMergeState(channelId, mergeStateJson);
+
+  /// The serialized rendezvous merge state of [channelId] (for the worker
+  /// -restore projection and for tests), or null when there is nothing known.
+  String? rendezvousMergeStateOf(String channelId) =>
+      _rendezvous.exportMergeState(channelId);
+
+  /// Refreshes the rendezvous own-OH projection of [channelId] from the live
+  /// handle set and reports whether it changed.
+  ///
+  /// The own-OH list inside [RendezvousManager] is a PROJECTION of
+  /// [registeredOutboundHandles], and only the two publish triggers
+  /// (a fresh registration, an own-OH set change) ever fed it. A respawned
+  /// worker — and an app restart, which is the same thing one level up — gets
+  /// its mailboxes back through [restoreOutboundHandle], which is
+  /// deliberately not a publish trigger, so the projection stayed EMPTY:
+  /// `buildSignedStore` then returns null and the republish sweep silently
+  /// published nothing until the next mailbox change (Copilot HIGH on #123).
+  /// That would have left the restored merge state (TD117) unpublishable —
+  /// the record would keep expiring with the counterpart in it.
+  ///
+  /// Called by the republish sweep, so the projection is re-derived wherever
+  /// the record is about to be refreshed instead of depending on who set it.
+  bool refreshRendezvousOwnOhs(String channelId) =>
+      _rendezvous.setOwnOhs(channelId, _ownDescriptorsFor(channelId));
 
   /// The partner's currently known mailbox ids for [channelId], primary
   /// first (read-only view, for tests and diagnostics — mirrors
@@ -2980,11 +3012,31 @@ class RedPandaLightClient implements RedPandaClient {
       }
       final record = RendezvousManager.recordFromStoreBytes(payload.sublist(1));
       final now = DateTime.now().millisecondsSinceEpoch;
+      final mergeStateBefore = _rendezvous.exportMergeState(channelId);
       final counterpartOhs = await _rendezvous.applyResolvedRecord(
         channelId,
         record,
         now,
       );
+      // TD117: the merge state is the only place the counterpart's entry_ts
+      // lives, and a resolved record is the only way we learn about OTHER
+      // participants (publishing also touches the state, but only to re-stamp
+      // our own entry from live state, which a respawned worker regenerates).
+      // Emit before the early-outs below: a record can advance a third
+      // participant (or a counterpart entry that carries no newer OH list)
+      // without changing the deposit set, and that knowledge must still
+      // survive a respawn. Two lookups in flight (today's + yesterday's key)
+      // may both emit; each snapshot is the full current state, so a
+      // duplicate is harmless.
+      final mergeStateAfter = _rendezvous.exportMergeState(channelId);
+      if (mergeStateAfter != null && mergeStateAfter != mergeStateBefore) {
+        _emitState(
+          RendezvousStateUpdate(
+            channelId: channelId,
+            mergeStateJson: mergeStateAfter,
+          ),
+        );
+      }
       if (counterpartOhs == null || counterpartOhs.isEmpty) return;
       final changed = _replaceCounterpartOhSet(channelId, counterpartOhs);
       if (changed) {
@@ -4845,6 +4897,12 @@ class RedPandaLightClient implements RedPandaClient {
     }
     _lastRepublishSweep = now;
     for (final channelId in _rendezvous.channels.toList()) {
+      // Re-derive the own-OH projection first: after a respawn or an app
+      // restart the handles came back through restoreOutboundHandle, which is
+      // not a publish trigger, and buildSignedStore returns null for an empty
+      // own-OH list — the sweep would publish nothing at all. Cheap and
+      // idempotent; it does not itself trigger a publish.
+      refreshRendezvousOwnOhs(channelId);
       final last = _lastRendezvousPublish[channelId];
       // Never-published channels (hops not yet ready at registration) retry
       // every call; published ones refresh at [_rendezvousRepublishInterval].

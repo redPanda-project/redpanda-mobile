@@ -3,6 +3,7 @@ import 'package:redpanda_light_client/src/client/isolate_protocol.dart';
 import 'package:redpanda_light_client/src/crypto/ratchet.dart';
 import 'package:redpanda_light_client/src/domain/garlic_session_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
+import 'package:redpanda_light_client/src/domain/rendezvous_state_update.dart';
 import 'package:redpanda_light_client/src/domain/counterpart_oh_update.dart';
 import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/garlic/node_scorer.dart';
@@ -26,6 +27,10 @@ class WorkerReplayState {
   final Map<String, CmdAddChannelKeys> _channels = {};
   final Map<String, CmdRestoreOutboundHandle> _handles = {};
   final Map<String, CmdRegisterGroup> _groups = {};
+
+  /// T44 rendezvous merge state per channel id (TD117), fed from
+  /// [RendezvousStateUpdate] — serialized exactly as the worker exported it.
+  final Map<String, String> _rendezvousMergeState = {};
   List<NodeScore>? _nodeScores;
 
   void recordPeer(String address) => _peers.add(address);
@@ -59,7 +64,14 @@ class WorkerReplayState {
       old.channelId,
       old.encryptionKey,
       channelSecret: old.channelSecret ?? cmd.channelSecret,
-      ownDisplayName: old.ownDisplayName ?? cmd.ownDisplayName,
+      // The display name is the ONE field a re-registration legitimately
+      // CHANGES (the user renamed themselves): null means "unchanged" here
+      // exactly as in `RendezvousManager.register`, a non-null name is the
+      // newest one and wins. Keeping the old name would replay a name the
+      // app has already replaced — and since a re-register sent while no
+      // worker is attached is dropped in favour of this projection, the
+      // rename would be lost until the next one.
+      ownDisplayName: cmd.ownDisplayName ?? old.ownDisplayName,
       counterpartOhId: knowsCounterpartOh
           ? old.counterpartOhId
           : cmd.counterpartOhId,
@@ -155,6 +167,11 @@ class WorkerReplayState {
             lastCursor: h.lastCursor,
           );
         }
+      case RendezvousStateUpdate(:final channelId, :final mergeStateJson):
+        // TD117: the newest snapshot wins wholesale — the worker merges
+        // newest-wins per participant before publishing it, so the last one
+        // seen is by construction the most complete.
+        _rendezvousMergeState[channelId] = mergeStateJson;
       case NodeScoreUpdate(:final scores):
         _nodeScores = scores;
       default:
@@ -165,12 +182,17 @@ class WorkerReplayState {
   }
 
   /// The commands that re-establish the worker state, in the order they must
-  /// be sent (peers → channels → handles → groups → node scores).
+  /// be sent (peers → channels → rendezvous → handles → groups → node
+  /// scores). The rendezvous state follows the channels because the worker
+  /// registers a channel's rendezvous state in `addChannelKeys`; an entry for
+  /// a channel that was never registered is silently ignored there.
   List<IsolateCommand> replayCommands() {
     final scores = _nodeScores;
     return [
       for (final address in _peers) CmdAddPeer(address),
       ..._channels.values,
+      for (final entry in _rendezvousMergeState.entries)
+        CmdRestoreRendezvousState(entry.key, entry.value),
       ..._handles.values,
       ..._groups.values,
       if (scores != null && scores.isNotEmpty) CmdRestoreNodeScores(scores),

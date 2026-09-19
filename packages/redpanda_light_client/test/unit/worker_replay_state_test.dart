@@ -7,6 +7,7 @@ import 'package:redpanda_light_client/src/domain/group_state.dart';
 import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
 import 'package:redpanda_light_client/src/domain/oh_fetch_status.dart';
 import 'package:redpanda_light_client/src/domain/oh_mailbox_update.dart';
+import 'package:redpanda_light_client/src/domain/rendezvous_state_update.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/domain/counterpart_oh_update.dart';
 import 'package:redpanda_light_client/src/domain/state_update.dart';
@@ -338,6 +339,23 @@ void main() {
       expect(cmd.ratchetState, equals('ratchet-v7'));
     });
 
+    test('a re-register with a NEW display name updates the projection', () {
+      // The one field a re-registration is allowed to CHANGE: the user
+      // renamed themselves. The worker applies it (`RendezvousManager
+      // .register`), so the projection must too — otherwise a respawn
+      // replays the old name and the rename disappears from the DHT record.
+      final replay = WorkerReplayState()..recordChannelKeys(channelCmd('c1'));
+      replay.recordChannelKeys(
+        CmdAddChannelKeys(
+          'c1',
+          List<int>.filled(32, 1),
+          ownDisplayName: 'renamed',
+          isChannelCreator: true,
+        ),
+      );
+      expect(onlyChannel(replay).ownDisplayName, equals('renamed'));
+    });
+
     test('a stale re-register never moves the counterpart mailbox back', () {
       final replay = WorkerReplayState()..recordChannelKeys(channelCmd('c1'));
       replay.apply(
@@ -396,6 +414,62 @@ void main() {
       // The role is the channel's identity, not something a later caller
       // gets to flip.
       expect(cmd.isChannelCreator, isFalse);
+    });
+  });
+
+  group('TD117: rendezvous merge state', () {
+    test('is replayed after the channel it belongs to', () {
+      final replay = WorkerReplayState()
+        ..recordChannelKeys(channelCmd('c1'))
+        ..apply(
+          const RendezvousStateUpdate(
+            channelId: 'c1',
+            mergeStateJson: '[{"pid":"aa"}]',
+          ),
+        );
+
+      final cmds = replay.replayCommands();
+      final restore = cmds.whereType<CmdRestoreRendezvousState>().single;
+      expect(restore.channelId, 'c1');
+      expect(restore.mergeStateJson, '[{"pid":"aa"}]');
+      // The worker registers a channel's rendezvous state in addChannelKeys,
+      // so entries restored before that would have nowhere to go.
+      expect(
+        cmds.indexOf(restore),
+        greaterThan(cmds.indexWhere((c) => c is CmdAddChannelKeys)),
+      );
+    });
+
+    test('keeps the newest snapshot per channel', () {
+      final replay = WorkerReplayState()
+        ..recordChannelKeys(channelCmd('c1'))
+        ..recordChannelKeys(channelCmd('c2'))
+        ..apply(
+          const RendezvousStateUpdate(channelId: 'c1', mergeStateJson: 'old'),
+        )
+        ..apply(
+          const RendezvousStateUpdate(channelId: 'c1', mergeStateJson: 'new'),
+        )
+        ..apply(
+          const RendezvousStateUpdate(channelId: 'c2', mergeStateJson: 'c2'),
+        );
+
+      final restores = replay
+          .replayCommands()
+          .whereType<CmdRestoreRendezvousState>()
+          .toList();
+      expect(
+        {for (final r in restores) r.channelId: r.mergeStateJson},
+        {'c1': 'new', 'c2': 'c2'},
+      );
+    });
+
+    test('a channel without rendezvous state replays no restore', () {
+      final replay = WorkerReplayState()..recordChannelKeys(channelCmd('c1'));
+      expect(
+        replay.replayCommands().whereType<CmdRestoreRendezvousState>(),
+        isEmpty,
+      );
     });
   });
 }
