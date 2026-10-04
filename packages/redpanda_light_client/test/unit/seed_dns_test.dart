@@ -103,6 +103,8 @@ void main() {
       },
     );
 
+    // No connect() on purpose in these tests: without the 3 s timer the
+    // constructor's check and explicit addPeer calls are the only checks.
     await waitFor(() => dials.isNotEmpty, description: 'first dial');
     // Nothing else may follow: the second seed is an alias of the first dial.
     await Future.delayed(const Duration(milliseconds: 200));
@@ -115,6 +117,24 @@ void main() {
 
     // TD260: IP literals are never sent to the resolver.
     expect(lookups, everyElement('seed2.test'));
+  });
+
+  test('two overlapping checks: the IP dialled while the hostname lookup is '
+      'still pending makes the hostname an alias', () async {
+    final dials = <String>[];
+    final pending = Completer<List<InternetAddress>>();
+    client = await build(
+      seeds: [hostSeed],
+      dials: dials,
+      lookup: (host) => pending.future,
+    );
+    // Check A sits in the hostname lookup; check B dials the IP meanwhile.
+    await Future.delayed(const Duration(milliseconds: 50));
+    await client!.addPeer(ipSeed);
+    await waitFor(() => dials.contains(ipSeed), description: 'IP dial');
+    pending.complete([InternetAddress('5.75.137.166')]);
+    await Future.delayed(const Duration(milliseconds: 200));
+    expect(dials, [ipSeed]);
   });
 
   test('peer repository keeps hostname and IP as separate entries', () async {
@@ -146,6 +166,7 @@ void main() {
     await waitFor(
       () =>
           dials.contains(ipSeed) &&
+          dials.contains('seed1.invalid:59558') &&
           (repo.getPeer('seed1.invalid:59558')?.failureCount ?? 0) > 0,
       description: 'fallback dial + failure recorded for the bad name',
     );
@@ -161,12 +182,16 @@ void main() {
     final repo = InMemoryPeerRepository()
       // Best score: the hanging hostname is the first candidate of the loop.
       ..updatePeer('seed1.hang:59558', latencyMs: 10, isSuccess: true);
+    final lookups = <String>[];
     final watch = Stopwatch()..start();
     client = await build(
       seeds: [ipSeed],
       dials: dials,
       repo: repo,
-      lookup: (host) => Completer<List<InternetAddress>>().future,
+      lookup: (host) {
+        lookups.add(host);
+        return Completer<List<InternetAddress>>().future;
+      },
     );
 
     await waitFor(
@@ -177,6 +202,10 @@ void main() {
     watch.stop();
     // The hostname was still dialled (the socket resolves on its own).
     expect(dials.first, 'seed1.hang:59558');
-    expect(watch.elapsed, lessThan(RedPandaLightClient.lookupTimeout * 3));
+    expect(lookups, ['seed1.hang']);
+    expect(
+      watch.elapsed,
+      greaterThanOrEqualTo(RedPandaLightClient.lookupTimeout),
+    );
   });
 }

@@ -99,8 +99,8 @@ class RedPandaLightClient implements RedPandaClient {
   /// Addresses picked for a dial by a [_runConnectionCheck] that has not put
   /// its [ActivePeer] into [_peers] yet.
   ///
-  /// [_runConnectionCheck] awaits DNS lookups (`_resolveConnectedIps`,
-  /// `_resolveEndpoint`) between choosing candidates and registering the
+  /// [_runConnectionCheck] awaits a DNS lookup (`_resolveEndpoint`) between
+  /// choosing a candidate and registering the
   /// peer, and it runs from three places at once: the constructor's
   /// `load().then(...)`, [connect], and the 3 s timer. Without this set a
   /// second check re-picks an address whose dial is still inside that await
@@ -112,6 +112,17 @@ class RedPandaLightClient implements RedPandaClient {
   /// moment earlier, yet `sendMessage` throws "no active peer available"
   /// (T78 — reproduced by pinning the e2e suite to two cores).
   final Set<String> _dialsInFlight = {};
+
+  /// The `ip:port` endpoints each address in [_peers] resolved to when it was
+  /// dialled — the alias dedup's view of "already connected" (T154).
+  ///
+  /// Filled in the same synchronous step that inserts into [_peers], so two
+  /// overlapping checks cannot both miss each other: whichever finishes its
+  /// lookup second sees the first one's endpoints. Resolving at dial time
+  /// instead of on every check also keeps a connected hostname peer from
+  /// costing a DNS query per 3 s tick. Entries of addresses no longer in
+  /// [_peers] are ignored (and dropped on cleanup).
+  final Map<String, Set<String>> _dialledEndpoints = {};
 
   Timer? _connectionTimer;
   ConnectionStatus _currentStatus = ConnectionStatus.disconnected;
@@ -532,6 +543,7 @@ class RedPandaLightClient implements RedPandaClient {
     _peers.removeWhere((address, peer) {
       if (peer.isDisconnected) {
         RpLog.debug('RedPandaLightClient: Removing disconnected peer $address');
+        _dialledEndpoints.remove(address);
         return true;
       }
       // Also ping active peers periodically
@@ -663,20 +675,19 @@ class RedPandaLightClient implements RedPandaClient {
     _dialsInFlight.addAll(claimed);
 
     try {
-      // Resolve Deduplication done in ActivePeer or before connect?
-      // We do simplified resolve check here
-      final connectedIps = await _resolveConnectedIps();
-
       for (final address in toConnect) {
         try {
           final resolved = await _resolveEndpoint(address);
-          if (resolved.any(connectedIps.contains)) {
+          if (_disconnected) break; // shut down during the lookup
+          // Everything from here to `_peers[address] = peer` is synchronous
+          // (see [_dialledEndpoints]).
+          if (_isAliasOfConnected(resolved)) {
+            // E.g. seed2.redpanda.im next to its own fallback IP. Back off
+            // (without scoring a failure) so a permanent alias does not take
+            // a dial slot in every check.
+            _handleBackoff(address);
             continue;
           }
-          // Dials of this same cycle count as connected too: on a cold start
-          // nothing is connected yet, and a hostname seed plus its own IP
-          // (defaultSeeds) would otherwise both be dialled.
-          connectedIps.addAll(resolved);
 
           final peer = ActivePeer(
             address: address,
@@ -718,10 +729,13 @@ class RedPandaLightClient implements RedPandaClient {
               // _runConnectionCheck();
             },
             onPeerListRequested: () {
-              // Return top 20 best peers to share
+              // Return top 20 best peers to share. IP literals only: nodes
+              // drop gossiped host names (redpandaj
+              // Utils.isPlausibleAdvertisedAddress), seeds are local config.
               return _peerRepository
                   .getBestPeers(20)
                   .map((p) => p.address)
+                  .where(_isIpLiteralAddress)
                   .toList();
             },
             onHandshakeComplete: () {
@@ -738,6 +752,7 @@ class RedPandaLightClient implements RedPandaClient {
             },
           );
           peer.onCommandResponse = _handleCommandResponse;
+          _dialledEndpoints[address] = resolved;
           _peers[address] = peer;
           peer.connect(); // Fire and forget (it is async inside)
         } catch (e) {
@@ -830,16 +845,18 @@ class RedPandaLightClient implements RedPandaClient {
     await _runConnectionCheck();
   }
 
-  Future<Set<String>> _resolveConnectedIps() async {
-    final connectedIps = <String>{};
-    // Copy: _peers may be mutated by peer callbacks while we await lookups.
-    for (final peer in List.of(_peers.values)) {
-      if (!peer.isDisconnected) {
-        connectedIps.addAll(await _resolveEndpoint(peer.address));
-      }
+  /// Whether one of [endpoints] belongs to a live entry of [_peers].
+  bool _isAliasOfConnected(Set<String> endpoints) {
+    for (final entry in _dialledEndpoints.entries) {
+      final peer = _peers[entry.key];
+      if (peer == null || peer.isDisconnected) continue;
+      if (entry.value.any(endpoints.contains)) return true;
     }
-    return connectedIps;
+    return false;
   }
+
+  static bool _isIpLiteralAddress(String address) =>
+      InternetAddress.tryParse(address.split(':').first) != null;
 
   /// The `ip:port` endpoints [address] (`host:port`) resolves to. IP literals
   /// skip DNS (TD260). A failed or timed-out lookup yields an empty set: the
@@ -883,11 +900,14 @@ class RedPandaLightClient implements RedPandaClient {
     _pollingTimer = null;
     _renewalTimer?.cancel();
     _renewalTimer = null;
-    for (final peer in _peers.values) {
+    // Copy: a connection check suspended in a DNS lookup may still insert
+    // into _peers while we await here.
+    for (final peer in List.of(_peers.values)) {
       await peer.disconnect();
     }
     _peers.clear();
     _dialsInFlight.clear();
+    _dialledEndpoints.clear();
     _registeredOHs.clear();
     _pendingResponses.clear();
     _putResponses.clear();
