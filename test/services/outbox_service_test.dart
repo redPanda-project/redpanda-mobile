@@ -52,7 +52,6 @@ void main() {
         .insert(
           MessagesCompanion.insert(
             conversationId: 'channel-1',
-            senderId: 'me',
             content: content,
             timestamp: DateTime.now(),
             status: MessageStatus.pending,
@@ -344,7 +343,6 @@ void main() {
     test('inserts a pending row and sends it in the same breath', () async {
       final rowId = await outbox.enqueue(
         conversationId: 'channel-1',
-        senderId: 'me',
         content: 'hello',
       );
 
@@ -369,11 +367,7 @@ void main() {
       await pumpEventQueue();
 
       client.beforeSend = null;
-      await outbox.enqueue(
-        conversationId: 'channel-1',
-        senderId: 'me',
-        content: 'while busy',
-      );
+      await outbox.enqueue(conversationId: 'channel-1', content: 'while busy');
       gate.complete();
       await pass;
       await outbox.settled;
@@ -396,7 +390,6 @@ void main() {
 
       final rowId = await outbox.enqueue(
         conversationId: 'channel-1',
-        senderId: 'me',
         content: 'mailbox full',
       );
       await outbox.settled;

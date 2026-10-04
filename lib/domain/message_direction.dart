@@ -20,6 +20,11 @@
 ///   a status is added, every outgoing group message flips side.
 ///
 /// Direction is a property of the message, so the message stores it.
+///
+/// T143 (TD155) finished the second half: `senderId` is gone. The author of
+/// a row is [outgoing] -> the local user, [incoming] without a
+/// `senderMemberId` -> the 1:1 counterpart, [incoming] with one -> that group
+/// member (see `Messages.senderMemberId`).
 abstract final class MessageDirection {
   /// Composed on this device and handed to the outbox.
   static const int outgoing = 0;

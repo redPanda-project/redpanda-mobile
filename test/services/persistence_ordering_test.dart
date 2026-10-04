@@ -190,7 +190,6 @@ void main() {
     await insertChannel('channel-1');
     final messageRow = await messages.insertOutgoing(
       conversationId: 'channel-1',
-      senderId: 'me',
       content: 'hi',
       messageId: 'ab12',
     );
@@ -223,7 +222,6 @@ void main() {
     await insertChannel('channel-1');
     final messageRow = await messages.insertOutgoing(
       conversationId: 'channel-1',
-      senderId: 'me',
       content: 'hi',
       messageId: 'cd34',
     );

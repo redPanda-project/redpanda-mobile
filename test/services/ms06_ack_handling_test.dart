@@ -60,7 +60,6 @@ void main() {
         );
     final id = await messages.insertOutgoing(
       conversationId: channelId,
-      senderId: 'me',
       content: 'hallo',
       messageId: messageIdHex,
     );

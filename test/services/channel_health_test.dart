@@ -19,7 +19,6 @@ Message _message({
   return Message(
     id: id,
     conversationId: 'chan',
-    senderId: 'me',
     content: 'hi',
     timestamp: timestamp ?? now,
     status: status,

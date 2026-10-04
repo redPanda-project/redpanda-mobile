@@ -77,7 +77,6 @@ void main() {
     // The outgoing group message under test (status sent).
     final rowId = await messages.insertOutgoing(
       conversationId: groupId,
-      senderId: 'me-uuid',
       content: 'hallo gruppe',
       messageId: messageIdHex,
     );
@@ -170,7 +169,7 @@ void main() {
       db.messages,
     )..where((t) => t.messageId.equals('ffee' * 8))).getSingle();
     expect(row.senderMemberId, bob);
-    expect(row.senderId, bob);
+    expect(row.direction, MessageDirection.incoming);
     expect(row.status, MessageStatus.received);
     expect(row.conversationId, groupId);
 

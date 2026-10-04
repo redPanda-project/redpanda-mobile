@@ -38,6 +38,7 @@
 /// | 15 | `c19475d` | outbound_handles.failed_over_at                      |
 /// | 16 | `3b27ed8` | channels.peer_oh_set                                 |
 /// | 17 | `02e1805` | T44 destructive re-creation, channels.channel_secret |
+/// | 18 | `7b35f70` | T114 messages.direction                              |
 ///
 /// Version 1 is deliberately absent: the initial commit already declares
 /// `schemaVersion => 2`, so no build of this app ever wrote a v1 database, and
@@ -266,6 +267,9 @@ const _steps = <int, List<String>>{
         'last_cursor INTEGER NOT NULL DEFAULT 0, '
         'failed_over_at INTEGER NULL)',
     _convMessageIdIndex,
+  ],
+  18: <String>[
+    'ALTER TABLE messages ADD COLUMN direction INTEGER NOT NULL DEFAULT 0',
   ],
 };
 

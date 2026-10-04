@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:drift/native.dart';
 import 'package:redpanda/database/database.dart';
 import 'package:sqlite3/open.dart';
+import 'package:sqlite3/sqlite3.dart' show Database;
 
 bool _overrideApplied = false;
 
@@ -23,7 +24,15 @@ AppDatabase createTestDatabase() {
 /// database is first used — the exact code path a phone takes after an update
 /// (T124/TD149), including the `user_version` bump that only happens when the
 /// whole migration succeeded.
-AppDatabase createTestDatabaseAtVersion(int version, List<String> ddl) {
+///
+/// [onRawDatabase] receives the underlying sqlite3 handle, so a test can
+/// inspect the database even after a migration failure has made drift refuse
+/// every further query.
+AppDatabase createTestDatabaseAtVersion(
+  int version,
+  List<String> ddl, {
+  void Function(Database raw)? onRawDatabase,
+}) {
   _ensureSqlite3();
   return AppDatabase.forTesting(
     NativeDatabase.memory(
@@ -32,6 +41,7 @@ AppDatabase createTestDatabaseAtVersion(int version, List<String> ddl) {
           rawDb.execute(statement);
         }
         rawDb.execute('PRAGMA user_version = $version;');
+        onRawDatabase?.call(rawDb);
       },
     ),
   );

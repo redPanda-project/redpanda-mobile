@@ -293,12 +293,10 @@ class OutboxService {
   /// status.
   Future<int> enqueue({
     required String conversationId,
-    required String senderId,
     required String content,
   }) async {
     final rowId = await _messages.insertOutgoing(
       conversationId: conversationId,
-      senderId: senderId,
       content: content,
     );
     unawaited(
