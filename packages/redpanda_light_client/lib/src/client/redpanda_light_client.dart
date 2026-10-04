@@ -739,10 +739,13 @@ class RedPandaLightClient implements RedPandaClient {
               // Return top 20 best peers to share. IP literals only: nodes
               // drop gossiped host names (redpandaj
               // Utils.isPlausibleAdvertisedAddress), seeds are local config.
+              // Filter before capping so host-name entries (seeds) never
+              // eat the 20-slot budget (Copilot review on #129).
               return _peerRepository
-                  .getBestPeers(20)
+                  .getBestPeers(60)
                   .map((p) => p.address)
                   .where(_isIpLiteralAddress)
+                  .take(20)
                   .toList();
             },
             onHandshakeComplete: () {
@@ -887,6 +890,12 @@ class RedPandaLightClient implements RedPandaClient {
     ?endpoint,
     if (endpoint != null) ?_livePeerFor(endpoint)?.address,
   };
+
+  /// Node identity of the live peer serving [endpoint] (under any of its
+  /// names), for excluding an OH's host node from its own garlic routes even
+  /// when the peer list knows it under a different address.
+  String? _hostNodeId(String? endpoint) =>
+      endpoint == null ? null : _livePeerFor(endpoint)?.discoveredNodeId;
 
   /// `{ip:port}` for an IP-literal [address], null for a host name or a
   /// malformed address.
@@ -2271,8 +2280,12 @@ class RedPandaLightClient implements RedPandaClient {
   }) {
     var hops = _hopSelector.selectHops(
       count: defaultHopCount,
-      excludeAddresses: {submitVia.address, ?ohEndpoint},
-      excludeNodeIds: {?submitVia.discoveredNodeId, ...excludeNodeIds},
+      excludeAddresses: {submitVia.address, ..._hostAddresses(ohEndpoint)},
+      excludeNodeIds: {
+        ?submitVia.discoveredNodeId,
+        ?_hostNodeId(ohEndpoint),
+        ...excludeNodeIds,
+      },
     );
     if (hops.isEmpty && excludeNodeIds.isNotEmpty) {
       // Not enough DISJOINT candidates left for this extra route — reuse relay
@@ -2281,8 +2294,8 @@ class RedPandaLightClient implements RedPandaClient {
       // routeCount × hopCount relay candidates).
       hops = _hopSelector.selectHops(
         count: defaultHopCount,
-        excludeAddresses: {submitVia.address, ?ohEndpoint},
-        excludeNodeIds: {?submitVia.discoveredNodeId},
+        excludeAddresses: {submitVia.address, ..._hostAddresses(ohEndpoint)},
+        excludeNodeIds: {?submitVia.discoveredNodeId, ?_hostNodeId(ohEndpoint)},
       );
     }
     if (hops.isNotEmpty) return (hops: hops, selfHop: false);
@@ -2398,7 +2411,7 @@ class RedPandaLightClient implements RedPandaClient {
     final rgb = _rgbBuilder.build(
       ohId: ownOh.ohId,
       hopCount: defaultHopCount,
-      excludeAddresses: {?ownOh.serverEndpoint},
+      excludeAddresses: _hostAddresses(ownOh.serverEndpoint),
     );
     if (rgb == null) {
       RpLog.info(
@@ -2480,8 +2493,14 @@ class RedPandaLightClient implements RedPandaClient {
     // never relays its own acks; the submit node sees us directly).
     final returnHops = _hopSelector.selectHops(
       count: defaultHopCount,
-      excludeAddresses: {?ownOh.serverEndpoint, submitVia.address},
-      excludeNodeIds: {?submitVia.discoveredNodeId},
+      excludeAddresses: {
+        ..._hostAddresses(ownOh.serverEndpoint),
+        submitVia.address,
+      },
+      excludeNodeIds: {
+        ?submitVia.discoveredNodeId,
+        ?_hostNodeId(ownOh.serverEndpoint),
+      },
     );
     final withinBudget =
         payloadLength <=
@@ -2525,11 +2544,12 @@ class RedPandaLightClient implements RedPandaClient {
     final ohEndpoint = _channelCounterpartOhEndpoints[channelId];
     return _hopSelector.selectHops(
       count: defaultHopCount,
-      excludeAddresses: {submitVia.address, ?ohEndpoint},
+      excludeAddresses: {submitVia.address, ..._hostAddresses(ohEndpoint)},
       excludeNodeIds: {
-        // The submission node may be known in the peer list under a
-        // different address (e.g. seed alias) — exclude it by identity too.
+        // The submission node and the OH host may be known in the peer list
+        // under a different address (e.g. seed alias) — exclude by identity too.
         ?submitVia.discoveredNodeId,
+        ?_hostNodeId(ohEndpoint),
       },
     );
   }
@@ -3030,8 +3050,14 @@ class RedPandaLightClient implements RedPandaClient {
 
     final returnHops = _hopSelector.selectHops(
       count: defaultHopCount,
-      excludeAddresses: {?ownOh.serverEndpoint, submitVia.address},
-      excludeNodeIds: {?submitVia.discoveredNodeId},
+      excludeAddresses: {
+        ..._hostAddresses(ownOh.serverEndpoint),
+        submitVia.address,
+      },
+      excludeNodeIds: {
+        ?submitVia.discoveredNodeId,
+        ?_hostNodeId(ownOh.serverEndpoint),
+      },
     );
     final now = nowThrottle.millisecondsSinceEpoch;
     final keys = await _rendezvous.lookupKeys(channelId, now);
@@ -4210,8 +4236,14 @@ class RedPandaLightClient implements RedPandaClient {
 
     final hops = _hopSelector.selectHops(
       count: defaultHopCount,
-      excludeAddresses: {submitVia.address, ?member.ohEndpoint},
-      excludeNodeIds: {?submitVia.discoveredNodeId},
+      excludeAddresses: {
+        submitVia.address,
+        ..._hostAddresses(member.ohEndpoint),
+      },
+      excludeNodeIds: {
+        ?submitVia.discoveredNodeId,
+        ?_hostNodeId(member.ohEndpoint),
+      },
     );
     if (hops.isNotEmpty) {
       if (payload.length > GarlicBuilder.maxPayloadLength(hops.length)) {
