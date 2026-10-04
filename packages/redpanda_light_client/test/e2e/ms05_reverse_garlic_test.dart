@@ -13,6 +13,7 @@ import 'package:redpanda_light_client/src/domain/channel.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
+
 import 'redpanda_node_launcher.dart';
 import 'test_helpers.dart';
 
@@ -105,34 +106,6 @@ void main() async {
       }
     });
 
-    /// Polls until [client] knows all three relays incl. their X25519 keys.
-    Future<void> waitForRelayCandidates(
-      RedPandaLightClient client,
-      String who,
-    ) async {
-      final deadline = DateTime.now().add(const Duration(seconds: 120));
-      while (true) {
-        final known = client
-            .getDebugPeerStats()
-            .where(
-              (p) =>
-                  relayAddresses.contains(p.address) &&
-                  p.encryptionPublicKey != null &&
-                  p.nodeId != null,
-            )
-            .length;
-        if (known >= relayAddresses.length) return;
-        if (DateTime.now().isAfter(deadline)) {
-          fail(
-            '$who discovered only $known of ${relayAddresses.length} relay '
-            'candidates with encryption keys',
-          );
-        }
-        client.requestPeerLists();
-        await Future.delayed(const Duration(seconds: 2));
-      }
-    }
-
     test('Alice sends with RGB, Bob replies via the reverse path, Alice '
         'correlates by session tag and answers over Bob\'s RGB', () async {
       await alice.connect();
@@ -164,8 +137,8 @@ void main() async {
       // peer lists come from the same entry node, and keeping this phase
       // short matters for the per-attempt time budget.
       await Future.wait([
-        waitForRelayCandidates(alice, 'Alice'),
-        waitForRelayCandidates(bob, 'Bob'),
+        waitForRelayCandidates(alice, relayAddresses, who: 'Alice'),
+        waitForRelayCandidates(bob, relayAddresses, who: 'Bob'),
       ]);
       // Give the OH announces and the relay interconnections a moment.
       await Future.delayed(const Duration(seconds: 5));

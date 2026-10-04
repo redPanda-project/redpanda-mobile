@@ -7,6 +7,8 @@ import 'package:redpanda_light_client/src/domain/rendezvous_state_update.dart';
 import 'package:redpanda_light_client/src/logging/logger.dart';
 import 'package:test/test.dart';
 
+import '../helpers/wait_for.dart';
+
 /// A rendezvous merge state as `RendezvousManager.exportMergeState` produces
 /// it: one counterpart entry with its `entry_ts` and mailbox list.
 const mergeStateJson =
@@ -79,16 +81,13 @@ void main() {
     String needle,
     int count, {
     Duration timeout = const Duration(seconds: 20),
-  }) async {
-    final deadline = DateTime.now().add(timeout);
-    while (DateTime.now().isBefore(deadline)) {
-      if (capturedLogs.where((l) => l.contains(needle)).length >= count) {
-        return;
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-    }
-    fail('timed out waiting for $count x "$needle"; logs: $capturedLogs');
-  }
+  }) => waitFor(
+    () => capturedLogs.where((l) => l.contains(needle)).length >= count,
+    timeout: timeout,
+    interval: const Duration(milliseconds: 50),
+    message: () =>
+        'timed out waiting for $count x "$needle"; logs: $capturedLogs',
+  );
 
   test(
     'a crashed worker isolate is respawned and its state replayed',

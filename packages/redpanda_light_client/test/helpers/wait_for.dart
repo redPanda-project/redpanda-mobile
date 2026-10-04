@@ -12,18 +12,30 @@ import 'package:test/test.dart';
 /// A fixed delay stays the right tool for the opposite case: asserting that
 /// *nothing* happens within a window. There a too-short wait only weakens the
 /// check, it cannot make it red.
+///
+/// [interval] is the pause between polls. [onPoll] runs after every failed
+/// poll that is followed by a pause (not on the final, timing-out one) — for
+/// pollers that must nudge the system (e.g.
+/// `requestPeerLists()`) instead of only watching it. [message], if given,
+/// builds the failure text lazily at timeout, so it can report the state at
+/// that moment (e.g. how many of N items were found); it replaces the
+/// `[description] not met` default.
 Future<void> waitFor(
   bool Function() predicate, {
   Duration timeout = const Duration(seconds: 5),
   String description = 'condition',
+  Duration interval = const Duration(milliseconds: 10),
+  void Function()? onPoll,
+  String Function()? message,
 }) async {
   // Stopwatch, not DateTime.now(): a wall-clock jump (NTP step, VM
   // suspend/resume) must not shorten or stretch the budget.
   final elapsed = Stopwatch()..start();
   while (!predicate()) {
     if (elapsed.elapsed > timeout) {
-      fail('$description not met within $timeout');
+      fail(message?.call() ?? '$description not met within $timeout');
     }
-    await Future.delayed(const Duration(milliseconds: 10));
+    onPoll?.call();
+    await Future.delayed(interval);
   }
 }
