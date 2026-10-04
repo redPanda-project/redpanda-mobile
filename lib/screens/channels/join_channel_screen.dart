@@ -108,8 +108,9 @@ class _JoinChannelScreenState extends ConsumerState<JoinChannelScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Invalid Channel Code: $e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Invalid Channel Code: $e')));
         // Resume scanning after a delay
         await Future.delayed(const Duration(seconds: 2));
         if (mounted) {

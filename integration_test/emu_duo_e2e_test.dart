@@ -42,6 +42,7 @@ import 'package:integration_test/integration_test.dart';
 import 'package:redpanda/main.dart';
 import 'package:redpanda/repositories/channel_repository.dart';
 import 'package:redpanda/repositories/outbound_handle_repository.dart';
+import 'package:redpanda/screens/channels/join_channel_screen.dart';
 import 'package:redpanda/services/field_logging.dart';
 import 'package:redpanda/services/message_sync_service.dart';
 import 'package:redpanda/shared/providers.dart';
@@ -654,17 +655,24 @@ Future<void> runBob(WidgetTester tester) async {
   // T140: join through the production JoinChannelScreen — the QR payload is
   // injected into the same handler a camera scan feeds (no camera on a
   // headless emulator), so Channel.fromJson, addChannel, registerChannel and
-  // the background OH registration all run as in the app. The screen
-  // returns to home on success; the channel tile proves the row exists.
-  // Same route the home screen's "Join channel" button pushes; the payload
-  // rides along as `extra` (the router forwards it to the screen).
-  GoRouter.of(tester.element(find.text('No channels yet')))
-      .push('/channels/join', extra: aliceQr);
-  if (!await pumpUntilVisible(
+  // the background OH registration all run as in the app. The route is
+  // pushed directly (not via the home screen's "Join channel" button, which
+  // pushes the same path without a payload); `extra` carries the payload.
+  GoRouter.of(
+    tester.element(find.text('No channels yet')),
+  ).push('/channels/join', extra: aliceQr);
+  // Done = the screen has navigated back home itself (context.go('/') after
+  // registerChannel) AND the tile is there. The tile alone is not enough: it
+  // can appear on the still-onstage home route during the push transition,
+  // before the handler finished — a later go('/') would then pop the chat.
+  final joinScreen = find.byType(JoinChannelScreen, skipOffstage: false);
+  if (!await pumpUntil(
     tester,
-    find.widgetWithText(ListTile, channelLabel),
+    () =>
+        joinScreen.evaluate().isEmpty &&
+        find.widgetWithText(ListTile, channelLabel).evaluate().isNotEmpty,
     timeout: const Duration(seconds: 90),
-    what: 'channel tile after join',
+    what: 'join screen done + channel tile on home',
   )) {
     dumpVisibleTexts(tester);
     throw StateError('join via JoinChannelScreen never completed');
@@ -722,6 +730,13 @@ Future<void> runBob(WidgetTester tester) async {
   // share dialog use. Spaced 30s apart to stay clear of the rate limit.
   final client = container.read(redPandaClientProvider);
   final handles = container.read(outboundHandleRepositoryProvider);
+  // The join screen already fired a background registration. Give it a
+  // moment to land so the loop below reuses it instead of racing it with a
+  // second registration (ensureOwnDescriptor is not single-flight).
+  for (var i = 0; i < 15; i++) {
+    if (await handles.getByConversationId(channelId) != null) break;
+    await pumpFor(tester, const Duration(seconds: 1));
+  }
   OHDescriptor? ownDesc;
   for (var attempt = 1; attempt <= 8 && ownDesc == null; attempt++) {
     ownDesc = await handles.ensureOwnDescriptor(client, channelId);

@@ -111,9 +111,9 @@ class MessageSyncService {
     // not whichever screen happened to create it. Before, `chat_screen.build`
     // registered the keys, so "is this channel live?" depended on the user
     // opening the chat; anything that adds a row another way (the duo-E2E
-    // harness joins straight through the repository, and a future deep link
-    // or import would too) silently ended up with a channel the worker has no
-    // key for. The watcher makes it a property of the DATA instead.
+    // harness used to join straight through the repository, and a future
+    // deep link or import would too) silently ended up with a channel the
+    // worker has no key for. The watcher makes it a property of the DATA instead.
     _conversationIdsSub ??= _db
         .select(_db.channels)
         .map((c) => c.conversationId)
