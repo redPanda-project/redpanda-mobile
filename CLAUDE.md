@@ -72,9 +72,9 @@ Run `dart format` with that exact version. The formatter changes its output
 between Dart releases, so a mismatched local toolchain reformats unrelated files
 and a floating CI toolchain turns PRs red without a code change (which is what
 `'3.x'` did on 2026-08-30). Bumping the toolchain is a deliberate PR that
-changes both workflow pins, this section, and
-`.claude/skills/pre-push-validation/SKILL.md` together, and carries any
-resulting repo-wide reformat.
+changes both workflow pins and this section together (and checks
+`.claude/skills/pre-push-validation/SKILL.md`, which intentionally carries no
+version literal), and carries any resulting repo-wide reformat.
 
 Both manifests declare `environment.sdk: ^3.12.0`, but the resolved
 dependencies raise `pubspec.lock`'s floor to `sdks.dart: >=3.13.0 <4.0.0`, so a
