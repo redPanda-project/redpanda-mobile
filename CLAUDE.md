@@ -23,9 +23,10 @@ differ — see *Flutter / Dart Versions* below.
   `copyWith()` methods annotated with `@$core.Deprecated`.
 - **Stale package config**: run `flutter pub get` inside
   `packages/redpanda_light_client` (not just at the root) after every pull —
-  a stale package-local `.dart_tool/package_config.json` makes a healthy main
-  show ~90 analyzer errors and ~33 "unformatted" files (TD083/TD088). The
-  pre-push script does this first; do it yourself before an ad-hoc analyze.
+  a stale package-local `.dart_tool/package_config.json` (old
+  `languageVersion`) makes a healthy main show dozens of analyzer errors and
+  "unformatted" files (TD083/TD088). The pre-push script does this before any
+  analyze/format; do it yourself before an ad-hoc analyze or format.
 - **build_runner**: App uses Drift ORM. Run `dart run build_runner build
   --delete-conflicting-outputs` before analyze to regenerate `database.g.dart`.
 
@@ -71,9 +72,9 @@ The exact pin cannot go stale loudly — Dependabot bumps action refs, not the
 maintenance routines, TD086):
 
 1. Compare the pin in `flutter_ci.yml` with the latest stable:
-   `curl -s https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json | jq -r '.current_release.stable as $h | .releases[] | select(.hash==$h) | .version'`
-   (not `gh api repos/flutter/flutter/releases/latest` — Flutter does not
-   publish GitHub releases; that endpoint returns an ancient `3.19.0-0.1.pre`).
+   `curl -fsSL https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json | jq -r '.current_release.stable as $h | [.releases[] | select(.hash==$h and .channel=="stable")][0].version'`
+   (not `gh api repos/flutter/flutter/releases/latest` — GitHub releases are
+   not maintained for Flutter stable, that endpoint is years out of date).
 2. If it lags (security patch or new stable), bump deliberately in **one** PR:
    both workflow pins, the version line above,
    `.claude/skills/pre-push-validation/SKILL.md`, the local `~/tools/flutter`,

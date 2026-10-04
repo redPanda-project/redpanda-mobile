@@ -91,22 +91,34 @@ dart --version
 # differs from the pin makes this whole validation meaningless: `dart format`
 # changes its output between Dart releases, so it would either reformat
 # untouched files locally or let CI reformat them after the push.
-# No `| head -1` in either extraction: as the header of this file explains, a
+# No `| head -1` in the extractions: as the header of this file explains, a
 # `head` that closes the pipe early can SIGPIPE the producer and fail the whole
-# run under `set -o pipefail`. awk reads the workflow directly and `exit`s at
-# the first hit; the local version is parsed out of the already-captured
-# `$FLUTTER_VER` rather than invoking flutter a second time.
+# run under `set -o pipefail`. awk reads the workflow directly; the local
+# version is parsed out of the already-captured `$FLUTTER_VER` rather than
+# invoking flutter a second time.
+#
+# read_flutter_pin <workflow> <var>: stores the workflow's single
+# flutter-version pin in <var> (not via `$(...)`, so a fail_usage here exits
+# the script itself with its own verdict line). Every `flutter-version:` line
+# is read (not just the first), quotes and CR are stripped, and more than one
+# distinct value inside one file fails.
+read_flutter_pin() {
+  local wf="$1" pins
+  [ -r "$wf" ] || fail_usage "cannot read $wf (T98/TD087)"
+  pins="$(awk '/^[[:space:]]*flutter-version:/ { v = $2; gsub(/[\047"\r]/, "", v); if (!(v in seen)) { seen[v] = 1; printf "%s%s", (n++ ? " " : ""), v } }' "$wf")"
+  [ -n "$pins" ] || fail_usage "cannot read the flutter-version pin from $wf (T98)"
+  case "$pins" in
+    *" "*) fail_usage "$wf pins more than one Flutter version: $pins (TD087)" ;;
+  esac
+  printf -v "$2" '%s' "$pins"
+}
 CI_WORKFLOW="$REPO_ROOT/.github/workflows/flutter_ci.yml"
-PINNED_FLUTTER="$(awk '/^[[:space:]]*flutter-version:/ { v = $2; gsub(/[\047"]/, "", v); print v; exit }' "$CI_WORKFLOW")"
-[ -n "$PINNED_FLUTTER" ] \
-  || fail_usage "cannot read the flutter-version pin from $CI_WORKFLOW (T98)"
-# The emulator gate pins the same toolchain a second time; nothing else
+read_flutter_pin "$CI_WORKFLOW" PINNED_FLUTTER
+# The emulator gate pins the same toolchain a second time; nothing in CI
 # enforces that the two agree, so the gate could silently test a different
 # Flutter than PR CI (TD087).
 GATE_WORKFLOW="$REPO_ROOT/.github/workflows/emu_duo_e2e.yml"
-GATE_FLUTTER="$(awk '/^[[:space:]]*flutter-version:/ { v = $2; gsub(/[\047"]/, "", v); print v; exit }' "$GATE_WORKFLOW")"
-[ -n "$GATE_FLUTTER" ] \
-  || fail_usage "cannot read the flutter-version pin from $GATE_WORKFLOW (TD087)"
+read_flutter_pin "$GATE_WORKFLOW" GATE_FLUTTER
 [ "$GATE_FLUTTER" = "$PINNED_FLUTTER" ] \
   || fail_usage "flutter-version pin drift: flutter_ci.yml=$PINNED_FLUTTER but emu_duo_e2e.yml=$GATE_FLUTTER. Both workflows must pin the same Flutter (TD087)."
 LOCAL_FLUTTER="$(printf '%s\n' "$FLUTTER_VER" | sed -n 's/^Flutter \([0-9][^ ]*\).*/\1/p' | tr -d '\n')"
