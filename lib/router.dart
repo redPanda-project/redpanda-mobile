@@ -39,7 +39,12 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(
         path: '/channels/join',
-        builder: (context, state) => const JoinChannelScreen(),
+        // `extra` is only ever set by in-process code — the emulator duo E2E
+        // injects a QR payload because a headless emulator has no camera
+        // (T140). A deep link cannot carry it, so the app always scans.
+        builder: (context, state) => JoinChannelScreen(
+          injectedCode: state.extra is String ? state.extra as String : null,
+        ),
       ),
       GoRoute(
         path: '/channels/:conversationId/status',

@@ -11,19 +11,41 @@ import 'package:redpanda/services/message_sync_service.dart';
 import 'package:redpanda/shared/providers.dart';
 
 class JoinChannelScreen extends ConsumerStatefulWidget {
-  const JoinChannelScreen({super.key});
+  const JoinChannelScreen({super.key, this.injectedCode});
+
+  /// Test hook (T140): a QR payload handed to the SAME handler a camera scan
+  /// feeds ([_JoinChannelScreenState._processCode]), so parsing, validation
+  /// and persistence run through the production join path on a device
+  /// without a camera (the headless emulator duo E2E passes it as the route's
+  /// `extra`). When set, the camera scanner is not started at all. Not
+  /// `@visibleForTesting` only because the router (lib code) forwards it.
+  final String? injectedCode;
 
   @override
   ConsumerState<JoinChannelScreen> createState() => _JoinChannelScreenState();
 }
 
 class _JoinChannelScreenState extends ConsumerState<JoinChannelScreen> {
-  final MobileScannerController controller = MobileScannerController();
+  /// Only created when the camera is used (no [JoinChannelScreen.injectedCode]).
+  MobileScannerController? _controller;
   bool _isProcessing = false;
 
   @override
+  void initState() {
+    super.initState();
+    final injected = widget.injectedCode;
+    if (injected == null) {
+      _controller = MobileScannerController();
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _processCode(injected);
+      });
+    }
+  }
+
+  @override
   void dispose() {
-    controller.dispose();
+    _controller?.dispose();
     super.dispose();
   }
 
@@ -104,7 +126,9 @@ class _JoinChannelScreenState extends ConsumerState<JoinChannelScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Scan to Join')),
-      body: MobileScanner(controller: controller, onDetect: _onDetect),
+      body: _controller == null
+          ? const Center(child: CircularProgressIndicator())
+          : MobileScanner(controller: _controller, onDetect: _onDetect),
     );
   }
 }

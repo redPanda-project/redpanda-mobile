@@ -25,9 +25,11 @@
 //       the #55 host-node fix).
 //
 // Everything runs through the real UI except the QR *scan* itself (no
-// camera in a headless emulator): the joining side feeds the QR JSON
-// through the same code path the scanner uses (Channel.fromJson +
-// ChannelRepository.addChannel).
+// camera in a headless emulator): the joining side opens the production
+// JoinChannelScreen with the QR payload injected (T140), so parsing,
+// validation, persistence and the worker registration run through the same
+// handler a camera scan feeds. The counterpart OH is exchanged out of band
+// over the coord server (stands in for the rendezvous DHT).
 
 import 'dart:convert';
 import 'dart:io';
@@ -35,12 +37,14 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:hex/hex.dart';
+import 'package:go_router/go_router.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:redpanda/main.dart';
 import 'package:redpanda/repositories/channel_repository.dart';
 import 'package:redpanda/repositories/outbound_handle_repository.dart';
+import 'package:redpanda/screens/channels/join_channel_screen.dart';
 import 'package:redpanda/services/field_logging.dart';
+import 'package:redpanda/services/message_sync_service.dart';
 import 'package:redpanda/shared/providers.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
 
@@ -444,6 +448,26 @@ Future<void> awaitChatMessage(
   log('received message: "$text"');
 }
 
+/// Attaches the counterpart OH [desc] to channel [channelId] — the stand-in
+/// for what the rendezvous DHT lookup contributes in production. Since #82
+/// `addChannel` updates an existing row in place (ratchet state and creator
+/// marker survive), and `registerChannel` is the app's ONE entry point that
+/// hands a persisted channel to the worker; the worker seeds the counterpart
+/// mailbox from it as long as it knows no live one yet.
+Future<void> attachCounterpartOh(
+  ProviderContainer container,
+  String channelId,
+  OHDescriptor desc,
+) async {
+  final channel =
+      (await container.read(channelRepositoryProvider).getChannels())
+          .singleWhere((c) => c.id == channelId);
+  await container
+      .read(channelRepositoryProvider)
+      .addChannel(channel.copyWith(counterpartOhDescriptor: desc));
+  await container.read(messageSyncServiceProvider).registerChannel(channelId);
+}
+
 ProviderContainer containerOf(WidgetTester tester) {
   return ProviderScope.containerOf(
     tester.element(find.byType(MyApp)),
@@ -527,32 +551,7 @@ Future<void> runAlice(WidgetTester tester) async {
     throw StateError('Bob QR is for a different channel');
   }
 
-  // Attach the counterpart OH that rendezvous discovery contributes. Since #82
-  // addChannel updates an existing row in place instead of INSERT OR REPLACE,
-  // so it preserves the ratchet state and our creator role marker — the normal
-  // repository path, no direct DB write needed.
-  await container
-      .read(channelRepositoryProvider)
-      .addChannel(myChannel.copyWith(counterpartOhDescriptor: desc));
-  // Re-register the channel keys with the counterpart OH — same call the app makes
-  // on startup when restoring persisted state.
-  final db = container.read(dbProvider);
-  final row = await (db.select(
-    db.channels,
-  )..where((t) => t.conversationId.equals(myChannel.id))).getSingle();
-  container
-      .read(redPandaClientProvider)
-      .addChannelKeys(
-        row.conversationId,
-        HEX.decode(row.encryptionKey),
-        channelSecret: row.channelSecret != null
-            ? HEX.decode(row.channelSecret!)
-            : null,
-        counterpartOhId: HEX.decode(row.counterpartOhId!),
-        counterpartOhEndpoint: row.counterpartOhEndpoint,
-        isChannelCreator: row.authPrivateKey != null,
-        ratchetState: row.ratchetState,
-      );
+  await attachCounterpartOh(container, myChannel.id, desc);
   log('Bob OH imported: ${desc.serverEndpoint}');
 
   // --- S1: first delivery on a fresh pairing ---
@@ -653,16 +652,54 @@ Future<void> runBob(WidgetTester tester) async {
   );
   if (aliceOhJson == null) throw StateError('alice_oh never appeared');
 
-  // Same code path as the QR scanner (join screen), minus the camera. QR v4
-  // carries only the secret; Alice's OH arrives out of band (stands in for the
-  // rendezvous DHT) and is attached as the counterpart descriptor.
-  final aliceDesc = OHDescriptor.fromJson(aliceOhJson);
-  final channel = (await Channel.fromJson(
-    aliceQr,
-  )).copyWith(counterpartOhDescriptor: aliceDesc);
+  // T140: join through the production JoinChannelScreen — the QR payload is
+  // injected into the same handler a camera scan feeds (no camera on a
+  // headless emulator), so Channel.fromJson, addChannel, registerChannel and
+  // the background OH registration all run as in the app. The route is
+  // pushed directly (not via the home screen's "Join channel" button, which
+  // pushes the same path without a payload); `extra` carries the payload.
+  GoRouter.of(
+    tester.element(find.text('No channels yet')),
+  ).push('/channels/join', extra: aliceQr);
+  // Done = the screen has navigated back home itself (context.go('/') after
+  // registerChannel) AND the tile is there. The tile alone is not enough: it
+  // can appear on the still-onstage home route during the push transition,
+  // before the handler finished — a later go('/') would then pop the chat.
+  final joinScreen = find.byType(JoinChannelScreen, skipOffstage: false);
+  if (!await pumpUntil(
+    tester,
+    () =>
+        joinScreen.evaluate().isEmpty &&
+        find.widgetWithText(ListTile, channelLabel).evaluate().isNotEmpty,
+    timeout: const Duration(seconds: 90),
+    what: 'join screen done + channel tile on home',
+  )) {
+    dumpVisibleTexts(tester);
+    throw StateError('join via JoinChannelScreen never completed');
+  }
   final container = containerOf(tester);
-  await container.read(channelRepositoryProvider).addChannel(channel);
-  log('joined channel from Alice QR');
+  final channelId = (await Channel.fromJson(aliceQr)).id;
+  log('joined channel from Alice QR via JoinChannelScreen');
+  // The screen's "Joined channel" snackbar lives on the root
+  // ScaffoldMessenger and outlasts the route: for ~4 s it covers the chat's
+  // send button, and a tap there is silently swallowed (first T140 gate run:
+  // s2-02 never left Bob). Let it run out, as a user would.
+  if (!await pumpUntil(
+    tester,
+    () => find.byType(SnackBar).evaluate().isEmpty,
+    timeout: const Duration(seconds: 20),
+    what: 'join snackbar dismissed',
+  )) {
+    throw StateError('join snackbar never went away');
+  }
+
+  // QR v4 carries only the secret; Alice's OH arrives out of band (stands in
+  // for the rendezvous DHT) and is attached as the counterpart descriptor.
+  await attachCounterpartOh(
+    container,
+    channelId,
+    OHDescriptor.fromJson(aliceOhJson),
+  );
 
   await openChat(tester);
 
@@ -705,9 +742,16 @@ Future<void> runBob(WidgetTester tester) async {
   // share dialog use. Spaced 30s apart to stay clear of the rate limit.
   final client = container.read(redPandaClientProvider);
   final handles = container.read(outboundHandleRepositoryProvider);
+  // The join screen already fired a background registration. Give it a
+  // moment to land so the loop below reuses it instead of racing it with a
+  // second registration (ensureOwnDescriptor is not single-flight).
+  for (var i = 0; i < 15; i++) {
+    if (await handles.getByConversationId(channelId) != null) break;
+    await pumpFor(tester, const Duration(seconds: 1));
+  }
   OHDescriptor? ownDesc;
   for (var attempt = 1; attempt <= 8 && ownDesc == null; attempt++) {
-    ownDesc = await handles.ensureOwnDescriptor(client, channel.id);
+    ownDesc = await handles.ensureOwnDescriptor(client, channelId);
     if (ownDesc == null) {
       log(
         'OH registration attempt $attempt failed '
@@ -722,6 +766,9 @@ Future<void> runBob(WidgetTester tester) async {
   }
 
   // QR v4 (secret only) plus our OH exchanged out of band, mirroring Alice.
+  final channel =
+      (await container.read(channelRepositoryProvider).getChannels())
+          .singleWhere((c) => c.id == channelId);
   await kvPut('bob_qr', channel.toJson());
   await kvPut('bob_oh', ownDesc.toJson());
   log('own QR exported');
