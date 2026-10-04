@@ -124,6 +124,17 @@ class ScriptedSocket implements Socket {
 void main() {
   final ohId = List<int>.generate(20, (i) => 200 - i);
 
+  /// Address of the scripted node. An IP literal on purpose (TD141): the
+  /// client resolves every dial candidate with `InternetAddress.lookup`
+  /// (alias dedup) BEFORE it calls the socket factory, and a hostname such as
+  /// `scripted` is a real DNS query. On a CI runner whose resolver stalls,
+  /// that lookup alone outlasted the handshake wait — two consecutive cases
+  /// timed out 15 s each while every case before them had verified in
+  /// ~30 ms. A literal resolves locally, so the wait below only covers the
+  /// in-memory handshake. TEST-NET-1 (RFC 5737): never routable, and every
+  /// dial goes through the socket factory anyway.
+  const scriptedNode = '192.0.2.1:1';
+
   /// Builds a connected client whose peer repository already knows
   /// [hopCount] relay candidates (returned with their private keys).
   Future<(RedPandaLightClient, ScriptedSocket, List<TestHop>)> setupClient({
@@ -155,11 +166,11 @@ void main() {
     final client = RedPandaLightClient(
       selfNodeId: NodeId.fromPublicKey(keys),
       selfKeys: keys,
-      seeds: ['scripted:1'],
+      seeds: [scriptedNode],
       // Only the scripted node is reachable; the relay candidates are
       // known peers, not open connections.
       socketFactory: (h, p) async {
-        if ('$h:$p' != 'scripted:1') {
+        if ('$h:$p' != scriptedNode) {
           throw const SocketException('unreachable in this test');
         }
         return socket;

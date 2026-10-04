@@ -34,9 +34,12 @@ import 'test_helpers.dart';
 void main() async {
   final jarAvailable = e2eJarAvailable();
 
-  const entryPort = 50590;
-  const liveRelayPorts = [50591, 50592, 50593];
-  const deadRelayPort = 50594;
+  // Own range — this suite used to share ms06's ports, so a node
+  // left bound by one wedged the other (TD120). Every e2e suite keeps a
+  // disjoint range; `e2e_port_isolation_test.dart` pins that.
+  const entryPort = 50660;
+  const liveRelayPorts = [50661, 50662, 50663];
+  const deadRelayPort = 50664;
   const entryAddress = '127.0.0.1:$entryPort';
   final liveRelayAddresses = liveRelayPorts.map((p) => '127.0.0.1:$p').toSet();
   const deadRelayAddress = '127.0.0.1:$deadRelayPort';
@@ -97,16 +100,24 @@ void main() async {
     });
 
     tearDown(() async {
-      await alice.disconnect();
-      await bob.disconnect();
-      await Future.delayed(const Duration(seconds: 1));
-      for (final launcher in launchers) {
-        await launcher.stop();
+      // The nodes are stopped in `finally` (TD120): when setUp fails before
+      // the clients exist (a node did not come up), `alice` is unassigned and
+      // its disconnect throws. Without the `finally` the nodes already
+      // started stayed bound, and the @Retry attempt then died with
+      // `could not bound to port` on this suite's own ports.
+      try {
+        await alice.disconnect();
+        await bob.disconnect();
+        await Future.delayed(const Duration(seconds: 1));
+      } finally {
+        for (final launcher in launchers) {
+          await launcher.stop();
+        }
+        launchers.clear();
+        // deadRelay is normally stopped mid-test; stop again is a no-op safety.
+        await deadRelay?.stop();
+        deadRelay = null;
       }
-      launchers.clear();
-      // deadRelay is normally stopped mid-test; stop again is a no-op safety.
-      await deadRelay?.stop();
-      deadRelay = null;
     });
 
     /// Polls until Alice knows all FOUR relay candidates incl. their X25519

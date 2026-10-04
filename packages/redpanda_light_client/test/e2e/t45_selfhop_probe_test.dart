@@ -23,7 +23,9 @@ import 'test_helpers.dart';
 void main() async {
   final jarAvailable = e2eJarAvailable();
 
-  const port = 50600;
+  // Own port — this probe used to share ms08's entry port (TD120, see
+  // `e2e_port_isolation_test.dart`).
+  const port = 50670;
   const address = '127.0.0.1:$port';
 
   group('E2E T45: single-node self-hop garlic delivery', () {
