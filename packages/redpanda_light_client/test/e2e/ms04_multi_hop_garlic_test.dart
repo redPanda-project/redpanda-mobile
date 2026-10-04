@@ -12,6 +12,7 @@ import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/domain/channel.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
+
 import 'redpanda_node_launcher.dart';
 import 'test_helpers.dart';
 
@@ -100,33 +101,6 @@ void main() async {
       }
     });
 
-    /// Polls until Alice knows all three relays incl. their X25519 keys
-    /// (the entry node learns the relay identities during their handshakes
-    /// and shares them in the peer list).
-    Future<void> waitForRelayCandidates() async {
-      final deadline = DateTime.now().add(const Duration(seconds: 120));
-      while (true) {
-        final known = alice
-            .getDebugPeerStats()
-            .where(
-              (p) =>
-                  relayAddresses.contains(p.address) &&
-                  p.encryptionPublicKey != null &&
-                  p.nodeId != null,
-            )
-            .length;
-        if (known >= relayAddresses.length) return;
-        if (DateTime.now().isAfter(deadline)) {
-          fail(
-            'Alice discovered only $known of ${relayAddresses.length} relay '
-            'candidates with encryption keys',
-          );
-        }
-        alice.requestPeerLists();
-        await Future.delayed(const Duration(seconds: 2));
-      }
-    }
-
     test('Alice sends over 3 garlic hops; Bob receives the message', () async {
       await alice.connect();
       expect(await waitForEncryption(alice), isTrue);
@@ -148,7 +122,7 @@ void main() async {
         isChannelCreator: false,
       );
 
-      await waitForRelayCandidates();
+      await waitForRelayCandidates(alice, relayAddresses, who: 'Alice');
       // Give the OH announce and the relay interconnections a moment —
       // the relays exchange peer lists on a 30-second cycle.
       await Future.delayed(const Duration(seconds: 5));

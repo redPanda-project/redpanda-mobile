@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 
+import '../helpers/wait_for.dart';
+
 // The topology lock (bound loopback port 59557) is gone (T30): every
 // multi-node suite now uses suite-private ports and seeds its relays
 // explicitly, so no two suites contend for a port anymore. Serialization
@@ -27,6 +29,35 @@ Future<bool> waitForEncryption(
     if (client.isEncryptionActive) return true;
   }
   return false;
+}
+
+/// Polls until [client] knows every relay in [relayAddresses] incl. its
+/// X25519 key and node id (the entry node learns the relay identities during
+/// their handshakes and shares them in the peer list). Re-requests the peer
+/// lists on every poll; fails after 120 s naming [who] and the count found.
+Future<void> waitForRelayCandidates(
+  RedPandaLightClient client,
+  Set<String> relayAddresses, {
+  required String who,
+}) {
+  int known() => client
+      .getDebugPeerStats()
+      .where(
+        (p) =>
+            relayAddresses.contains(p.address) &&
+            p.encryptionPublicKey != null &&
+            p.nodeId != null,
+      )
+      .length;
+  return waitFor(
+    () => known() >= relayAddresses.length,
+    timeout: const Duration(seconds: 120),
+    interval: const Duration(seconds: 2),
+    onPoll: client.requestPeerLists,
+    message: () =>
+        '$who discovered only ${known()} of ${relayAddresses.length} relay '
+        'candidates with encryption keys',
+  );
 }
 
 /// Accumulates messages delivered to [client] via its production delivery

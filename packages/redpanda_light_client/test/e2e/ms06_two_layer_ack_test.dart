@@ -14,6 +14,7 @@ import 'package:redpanda_light_client/src/domain/routing_ack.dart';
 import 'package:redpanda_light_client/src/domain/state_update.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
+
 import 'redpanda_node_launcher.dart';
 import 'test_helpers.dart';
 
@@ -102,33 +103,6 @@ void main() async {
       }
     });
 
-    Future<void> waitForRelayCandidates(
-      RedPandaLightClient client,
-      String who,
-    ) async {
-      final deadline = DateTime.now().add(const Duration(seconds: 120));
-      while (true) {
-        final known = client
-            .getDebugPeerStats()
-            .where(
-              (p) =>
-                  relayAddresses.contains(p.address) &&
-                  p.encryptionPublicKey != null &&
-                  p.nodeId != null,
-            )
-            .length;
-        if (known >= relayAddresses.length) return;
-        if (DateTime.now().isAfter(deadline)) {
-          fail(
-            '$who discovered only $known of ${relayAddresses.length} relay '
-            'candidates with encryption keys',
-          );
-        }
-        client.requestPeerLists();
-        await Future.delayed(const Duration(seconds: 2));
-      }
-    }
-
     test('Alice gets an R-ACK for her acked send and a Channel-ACK once Bob '
         'reads it', () async {
       await alice.connect();
@@ -158,8 +132,8 @@ void main() async {
       );
 
       await Future.wait([
-        waitForRelayCandidates(alice, 'Alice'),
-        waitForRelayCandidates(bob, 'Bob'),
+        waitForRelayCandidates(alice, relayAddresses, who: 'Alice'),
+        waitForRelayCandidates(bob, relayAddresses, who: 'Bob'),
       ]);
       await Future.delayed(const Duration(seconds: 5));
 
