@@ -325,7 +325,7 @@ class AppDatabase extends _$AppDatabase {
       onCreate: (Migrator m) async {
         await m.createAll();
       },
-      onUpgrade: (Migrator m, int from, int to) async {
+      onUpgrade: _atomic((Migrator m, int from, int to) async {
         // T124 (TD149): a device runs ONE onUpgrade(from, schemaVersion), so
         // every step below sees the database as the PREVIOUS steps left it —
         // not as the app of that version left it. `createTable` always uses
@@ -555,25 +555,50 @@ class AppDatabase extends _$AppDatabase {
           //     -> nothing to keep, `direction` already says "me".
           //   incoming 1:1 rows: sender_id was the conversation id
           //     -> nothing to keep, the conversation IS the counterpart.
-          //   incoming group rows: sender_id was the member id. MS08 has
-          //     always written the same id into sender_member_id as well;
-          //     copy it over for any row where that did not happen, so no
-          //     group author is lost with the column.
+          //   incoming group rows (incl. groups left since): sender_id was
+          //     the member id. MS08 has always written the same id into
+          //     sender_member_id as well; copy it over for any row where
+          //     that did not happen, so no group author is lost with the
+          //     column.
           // Only a `messages` table that predates the v17 re-creation still
           // has `sender_id` (below that it came from the current schema, see
           // the v18 step) — hence `from >= 17`, like the v18 backfill.
           if (from >= 17) {
+            // Group rows are recognised by `sender_id <> conversation_id`,
+            // not by a join on group_channels: leaving a group deletes its
+            // group_channels row but keeps its messages, and those authors
+            // must survive too. An incoming 1:1 row always had
+            // sender_id = conversation_id, so it can never match.
             await m.database.customStatement(
               'UPDATE messages SET sender_member_id = sender_id '
               'WHERE direction = ${MessageDirection.incoming} '
               'AND sender_member_id IS NULL '
-              'AND conversation_id IN (SELECT group_id FROM group_channels)',
+              'AND sender_id <> conversation_id',
             );
             await m.dropColumn(messages, 'sender_id');
           }
         }
-      },
+      }),
     );
+  }
+
+  /// Runs [body] and the `user_version` bump in ONE transaction (T143).
+  ///
+  /// drift runs `onUpgrade` without a transaction and writes `user_version`
+  /// in a separate statement afterwards. A process killed in between (OOM,
+  /// swipe-away, iOS watchdog during the table rewrite of a DROP COLUMN)
+  /// left the database half-migrated at the OLD version, and the next launch
+  /// re-ran steps that are not repeatable — `duplicate column name` for an
+  /// `addColumn`, `no such column: sender_id` for the v18/v19 backfills — on
+  /// every launch. SQLite DDL and `PRAGMA user_version` are transactional,
+  /// so a kill now rolls the whole upgrade back and the next launch starts
+  /// it again from the same `from`; drift's own version write afterwards
+  /// writes the same value again.
+  static OnUpgrade _atomic(OnUpgrade body) {
+    return (Migrator m, int from, int to) => m.database.transaction(() async {
+      await body(m, from, to);
+      await m.database.customStatement('PRAGMA user_version = $to');
+    });
   }
 
   static QueryExecutor _openConnection() {

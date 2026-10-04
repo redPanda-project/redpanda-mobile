@@ -4,6 +4,7 @@ import 'package:drift/drift.dart' as drift;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:redpanda/database/database.dart';
 import 'package:redpanda/repositories/message_repository.dart';
+import 'package:sqlite3/sqlite3.dart' show Database;
 
 import '../helpers/test_database.dart';
 import 'historic_schemas.dart';
@@ -515,6 +516,9 @@ void main() {
           row('grp', legacyMember, 'group legacy', 4, direction: incoming),
           // Own outgoing group message, still pending.
           row('grp', 'my-uuid', 'group mine', 0, direction: outgoing),
+          // A group the user has left: GroupRepository.deleteGroup removes
+          // the group_channels row but keeps the messages.
+          row('left-grp', legacyMember, 'left group', 4, direction: incoming),
         ]);
         addTearDown(legacy.close);
 
@@ -522,7 +526,7 @@ void main() {
           for (final row in await legacy.select(legacy.messages).get())
             row.content: row,
         };
-        expect(byContent, hasLength(5));
+        expect(byContent, hasLength(6));
 
         expect(byContent['theirs']!.direction, equals(incoming));
         expect(byContent['mine']!.direction, equals(outgoing));
@@ -540,6 +544,11 @@ void main() {
           reason: 'a group author that lived only in sender_id must survive',
         );
         expect(byContent['group mine']!.senderMemberId, isNull); // me
+        expect(
+          byContent['left group']!.senderMemberId,
+          equals(legacyMember),
+          reason: 'leaving a group must not cost its messages their authors',
+        );
 
         final columns = await legacy
             .customSelect('PRAGMA table_info(messages)')
@@ -550,6 +559,39 @@ void main() {
         );
       });
     }
+
+    // drift runs onUpgrade without a transaction and bumps user_version
+    // afterwards; a kill in between used to leave a half-migrated database at
+    // the OLD version whose next launch re-ran non-repeatable steps
+    // (`duplicate column name: direction`, `no such column: sender_id`)
+    // forever. Forced here by a view that makes the LAST statement (the v19
+    // DROP COLUMN) fail: everything before it must be rolled back.
+    test('a failing upgrade leaves the database untouched at its old version '
+        '(T143)', () async {
+      late Database raw;
+      final legacy = createTestDatabaseAtVersion(17, [
+        ...ddlForSchemaVersion(17),
+        'CREATE VIEW pins_sender_id AS SELECT sender_id FROM messages',
+      ], onRawDatabase: (db) => raw = db);
+
+      await expectLater(
+        legacy.customSelect('PRAGMA user_version').getSingle(),
+        throwsA(anything),
+      );
+
+      final columns = {
+        for (final row in raw.select('PRAGMA table_info(messages)'))
+          row['name'] as String,
+      };
+      expect(
+        columns,
+        isNot(contains('direction')),
+        reason: 'the v18 ADD COLUMN must have been rolled back',
+      );
+      expect(columns, contains('sender_id'));
+      expect(raw.select('PRAGMA user_version').single['user_version'], 17);
+      await legacy.close();
+    });
   });
 
   // T124 (TD149). The test above covers the two versions T114 happened to
