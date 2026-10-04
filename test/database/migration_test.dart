@@ -574,9 +574,12 @@ void main() {
         'CREATE VIEW pins_sender_id AS SELECT sender_id FROM messages',
       ], onRawDatabase: (db) => raw = db);
 
+      // The failure must come from the LAST statement (DROP COLUMN blocked
+      // by the view), i.e. after the v18 ADD COLUMN and both backfills ran —
+      // otherwise there would be nothing to roll back.
       await expectLater(
         legacy.customSelect('PRAGMA user_version').getSingle(),
-        throwsA(anything),
+        throwsA(predicate((Object e) => '$e'.contains('pins_sender_id'))),
       );
 
       final columns = {

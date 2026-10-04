@@ -354,11 +354,10 @@ class AppDatabase extends _$AppDatabase {
         }
         if (from < 5) {
           // Destructive migration for dev: Recreate Channels table to match new schema
-          try {
-            await m.deleteTable(channels.actualTableName);
-          } catch (e) {
-            // optimize: table might not exist
-          }
+          // (deleteTable is DROP TABLE IF EXISTS — no try/catch: inside the
+          // migration transaction a swallowed error could leave the rest of
+          // the upgrade running in autocommit, T143).
+          await m.deleteTable(channels.actualTableName);
           await m.createTable(channels);
         }
         if (from < 6) {
@@ -421,11 +420,8 @@ class AppDatabase extends _$AppDatabase {
             channels,
             outboundHandles,
           ]) {
-            try {
-              await m.deleteTable(table.actualTableName);
-            } catch (_) {
-              // table might not exist on odd upgrade paths
-            }
+            // DROP TABLE IF EXISTS — a missing table is not an error.
+            await m.deleteTable(table.actualTableName);
           }
           await m.createTable(channels);
           await m.createTable(messages);
@@ -502,11 +498,8 @@ class AppDatabase extends _$AppDatabase {
             channels,
             outboundHandles,
           ]) {
-            try {
-              await m.deleteTable(table.actualTableName);
-            } catch (_) {
-              // table might not exist on odd upgrade paths
-            }
+            // DROP TABLE IF EXISTS — a missing table is not an error.
+            await m.deleteTable(table.actualTableName);
           }
           await m.createTable(channels);
           await m.createTable(messages);
