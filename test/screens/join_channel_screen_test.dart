@@ -47,9 +47,21 @@ void main() {
     child: MaterialApp.router(routerConfig: router),
   );
 
-  /// Lets real async work (crypto, drift) run while pumping frames.
-  Future<void> pumpUntil(WidgetTester tester, bool Function() done) async {
-    for (var i = 0; i < 200 && !done(); i++) {
+  /// Lets real async work (crypto, drift) run while pumping frames until
+  /// [done] holds; fails the test after [timeout] (wall clock, like
+  /// `helpers/wait_for.dart` — whose fake-async delays cannot advance real
+  /// crypto/drift work inside a widget test, hence the `runAsync` here).
+  Future<void> pumpUntil(
+    WidgetTester tester,
+    bool Function() done,
+    String description, {
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    final elapsed = Stopwatch()..start();
+    while (!done()) {
+      if (elapsed.elapsed > timeout) {
+        fail('$description not met within $timeout');
+      }
       await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 10)),
       );
@@ -74,7 +86,11 @@ void main() {
     await tester.pump();
     expect(find.byType(MobileScanner), findsNothing);
 
-    await pumpUntil(tester, () => find.text('home').evaluate().isNotEmpty);
+    await pumpUntil(
+      tester,
+      () => find.text('home').evaluate().isNotEmpty,
+      'join navigated back home',
+    );
 
     expect(find.text('home'), findsOneWidget);
     final rows = (await tester.runAsync(() => db.select(db.channels).get()))!;
@@ -98,6 +114,7 @@ void main() {
     await pumpUntil(
       tester,
       () => find.textContaining('Invalid Channel Code').evaluate().isNotEmpty,
+      'error snackbar shown',
     );
 
     expect(find.textContaining('Invalid Channel Code'), findsOneWidget);
