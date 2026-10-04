@@ -576,7 +576,18 @@ class ActivePeer {
   }
 
   /// Sends a ping to measure latency.
+  ///
+  /// No-op until transport encryption is active. Callers (the 3 s connection
+  /// check) gate on [isHandshakeVerified], which flips right after the
+  /// plaintext magic — long before the key exchange has produced [_codec].
+  /// A PING written in that window would go out in plaintext; the node reads
+  /// it as the first GCM frame (`invalid GCM frame length: 83886080` =
+  /// 0x05000000) and drops the connection (T153). Guarding here, at the only
+  /// latency-ping sender, keeps "nothing but the handshake is ever sent
+  /// unencrypted" true for every caller. The codec is checked at call time:
+  /// once it is set, [_sendData] encrypts everything queued after it.
   void ping() {
+    if (_codec == null) return; // Encryption not active yet (T153)
     if (_pingStopwatch != null) return; // Already pinging
     RpLog.debug('ActivePeer($address): Sending Ping (Latency Check)...');
     _pingStopwatch = Stopwatch()..start();
