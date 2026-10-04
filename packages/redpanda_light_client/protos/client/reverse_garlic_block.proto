@@ -1,0 +1,22 @@
+// Client-to-client wire schema (TD098/T142) — owned by this repo, see the
+// header of channel_message.proto. Travels inside ChannelMessage.reply_path.
+syntax = "proto3";
+
+package im.redpanda.client.v1;
+
+// MS05 reply-path descriptor (Frontend-MS05, backend Decision 6).
+message ReverseGarlicBlock {
+  // `optional` (explicit presence) because the original encoder always
+  // writes fields 1 and 2, even when the value is 0; plain proto3 scalars
+  // would drop a 0 and change the bytes.
+  optional uint32 version = 1;   // always 1
+  optional int64 expiry_ts = 2;  // Unix ms; the RGB must not be used after it
+  bytes session_tag = 3;         // 16 random bytes, correlates the reply
+  bytes oh_id = 4;               // 20-byte KademliaId of the issuer's OH mailbox
+  repeated RgbHop hops = 5;      // return-path relays, outermost first
+}
+
+message RgbHop {
+  bytes kad_id = 1;   // 20-byte KademliaId of the relay
+  bytes enc_pub = 2;  // 32-byte X25519 encryption public key
+}

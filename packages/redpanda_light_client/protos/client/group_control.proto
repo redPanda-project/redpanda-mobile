@@ -1,0 +1,62 @@
+// Client-to-client wire schemas of the MS08 group control plane (TD098/T142)
+// — owned by this repo, see the header of channel_message.proto.
+//
+// GroupControl travels sealed (envelope v6) for key rotations or as
+// ChannelMessage.group_control inside a group message (envelope v5) for
+// renames. GroupHandshake rides a 1:1 channel in
+// ChannelMessage.group_handshake (Decision 8).
+syntax = "proto3";
+
+package im.redpanda.client.v1;
+
+message GroupMember {
+  bytes member_id = 1;     // 32 B Ed25519 verify key (= identity)
+  string display_name = 2;
+  bytes oh_id = 3;         // 20 B group-OH mailbox id (absent = unknown)
+  string oh_endpoint = 4;  // host:port of the OH host (absent = unknown)
+  bytes x25519_pub = 5;    // 32 B, for sealed controls
+  uint32 role = 6;         // 0 = admin, 1 = member
+}
+
+message GroupControl {
+  oneof action {
+    KeyRotation key_rotation = 1;    // travels sealed (envelope v6)
+    GroupInfoUpdate info_update = 2; // travels as a group message (v5)
+  }
+}
+
+// Distributes a new epoch secret plus the authoritative member list
+// (Decisions 3/6/12).
+message KeyRotation {
+  bytes group_secret = 1;            // 32 B epoch secret
+  uint32 key_epoch = 2;              // >= 1
+  repeated GroupMember members = 3;  // full replacement list
+  string group_name = 4;
+}
+
+// Rename broadcast (admin only).
+message GroupInfoUpdate {
+  string name = 1;
+}
+
+// Two-way join handshake over an existing 1:1 channel (Decision 8).
+message GroupHandshake {
+  oneof kind {
+    InviteProposal proposal = 1;  // admin -> invitee
+    JoinAccept accept = 2;        // invitee -> admin
+  }
+}
+
+message InviteProposal {
+  bytes group_id = 1;         // 32 B
+  string group_name = 2;
+  bytes admin_member_id = 3;  // 32 B; rotations must be signed by this key
+}
+
+message JoinAccept {
+  bytes group_id = 1;     // 32 B
+  bytes member_id = 2;    // 32 B
+  bytes x25519_pub = 3;   // 32 B
+  bytes oh_id = 4;        // 20 B group-OH mailbox id
+  string oh_endpoint = 5; // host:port
+}

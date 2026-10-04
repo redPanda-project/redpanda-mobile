@@ -1,12 +1,22 @@
 # Generated protobuf Dart — DO NOT EDIT.
-# Produced by tool/generate_protos.sh from packages/redpanda_light_client/protos/.
+# Produced by tool/generate_protos.sh from packages/redpanda_light_client/protos/
+# (vendored *.proto -> ./, local client/*.proto -> client/).
 # Verified by test/unit/vendored_protos_test.dart: a hand-edit of the
 # generated code fails CI, which is how the pre-T107 drift stayed invisible.
 # protoc: libprotoc 25.1
-# protoc_plugin: 25.0.0
-58a44cb8e9075376d793ebafcbfc01fd603e72a94631306867b250ab808ce63a  commands.pb.dart
+# protoc_plugin: 25.1.0
+ca986b9674c970c78814ca8556dcb8b7c240d1f95977e2a4e766c267846c83d5  client/channel_message.pb.dart
+82aa4d7ebae7e5bf93be77d65df410296725261e2c78717bf6bb18d2db480471  client/channel_message.pbenum.dart
+dba4e2a72e0e35fe1794b69675adc4eafc511a82765d66343fb4690f82845aba  client/channel_message.pbjson.dart
+19f92ec65e6389ea6ab40b0740a2c209bee0f0a557b8c967d23c6d1070ca203f  client/group_control.pb.dart
+750edf1aa244d61e3b4880562bab250cb81a12dca02cfacbed86cbef86155b61  client/group_control.pbenum.dart
+84b534b35ec29be328a2c91135e5d52d3e3c462ef98ef5db28ce7553f15ef275  client/group_control.pbjson.dart
+155965411ce60d4f065b8adb3c498a1d61e58b5361751fa3fb5e15886d5683a4  client/reverse_garlic_block.pb.dart
+bc388ceba61e873a6ff0b2784fa6c7399e41bca8aafe3ca9591f9a3518cb17e4  client/reverse_garlic_block.pbenum.dart
+8acd68d2b622f71353df31be157493a1b68dc4f26ce5665631598a60a006f22b  client/reverse_garlic_block.pbjson.dart
+8ee47a1e7d38295202bc4e561b085a714e3c5badeb339a182a2e0fcf00d27810  commands.pb.dart
 6fc2bc83c5c48c35da977de635468d58fc4d799b3fb463c184f1d8a66b0a92b8  commands.pbenum.dart
 a295b59265a793b9c9060b3016dd6f15e09e75b78d1e1cc5717cc5b115c99091  commands.pbjson.dart
-3f599b0b43e6734721f74a51dee34972770698c6564cfe1757462a93c5cccbb5  outbound.pb.dart
+ee3eb54cc359127c35a56225a0d785f17f9f0f914b1c9c5515c960bd3125284a  outbound.pb.dart
 d42f8c5f831732f31feb6355748722b4b57bc405d5ce70e6b6afb54cbb82fb06  outbound.pbenum.dart
 8e51478948a9b8dcf9ffdf5bda285cfd9b9607d860d90623cea8cc9627dbb230  outbound.pbjson.dart
