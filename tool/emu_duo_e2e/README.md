@@ -25,7 +25,8 @@ Selected via `RP_SCENARIOS` (comma list, default `s1,s2,s3,s4`); S1 is the
 pairing foundation and always runs, even when omitted from the list.
 
 - **S1** — fresh pairing: Alice creates the channel through the real UI, Bob
-  joins via the QR JSON (same code path as the scanner, minus the camera),
+  joins by opening the production `JoinChannelScreen` with the QR JSON
+  injected (route `extra`; same handler as the camera scan, T140),
   Alice sends one message, delivery is timed.
 - **S2** — 10 messages ping-pong (odd from Alice, even from Bob), latency per
   message; report contains p50/p95/max (nearest-rank).
@@ -212,11 +213,13 @@ triaged as "the gate flaked" or "the gate found something" without opening a
   The CI gate (`.github/workflows/emu_duo_e2e.yml`, 16 GB runner) sets
   `RP_AVD_RAM_MB=2048` (TD058): at 1024 MB Alice's guest logged ~33 lmkd
   kills per run; local runs keep the 1024 default.
-- The QR *scan* is bypassed (headless emulators have no camera); everything
-  else drives the real UI. On the creator side the peer-OH import writes only
-  the peer-OH columns instead of re-scanning — a real scan would go through
-  `addChannel`/insertOrReplace and wipe `authPrivateKey`/`ratchetState`
-  (known finding from the desktop duo E2E, 2026-07-11).
+- Only the camera is bypassed (headless emulators have none): Bob's join
+  feeds Alice's QR JSON into `JoinChannelScreen` through its `injectedCode`
+  hook, which calls the same handler a scan does (parse, `addChannel`,
+  `registerChannel`, own-OH registration, back to home) (T140). The peer OH is
+  exchanged over the coord server instead of the rendezvous DHT and attached
+  on both sides via `addChannel` (in-place update since #82) +
+  `MessageSyncService.registerChannel`.
 - OH registration is rate-limited node-side (5/min per connection): the test
   waits for `ConnectionStatus.connected` and retries every 30 s.
 - First delivery on a fresh pairing should land in <60 s since the retry
