@@ -8,8 +8,9 @@
 #   - every markdown link to a *.md file must point at an existing map file,
 #   - every backticked relative path with a "/" and a file extension must be
 #     tracked relative to <dir> or the repo root.
-# Not checked: backticked bare file names without "/", and whether the map
-# lists every file (that is curation, see SKILL.md).
+# Not checked: backticked bare file names without "/", paths with a suffix
+# such as `lib/x.dart:12`, and whether the map lists every file (curation,
+# see SKILL.md).
 # Exit 0 = clean, 1 = dead paths found (listed on stderr).
 set -euo pipefail
 
@@ -20,15 +21,27 @@ MAP="$REPO_ROOT/.claude/skills/repo-mapper/map"
 dead=0
 report() { echo "DEAD in ${1#"$REPO_ROOT"/}: $2" >&2; dead=1; }
 
-# tracked <repo-relative path>: a tracked file, or a directory containing one.
-tracked() {
-  [ -n "$(git -C "$REPO_ROOT" ls-files -- ":(literal)${1%/}")" ]
+# kind <repo-relative path>: prints "file" for a tracked file, "dir" for a
+# directory containing tracked files, nothing otherwise. Uses the index (git,
+# not the working tree: untracked/ignored leftovers must not hide a dead entry;
+# also case-exact on macOS) AND the working tree (a file deleted with plain
+# `rm` is still in the index).
+kind() {
+  local p="${1%/}" out
+  case "$p" in ''|.|..|./*|../*|*/.|*/..|*/./*|*/../*) return 0 ;; esac
+  [ -e "$REPO_ROOT/$p" ] || return 0
+  out="$(git -C "$REPO_ROOT" ls-files -- ":(literal)$p")"
+  [ -n "$out" ] || return 0
+  if [ "$out" = "$p" ]; then echo file; else echo dir; fi
 }
 
 # grep that treats "no match" (1) as success but still fails on errors (2).
 grep_ok() { grep "$@" || [ $? -eq 1 ]; }
 
-# No mapfile/arrays: must run under macOS' stock bash 3.2 too.
+# No mapfile/arrays: must run under macOS' stock bash 3.2 too. Every list is
+# captured into a variable first (so set -e sees sed/grep failures, which a
+# `< <(…)` process substitution would swallow) and then read via a here-string
+# (which also covers a last line without a trailing newline).
 index_list="$(find "$MAP" -name '_index.md' | sort)"
 [ -n "$index_list" ] || { echo "no _index.md under $MAP" >&2; exit 1; }
 count=0
@@ -41,23 +54,37 @@ while IFS= read -r index; do
   rel="${map_dir#"$MAP"}"; rel="${rel#/}"
   prefix="${rel:+$rel/}"
 
-  while IFS= read -r name; do
-    tracked "$prefix$name" || report "$index" "entry '$name' (not tracked: $prefix$name)"
-  done < <(sed -nE "s/$entry_re/\2/p" "$index")
+  # Entries: "<emoji> <name>"; 📄 must be a tracked file, 📁 a tracked directory.
+  entries="$(sed -nE "s/$entry_re/\1 \2/p" "$index")"
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    icon="${entry%% *}"; name="${entry#* }"
+    k="$(kind "$prefix$name")"
+    case "$icon:$k" in
+      📄:file|📁:dir) ;;
+      *) report "$index" "entry $icon '$name' (${k:-not tracked}: $prefix$name)" ;;
+    esac
+  done <<< "$entries"
 
-  bullets="$(grep_ok -cE '(📄|📁)' "$index")"
+  # Every 📄/📁 occurrence must be a parsed entry (one per line), or it went unchecked.
+  bullets="$(grep_ok -oE '(📄|📁)' "$index" | wc -l | tr -d ' ')"
   shaped="$(grep_ok -cE "$entry_re" "$index")"
   [ "$bullets" -eq "$shaped" ] \
-    || report "$index" "$((bullets - shaped)) 📄/📁 line(s) not in the '* 📄 **name**' shape, so unchecked"
+    || report "$index" "$((bullets - shaped)) 📄/📁 occurrence(s) not in the one-per-line '* 📄 **name**' shape, so unchecked"
 
+  # Links to other map files (anchors stripped).
+  links="$(grep_ok -oE '\]\([^)#]+\.md(#[^)]*)?\)' "$index" | sed -E 's/^\]\(([^)#]*).*$/\1/')"
   while IFS= read -r link; do
+    [ -n "$link" ] || continue
     [ -e "$map_dir/$link" ] || report "$index" "link '$link'"
-  done < <(grep_ok -oE '\]\([^)]+\.md\)' "$index" | sed -E 's/^\]\((.*)\)$/\1/')
+  done <<< "$links"
 
   # Backticked relative paths like `tool/sync_protos.sh` (routes such as `/chat/:id` are skipped).
+  paths="$(grep_ok -oE '`[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*/[A-Za-z0-9_-]+\.[A-Za-z0-9]+`' "$index" | tr -d '`')"
   while IFS= read -r p; do
-    tracked "$prefix$p" || tracked "$p" || report "$index" "path \`$p\`"
-  done < <(grep_ok -oE '`[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*/[A-Za-z0-9_-]+\.[A-Za-z0-9]+`' "$index" | tr -d '`')
+    [ -n "$p" ] || continue
+    [ -n "$(kind "$prefix$p")" ] || [ -n "$(kind "$p")" ] || report "$index" "path \`$p\`"
+  done <<< "$paths"
 done <<< "$index_list"
 
 if [ "$dead" -ne 0 ]; then
