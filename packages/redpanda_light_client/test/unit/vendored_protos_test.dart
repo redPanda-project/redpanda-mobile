@@ -23,6 +23,11 @@ import 'package:test/test.dart';
 /// Comparing against live upstream needs a redpandaj checkout or the network
 /// and lives in `tool/sync_protos.sh --check`, which
 /// `tool/pre_push_validation.sh` runs as step 0b.
+///
+/// TD098/T142: `protos/client/*.proto` are client-to-client schemas OWNED by
+/// this repo (redpandaj does not model them). They are not vendored, so they
+/// are not in `UPSTREAM.lock`; their generated Dart lives in
+/// `lib/src/generated/client/` and is covered by `CODEGEN.lock` like the rest.
 void main() {
   late Directory protoDir;
   late Directory generatedDir;
@@ -66,6 +71,17 @@ void main() {
       .map((f) => f.uri.pathSegments.last)
       .where((n) => n.endsWith(suffix))
       .toSet();
+
+  /// Generated Dart, top level plus `client/` (the depth
+  /// tool/generate_protos.sh hashes), as `client/x.pb.dart`-style paths.
+  Set<String> generatedFiles() {
+    final client = Directory('${generatedDir.path}/client');
+    return {
+      ...filesIn(generatedDir, '.dart'),
+      if (client.existsSync())
+        ...filesIn(client, '.dart').map((n) => 'client/$n'),
+    };
+  }
 
   void expectHashesMatch(
     Directory dir,
@@ -131,7 +147,7 @@ void main() {
         'tool/generate_protos.sh',
       );
       expect(
-        filesIn(generatedDir, '.dart'),
+        generatedFiles(),
         equals(expected.keys.toSet()),
         reason:
             'generated files and CODEGEN.lock disagree — re-run '
@@ -140,9 +156,45 @@ void main() {
       expectHashesMatch(generatedDir, expected, 'tool/generate_protos.sh');
     });
 
-    test('every vendored .proto has generated Dart', () {
-      final generated = filesIn(generatedDir, '.dart');
-      for (final proto in filesIn(protoDir, '.proto')) {
+    test('was produced by the protoc_plugin pinned in pubspec.lock', () {
+      // A plugin bump in pubspec.lock without a re-run of
+      // tool/generate_protos.sh leaves stale generated code behind that the
+      // hashes above cannot see (TD098/T142 found 25.0.0 output under a 25.1.0
+      // pin).
+      final lockPath = '${generatedDir.parent.parent.parent.path}/pubspec.lock';
+      final pubspecLock = File(lockPath).readAsStringSync();
+      final pinned = RegExp(
+        r'\n  protoc_plugin:\n(?:    .*\n)*?    version: "([^"]+)"',
+      ).firstMatch(pubspecLock)?.group(1);
+      expect(pinned, isNotNull, reason: 'protoc_plugin missing in $lockPath');
+      final codegenLine = File('${generatedDir.path}/CODEGEN.lock')
+          .readAsLinesSync()
+          .firstWhere(
+            (l) => l.startsWith('# protoc_plugin:'),
+            orElse: () => '',
+          );
+      expect(
+        codegenLine.replaceFirst('# protoc_plugin:', '').trim(),
+        pinned,
+        reason:
+            'pubspec.lock pins protoc_plugin $pinned — re-run '
+            'tool/generate_protos.sh',
+      );
+    });
+
+    test('every vendored and client .proto has generated Dart', () {
+      final generated = generatedFiles();
+      final clientDir = Directory('${protoDir.path}/client');
+      final protos = [
+        ...filesIn(protoDir, '.proto'),
+        ...filesIn(clientDir, '.proto').map((n) => 'client/$n'),
+      ];
+      expect(
+        protos.where((p) => p.startsWith('client/')),
+        isNotEmpty,
+        reason: 'protos/client/ must hold the client-to-client schemas',
+      );
+      for (final proto in protos) {
         final base = proto.substring(0, proto.length - '.proto'.length);
         expect(
           generated,

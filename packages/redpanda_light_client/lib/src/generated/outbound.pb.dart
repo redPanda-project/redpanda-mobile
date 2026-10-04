@@ -36,7 +36,7 @@ class RegisterOhRequest extends $pb.GeneratedMessage {
     $core.List<$core.int>? nonce,
     $core.List<$core.int>? signature,
   }) {
-    final result = create();
+    final result = RegisterOhRequest._();
     if (ohId != null) result.ohId = ohId;
     if (ohAuthPublicKey != null) result.ohAuthPublicKey = ohAuthPublicKey;
     if (requestedExpiresAt != null)
@@ -51,16 +51,16 @@ class RegisterOhRequest extends $pb.GeneratedMessage {
 
   factory RegisterOhRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RegisterOhRequest()..mergeFromBuffer(data, registry);
   factory RegisterOhRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RegisterOhRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RegisterOhRequest',
       package: const $pb.PackageName(
           _omitMessageNames ? '' : 'im.redpanda.outbound.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RegisterOhRequest.$_createMessage)
     ..a<$core.List<$core.int>>(
         1, _omitFieldNames ? '' : 'ohId', $pb.PbFieldType.OY)
     ..a<$core.List<$core.int>>(
@@ -84,12 +84,15 @@ class RegisterOhRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use RegisterOhRequest() / RegisterOhRequest.new instead')
   static RegisterOhRequest create() => RegisterOhRequest._();
+  static $pb.GeneratedMessage $_createMessage() => RegisterOhRequest._();
   @$core.override
-  RegisterOhRequest createEmptyInstance() => create();
+  RegisterOhRequest createEmptyInstance() => RegisterOhRequest._();
   @$core.pragma('dart2js:noInline')
-  static RegisterOhRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RegisterOhRequest>(create);
+  static RegisterOhRequest getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<RegisterOhRequest>(
+          RegisterOhRequest.$_createMessage);
   static RegisterOhRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -153,7 +156,7 @@ class RegisterOhResponse extends $pb.GeneratedMessage {
     $fixnum.Int64? serverTimeMs,
     $fixnum.Int64? expiresAtMs,
   }) {
-    final result = create();
+    final result = RegisterOhResponse._();
     if (status != null) result.status = status;
     if (serverTimeMs != null) result.serverTimeMs = serverTimeMs;
     if (expiresAtMs != null) result.expiresAtMs = expiresAtMs;
@@ -164,16 +167,16 @@ class RegisterOhResponse extends $pb.GeneratedMessage {
 
   factory RegisterOhResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RegisterOhResponse()..mergeFromBuffer(data, registry);
   factory RegisterOhResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RegisterOhResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RegisterOhResponse',
       package: const $pb.PackageName(
           _omitMessageNames ? '' : 'im.redpanda.outbound.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RegisterOhResponse.$_createMessage)
     ..aE<Status>(1, _omitFieldNames ? '' : 'status', enumValues: Status.values)
     ..aInt64(2, _omitFieldNames ? '' : 'serverTimeMs')
     ..aInt64(3, _omitFieldNames ? '' : 'expiresAtMs')
@@ -190,12 +193,15 @@ class RegisterOhResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use RegisterOhResponse() / RegisterOhResponse.new instead')
   static RegisterOhResponse create() => RegisterOhResponse._();
+  static $pb.GeneratedMessage $_createMessage() => RegisterOhResponse._();
   @$core.override
-  RegisterOhResponse createEmptyInstance() => create();
+  RegisterOhResponse createEmptyInstance() => RegisterOhResponse._();
   @$core.pragma('dart2js:noInline')
   static RegisterOhResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RegisterOhResponse>(create);
+      $pb.GeneratedMessage.$_defaultFor<RegisterOhResponse>(
+          RegisterOhResponse.$_createMessage);
   static RegisterOhResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -235,7 +241,7 @@ class FetchRequest extends $pb.GeneratedMessage {
     $core.List<$core.int>? nonce,
     $core.List<$core.int>? signature,
   }) {
-    final result = create();
+    final result = FetchRequest._();
     if (ohId != null) result.ohId = ohId;
     if (limit != null) result.limit = limit;
     if (cursor != null) result.cursor = cursor;
@@ -249,16 +255,16 @@ class FetchRequest extends $pb.GeneratedMessage {
 
   factory FetchRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      FetchRequest()..mergeFromBuffer(data, registry);
   factory FetchRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      FetchRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'FetchRequest',
       package: const $pb.PackageName(
           _omitMessageNames ? '' : 'im.redpanda.outbound.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: FetchRequest.$_createMessage)
     ..a<$core.List<$core.int>>(
         1, _omitFieldNames ? '' : 'ohId', $pb.PbFieldType.OY)
     ..aI(2, _omitFieldNames ? '' : 'limit', fieldType: $pb.PbFieldType.OU3)
@@ -282,12 +288,15 @@ class FetchRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use FetchRequest() / FetchRequest.new instead')
   static FetchRequest create() => FetchRequest._();
+  static $pb.GeneratedMessage $_createMessage() => FetchRequest._();
   @$core.override
-  FetchRequest createEmptyInstance() => create();
+  FetchRequest createEmptyInstance() => FetchRequest._();
   @$core.pragma('dart2js:noInline')
-  static FetchRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<FetchRequest>(create);
+  static FetchRequest getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<FetchRequest>(
+          FetchRequest.$_createMessage);
   static FetchRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -353,7 +362,7 @@ class MailItem extends $pb.GeneratedMessage {
     $fixnum.Int64? sequenceId,
     $core.List<$core.int>? sessionTag,
   }) {
-    final result = create();
+    final result = MailItem._();
     if (messageId != null) result.messageId = messageId;
     if (receivedAtMs != null) result.receivedAtMs = receivedAtMs;
     if (payload != null) result.payload = payload;
@@ -366,16 +375,16 @@ class MailItem extends $pb.GeneratedMessage {
 
   factory MailItem.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      MailItem()..mergeFromBuffer(data, registry);
   factory MailItem.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      MailItem()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'MailItem',
       package: const $pb.PackageName(
           _omitMessageNames ? '' : 'im.redpanda.outbound.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: MailItem.$_createMessage)
     ..a<$core.List<$core.int>>(
         1, _omitFieldNames ? '' : 'messageId', $pb.PbFieldType.OY)
     ..aInt64(2, _omitFieldNames ? '' : 'receivedAtMs')
@@ -398,12 +407,14 @@ class MailItem extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use MailItem() / MailItem.new instead')
   static MailItem create() => MailItem._();
+  static $pb.GeneratedMessage $_createMessage() => MailItem._();
   @$core.override
-  MailItem createEmptyInstance() => create();
+  MailItem createEmptyInstance() => MailItem._();
   @$core.pragma('dart2js:noInline')
-  static MailItem getDefault() =>
-      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<MailItem>(create);
+  static MailItem getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<MailItem>(MailItem.$_createMessage);
   static MailItem? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -463,7 +474,7 @@ class FetchResponse extends $pb.GeneratedMessage {
     $fixnum.Int64? serverTimeMs,
     $core.bool? mailboxOverflow,
   }) {
-    final result = create();
+    final result = FetchResponse._();
     if (status != null) result.status = status;
     if (nextCursor != null) result.nextCursor = nextCursor;
     if (items != null) result.items.addAll(items);
@@ -476,22 +487,22 @@ class FetchResponse extends $pb.GeneratedMessage {
 
   factory FetchResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      FetchResponse()..mergeFromBuffer(data, registry);
   factory FetchResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      FetchResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'FetchResponse',
       package: const $pb.PackageName(
           _omitMessageNames ? '' : 'im.redpanda.outbound.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: FetchResponse.$_createMessage)
     ..aE<Status>(1, _omitFieldNames ? '' : 'status', enumValues: Status.values)
     ..a<$fixnum.Int64>(
         2, _omitFieldNames ? '' : 'nextCursor', $pb.PbFieldType.OU6,
         defaultOrMaker: $fixnum.Int64.ZERO)
     ..pPM<MailItem>(3, _omitFieldNames ? '' : 'items',
-        subBuilder: MailItem.create)
+        subBuilder: MailItem.$_createMessage)
     ..aInt64(4, _omitFieldNames ? '' : 'serverTimeMs')
     ..aOB(5, _omitFieldNames ? '' : 'mailboxOverflow')
     ..hasRequiredFields = false;
@@ -507,12 +518,15 @@ class FetchResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use FetchResponse() / FetchResponse.new instead')
   static FetchResponse create() => FetchResponse._();
+  static $pb.GeneratedMessage $_createMessage() => FetchResponse._();
   @$core.override
-  FetchResponse createEmptyInstance() => create();
+  FetchResponse createEmptyInstance() => FetchResponse._();
   @$core.pragma('dart2js:noInline')
-  static FetchResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<FetchResponse>(create);
+  static FetchResponse getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<FetchResponse>(
+          FetchResponse.$_createMessage);
   static FetchResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -563,7 +577,7 @@ class AckFetchRequest extends $pb.GeneratedMessage {
     $core.List<$core.int>? nonce,
     $core.List<$core.int>? signature,
   }) {
-    final result = create();
+    final result = AckFetchRequest._();
     if (ohId != null) result.ohId = ohId;
     if (ackedSequenceId != null) result.ackedSequenceId = ackedSequenceId;
     if (timestampMs != null) result.timestampMs = timestampMs;
@@ -576,16 +590,16 @@ class AckFetchRequest extends $pb.GeneratedMessage {
 
   factory AckFetchRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      AckFetchRequest()..mergeFromBuffer(data, registry);
   factory AckFetchRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      AckFetchRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'AckFetchRequest',
       package: const $pb.PackageName(
           _omitMessageNames ? '' : 'im.redpanda.outbound.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: AckFetchRequest.$_createMessage)
     ..a<$core.List<$core.int>>(
         1, _omitFieldNames ? '' : 'ohId', $pb.PbFieldType.OY)
     ..a<$fixnum.Int64>(
@@ -609,12 +623,15 @@ class AckFetchRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use AckFetchRequest() / AckFetchRequest.new instead')
   static AckFetchRequest create() => AckFetchRequest._();
+  static $pb.GeneratedMessage $_createMessage() => AckFetchRequest._();
   @$core.override
-  AckFetchRequest createEmptyInstance() => create();
+  AckFetchRequest createEmptyInstance() => AckFetchRequest._();
   @$core.pragma('dart2js:noInline')
-  static AckFetchRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<AckFetchRequest>(create);
+  static AckFetchRequest getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<AckFetchRequest>(
+          AckFetchRequest.$_createMessage);
   static AckFetchRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -668,7 +685,7 @@ class AckFetchResponse extends $pb.GeneratedMessage {
     Status? status,
     $fixnum.Int64? serverTimeMs,
   }) {
-    final result = create();
+    final result = AckFetchResponse._();
     if (status != null) result.status = status;
     if (serverTimeMs != null) result.serverTimeMs = serverTimeMs;
     return result;
@@ -678,16 +695,16 @@ class AckFetchResponse extends $pb.GeneratedMessage {
 
   factory AckFetchResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      AckFetchResponse()..mergeFromBuffer(data, registry);
   factory AckFetchResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      AckFetchResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'AckFetchResponse',
       package: const $pb.PackageName(
           _omitMessageNames ? '' : 'im.redpanda.outbound.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: AckFetchResponse.$_createMessage)
     ..aE<Status>(1, _omitFieldNames ? '' : 'status', enumValues: Status.values)
     ..aInt64(2, _omitFieldNames ? '' : 'serverTimeMs')
     ..hasRequiredFields = false;
@@ -703,12 +720,15 @@ class AckFetchResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use AckFetchResponse() / AckFetchResponse.new instead')
   static AckFetchResponse create() => AckFetchResponse._();
+  static $pb.GeneratedMessage $_createMessage() => AckFetchResponse._();
   @$core.override
-  AckFetchResponse createEmptyInstance() => create();
+  AckFetchResponse createEmptyInstance() => AckFetchResponse._();
   @$core.pragma('dart2js:noInline')
-  static AckFetchResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<AckFetchResponse>(create);
+  static AckFetchResponse getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<AckFetchResponse>(
+          AckFetchResponse.$_createMessage);
   static AckFetchResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -742,7 +762,7 @@ class FlaschenpostPutResponse extends $pb.GeneratedMessage {
     Status? status,
     $fixnum.Int64? serverTimeMs,
   }) {
-    final result = create();
+    final result = FlaschenpostPutResponse._();
     if (status != null) result.status = status;
     if (serverTimeMs != null) result.serverTimeMs = serverTimeMs;
     return result;
@@ -752,16 +772,16 @@ class FlaschenpostPutResponse extends $pb.GeneratedMessage {
 
   factory FlaschenpostPutResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      FlaschenpostPutResponse()..mergeFromBuffer(data, registry);
   factory FlaschenpostPutResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      FlaschenpostPutResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'FlaschenpostPutResponse',
       package: const $pb.PackageName(
           _omitMessageNames ? '' : 'im.redpanda.outbound.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: FlaschenpostPutResponse.$_createMessage)
     ..aE<Status>(1, _omitFieldNames ? '' : 'status', enumValues: Status.values)
     ..aInt64(2, _omitFieldNames ? '' : 'serverTimeMs')
     ..hasRequiredFields = false;
@@ -778,12 +798,16 @@ class FlaschenpostPutResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use FlaschenpostPutResponse() / FlaschenpostPutResponse.new instead')
   static FlaschenpostPutResponse create() => FlaschenpostPutResponse._();
+  static $pb.GeneratedMessage $_createMessage() => FlaschenpostPutResponse._();
   @$core.override
-  FlaschenpostPutResponse createEmptyInstance() => create();
+  FlaschenpostPutResponse createEmptyInstance() => FlaschenpostPutResponse._();
   @$core.pragma('dart2js:noInline')
   static FlaschenpostPutResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<FlaschenpostPutResponse>(create);
+      $pb.GeneratedMessage.$_defaultFor<FlaschenpostPutResponse>(
+          FlaschenpostPutResponse.$_createMessage);
   static FlaschenpostPutResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -817,7 +841,7 @@ class OhNodeRecord extends $pb.GeneratedMessage {
     $fixnum.Int64? announcedAtMs,
     $core.List<$core.int>? padding,
   }) {
-    final result = create();
+    final result = OhNodeRecord._();
     if (ohIdHash != null) result.ohIdHash = ohIdHash;
     if (nodeId != null) result.nodeId = nodeId;
     if (endpoint != null) result.endpoint = endpoint;
@@ -830,16 +854,16 @@ class OhNodeRecord extends $pb.GeneratedMessage {
 
   factory OhNodeRecord.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      OhNodeRecord()..mergeFromBuffer(data, registry);
   factory OhNodeRecord.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      OhNodeRecord()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'OhNodeRecord',
       package: const $pb.PackageName(
           _omitMessageNames ? '' : 'im.redpanda.outbound.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: OhNodeRecord.$_createMessage)
     ..a<$core.List<$core.int>>(
         1, _omitFieldNames ? '' : 'ohIdHash', $pb.PbFieldType.OY)
     ..a<$core.List<$core.int>>(
@@ -861,12 +885,15 @@ class OhNodeRecord extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use OhNodeRecord() / OhNodeRecord.new instead')
   static OhNodeRecord create() => OhNodeRecord._();
+  static $pb.GeneratedMessage $_createMessage() => OhNodeRecord._();
   @$core.override
-  OhNodeRecord createEmptyInstance() => create();
+  OhNodeRecord createEmptyInstance() => OhNodeRecord._();
   @$core.pragma('dart2js:noInline')
-  static OhNodeRecord getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<OhNodeRecord>(create);
+  static OhNodeRecord getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<OhNodeRecord>(
+          OhNodeRecord.$_createMessage);
   static OhNodeRecord? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -928,7 +955,7 @@ class RoutingAck extends $pb.GeneratedMessage {
     $fixnum.Int64? timestampMs,
     $core.int? status,
   }) {
-    final result = create();
+    final result = RoutingAck._();
     if (timestampMs != null) result.timestampMs = timestampMs;
     if (status != null) result.status = status;
     return result;
@@ -938,16 +965,16 @@ class RoutingAck extends $pb.GeneratedMessage {
 
   factory RoutingAck.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RoutingAck()..mergeFromBuffer(data, registry);
   factory RoutingAck.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RoutingAck()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RoutingAck',
       package: const $pb.PackageName(
           _omitMessageNames ? '' : 'im.redpanda.outbound.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RoutingAck.$_createMessage)
     ..aInt64(1, _omitFieldNames ? '' : 'timestampMs')
     ..aI(2, _omitFieldNames ? '' : 'status', fieldType: $pb.PbFieldType.OU3)
     ..hasRequiredFields = false;
@@ -962,12 +989,14 @@ class RoutingAck extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use RoutingAck() / RoutingAck.new instead')
   static RoutingAck create() => RoutingAck._();
+  static $pb.GeneratedMessage $_createMessage() => RoutingAck._();
   @$core.override
-  RoutingAck createEmptyInstance() => create();
+  RoutingAck createEmptyInstance() => RoutingAck._();
   @$core.pragma('dart2js:noInline')
   static RoutingAck getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RoutingAck>(create);
+      $pb.GeneratedMessage.$_defaultFor<RoutingAck>(RoutingAck.$_createMessage);
   static RoutingAck? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -998,7 +1027,7 @@ class RevokeOhRequest extends $pb.GeneratedMessage {
     $core.List<$core.int>? nonce,
     $core.List<$core.int>? signature,
   }) {
-    final result = create();
+    final result = RevokeOhRequest._();
     if (ohId != null) result.ohId = ohId;
     if (timestampMs != null) result.timestampMs = timestampMs;
     if (nonce != null) result.nonce = nonce;
@@ -1010,16 +1039,16 @@ class RevokeOhRequest extends $pb.GeneratedMessage {
 
   factory RevokeOhRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RevokeOhRequest()..mergeFromBuffer(data, registry);
   factory RevokeOhRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RevokeOhRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RevokeOhRequest',
       package: const $pb.PackageName(
           _omitMessageNames ? '' : 'im.redpanda.outbound.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RevokeOhRequest.$_createMessage)
     ..a<$core.List<$core.int>>(
         1, _omitFieldNames ? '' : 'ohId', $pb.PbFieldType.OY)
     ..aInt64(2, _omitFieldNames ? '' : 'timestampMs')
@@ -1040,12 +1069,15 @@ class RevokeOhRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use RevokeOhRequest() / RevokeOhRequest.new instead')
   static RevokeOhRequest create() => RevokeOhRequest._();
+  static $pb.GeneratedMessage $_createMessage() => RevokeOhRequest._();
   @$core.override
-  RevokeOhRequest createEmptyInstance() => create();
+  RevokeOhRequest createEmptyInstance() => RevokeOhRequest._();
   @$core.pragma('dart2js:noInline')
-  static RevokeOhRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RevokeOhRequest>(create);
+  static RevokeOhRequest getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<RevokeOhRequest>(
+          RevokeOhRequest.$_createMessage);
   static RevokeOhRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1090,7 +1122,7 @@ class RevokeOhResponse extends $pb.GeneratedMessage {
     Status? status,
     $fixnum.Int64? serverTimeMs,
   }) {
-    final result = create();
+    final result = RevokeOhResponse._();
     if (status != null) result.status = status;
     if (serverTimeMs != null) result.serverTimeMs = serverTimeMs;
     return result;
@@ -1100,16 +1132,16 @@ class RevokeOhResponse extends $pb.GeneratedMessage {
 
   factory RevokeOhResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RevokeOhResponse()..mergeFromBuffer(data, registry);
   factory RevokeOhResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RevokeOhResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RevokeOhResponse',
       package: const $pb.PackageName(
           _omitMessageNames ? '' : 'im.redpanda.outbound.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RevokeOhResponse.$_createMessage)
     ..aE<Status>(1, _omitFieldNames ? '' : 'status', enumValues: Status.values)
     ..aInt64(2, _omitFieldNames ? '' : 'serverTimeMs')
     ..hasRequiredFields = false;
@@ -1125,12 +1157,15 @@ class RevokeOhResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use RevokeOhResponse() / RevokeOhResponse.new instead')
   static RevokeOhResponse create() => RevokeOhResponse._();
+  static $pb.GeneratedMessage $_createMessage() => RevokeOhResponse._();
   @$core.override
-  RevokeOhResponse createEmptyInstance() => create();
+  RevokeOhResponse createEmptyInstance() => RevokeOhResponse._();
   @$core.pragma('dart2js:noInline')
-  static RevokeOhResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RevokeOhResponse>(create);
+  static RevokeOhResponse getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<RevokeOhResponse>(
+          RevokeOhResponse.$_createMessage);
   static RevokeOhResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1167,7 +1202,7 @@ class SubscribeRequest extends $pb.GeneratedMessage {
     $core.List<$core.int>? nonce,
     $core.List<$core.int>? signature,
   }) {
-    final result = create();
+    final result = SubscribeRequest._();
     if (ohId != null) result.ohId = ohId;
     if (timestampMs != null) result.timestampMs = timestampMs;
     if (nonce != null) result.nonce = nonce;
@@ -1179,16 +1214,16 @@ class SubscribeRequest extends $pb.GeneratedMessage {
 
   factory SubscribeRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      SubscribeRequest()..mergeFromBuffer(data, registry);
   factory SubscribeRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      SubscribeRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'SubscribeRequest',
       package: const $pb.PackageName(
           _omitMessageNames ? '' : 'im.redpanda.outbound.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: SubscribeRequest.$_createMessage)
     ..a<$core.List<$core.int>>(
         1, _omitFieldNames ? '' : 'ohId', $pb.PbFieldType.OY)
     ..aInt64(2, _omitFieldNames ? '' : 'timestampMs')
@@ -1209,12 +1244,15 @@ class SubscribeRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use SubscribeRequest() / SubscribeRequest.new instead')
   static SubscribeRequest create() => SubscribeRequest._();
+  static $pb.GeneratedMessage $_createMessage() => SubscribeRequest._();
   @$core.override
-  SubscribeRequest createEmptyInstance() => create();
+  SubscribeRequest createEmptyInstance() => SubscribeRequest._();
   @$core.pragma('dart2js:noInline')
-  static SubscribeRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<SubscribeRequest>(create);
+  static SubscribeRequest getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<SubscribeRequest>(
+          SubscribeRequest.$_createMessage);
   static SubscribeRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1259,7 +1297,7 @@ class SubscribeResponse extends $pb.GeneratedMessage {
     Status? status,
     $fixnum.Int64? serverTimeMs,
   }) {
-    final result = create();
+    final result = SubscribeResponse._();
     if (status != null) result.status = status;
     if (serverTimeMs != null) result.serverTimeMs = serverTimeMs;
     return result;
@@ -1269,16 +1307,16 @@ class SubscribeResponse extends $pb.GeneratedMessage {
 
   factory SubscribeResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      SubscribeResponse()..mergeFromBuffer(data, registry);
   factory SubscribeResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      SubscribeResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'SubscribeResponse',
       package: const $pb.PackageName(
           _omitMessageNames ? '' : 'im.redpanda.outbound.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: SubscribeResponse.$_createMessage)
     ..aE<Status>(1, _omitFieldNames ? '' : 'status', enumValues: Status.values)
     ..aInt64(2, _omitFieldNames ? '' : 'serverTimeMs')
     ..hasRequiredFields = false;
@@ -1294,12 +1332,15 @@ class SubscribeResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use SubscribeResponse() / SubscribeResponse.new instead')
   static SubscribeResponse create() => SubscribeResponse._();
+  static $pb.GeneratedMessage $_createMessage() => SubscribeResponse._();
   @$core.override
-  SubscribeResponse createEmptyInstance() => create();
+  SubscribeResponse createEmptyInstance() => SubscribeResponse._();
   @$core.pragma('dart2js:noInline')
-  static SubscribeResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<SubscribeResponse>(create);
+  static SubscribeResponse getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<SubscribeResponse>(
+          SubscribeResponse.$_createMessage);
   static SubscribeResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1327,7 +1368,7 @@ class Notify extends $pb.GeneratedMessage {
   factory Notify({
     $core.List<$core.int>? ohId,
   }) {
-    final result = create();
+    final result = Notify._();
     if (ohId != null) result.ohId = ohId;
     return result;
   }
@@ -1336,16 +1377,16 @@ class Notify extends $pb.GeneratedMessage {
 
   factory Notify.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      Notify()..mergeFromBuffer(data, registry);
   factory Notify.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      Notify()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'Notify',
       package: const $pb.PackageName(
           _omitMessageNames ? '' : 'im.redpanda.outbound.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: Notify.$_createMessage)
     ..a<$core.List<$core.int>>(
         1, _omitFieldNames ? '' : 'ohId', $pb.PbFieldType.OY)
     ..hasRequiredFields = false;
@@ -1360,12 +1401,14 @@ class Notify extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use Notify() / Notify.new instead')
   static Notify create() => Notify._();
+  static $pb.GeneratedMessage $_createMessage() => Notify._();
   @$core.override
-  Notify createEmptyInstance() => create();
+  Notify createEmptyInstance() => Notify._();
   @$core.pragma('dart2js:noInline')
-  static Notify getDefault() =>
-      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<Notify>(create);
+  static Notify getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<Notify>(Notify.$_createMessage);
   static Notify? _defaultInstance;
 
   @$pb.TagNumber(1)

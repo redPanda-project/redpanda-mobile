@@ -1,8 +1,16 @@
 #!/usr/bin/env bash
-# Regenerate the Dart protobuf code from the vendored schemas.
+# Regenerate the Dart protobuf code from the vendored and the local schemas.
 #
 #   packages/redpanda_light_client/protos/*.proto   (vendored, see tool/sync_protos.sh)
 #     -> packages/redpanda_light_client/lib/src/generated/*.pb{,enum,json}.dart
+#   packages/redpanda_light_client/protos/client/*.proto
+#       (client-to-client schemas OWNED by this repo, TD098/T142 — redpandaj
+#        deliberately does not model them; edit them here)
+#     -> packages/redpanda_light_client/lib/src/generated/client/*.pb{,enum,json}.dart
+#
+# The two sets stay separate on purpose: tool/sync_protos.sh and
+# protos/UPSTREAM.lock only ever look at protos/*.proto (top level), so the
+# local schemas under protos/client/ never trip the upstream hash guard.
 #
 # The generated files are committed so that neither CI nor a plain
 # `flutter pub get` needs protoc. Never hand-edit them: the hand-maintained
@@ -15,8 +23,10 @@
 #
 # Requirements:
 #   * protoc — on PATH, or $PROTOC, or ~/tools/protoc/bin/protoc.
-#     These are proto3 schemas, so protoc >= 3.0 is required; any current
-#     release (the 3.x line or the later 21+ versioning, e.g. 25.1) works.
+#     protoc >= 3.15 is required: protos/client/reverse_garlic_block.proto
+#     uses proto3 `optional` (rejected before 3.12, behind an experimental
+#     flag until 3.15). Any later release (the 21+ versioning, e.g. 25.1)
+#     works; the script checks this before generating.
 #   * protoc_plugin — already a dev_dependency of the package, invoked through
 #     `dart run protoc_plugin`, so its version is pinned by pubspec.lock.
 #   * flutter/dart on PATH (local toolchain: export PATH=~/tools/flutter/bin:$PATH)
@@ -38,6 +48,7 @@ SCRIPT_PATH="$(resolve_path "$0")"
 REPO_ROOT="$(git -C "$(dirname "$SCRIPT_PATH")" rev-parse --show-toplevel)"
 PKG_DIR="$REPO_ROOT/packages/redpanda_light_client"
 PROTO_DIR="$PKG_DIR/protos"
+CLIENT_PROTO_DIR="$PROTO_DIR/client"
 OUT_DIR="$PKG_DIR/lib/src/generated"
 CODEGEN_LOCK="$OUT_DIR/CODEGEN.lock"
 
@@ -60,9 +71,19 @@ if [ -z "$PROTOC" ]; then
     die "protoc not found — install it or set \$PROTOC"
   fi
 fi
+# proto3 `optional` (protos/client/) needs protoc >= 3.15; the 21+ releases
+# dropped the leading "3." from the version.
+PROTOC_VER="$("$PROTOC" --version | awk '{print $2}')"
+PROTOC_MAJOR="${PROTOC_VER%%.*}"
+PROTOC_MINOR="$(echo "$PROTOC_VER" | cut -d. -f2)"
+if ! [[ "$PROTOC_MAJOR" =~ ^[0-9]+$ && "$PROTOC_MINOR" =~ ^[0-9]+$ ]] \
+   || { [ "$PROTOC_MAJOR" -lt 21 ] && { [ "$PROTOC_MAJOR" -lt 3 ] || { [ "$PROTOC_MAJOR" -eq 3 ] && [ "$PROTOC_MINOR" -lt 15 ]; }; }; }; then
+  die "protoc >= 3.15 required (proto3 optional), found '$("$PROTOC" --version)'"
+fi
 command -v dart >/dev/null 2>&1 || die "dart not on PATH (export PATH=~/tools/flutter/bin:\$PATH)"
 
 ls "$PROTO_DIR"/*.proto >/dev/null 2>&1 || die "no vendored protos in $PROTO_DIR (run tool/sync_protos.sh)"
+ls "$CLIENT_PROTO_DIR"/*.proto >/dev/null 2>&1 || die "no client protos in $CLIENT_PROTO_DIR"
 
 cd "$PKG_DIR"
 dart pub get > /dev/null
@@ -80,8 +101,11 @@ chmod +x "$PLUGIN_DIR/protoc-gen-dart"
 mkdir -p "$OUT_DIR"
 # Drop the previous output first: the generated files are committed, so a
 # renamed or removed .proto would otherwise leave stale *.pb*.dart behind.
-rm -f "$OUT_DIR"/*.pb.dart "$OUT_DIR"/*.pbenum.dart "$OUT_DIR"/*.pbjson.dart \
-      "$OUT_DIR"/*.pbserver.dart "$OUT_DIR"/*.pbgrpc.dart "$CODEGEN_LOCK"
+for d in "$OUT_DIR" "$OUT_DIR/client"; do
+  rm -f "$d"/*.pb.dart "$d"/*.pbenum.dart "$d"/*.pbjson.dart \
+        "$d"/*.pbserver.dart "$d"/*.pbgrpc.dart
+done
+rm -f "$CODEGEN_LOCK"
 
 PROTOC_VERSION="$("$PROTOC" --version)"
 PLUGIN_VERSION="$(awk '/^  protoc_plugin:/ { found = 1 } found && /^    version:/ { gsub(/"/, "", $2); print $2; exit }' "$PKG_DIR/pubspec.lock")"
@@ -93,6 +117,13 @@ PATH="$PLUGIN_DIR:$PATH" "$PROTOC" \
   --dart_out="$OUT_DIR" \
   "$PROTO_DIR"/*.proto
 
+# Client schemas: compiled relative to protos/ so they land in
+# lib/src/generated/client/ (protoc mirrors the proto path in the output).
+(cd "$PROTO_DIR" && PATH="$PLUGIN_DIR:$PATH" "$PROTOC" \
+  --proto_path=. \
+  --dart_out="$OUT_DIR" \
+  client/*.proto)
+
 # protoc_plugin formats with its own bundled dart_style; re-format with the
 # project's pinned Dart so `dart format --set-exit-if-changed` stays green and
 # the hashes below match what CI sees.
@@ -100,13 +131,14 @@ dart format "$OUT_DIR" > /dev/null
 
 {
   echo "# Generated protobuf Dart — DO NOT EDIT."
-  echo "# Produced by tool/generate_protos.sh from packages/redpanda_light_client/protos/."
+  echo "# Produced by tool/generate_protos.sh from packages/redpanda_light_client/protos/"
+  echo "# (vendored *.proto -> ./, local client/*.proto -> client/)."
   echo "# Verified by test/unit/vendored_protos_test.dart: a hand-edit of the"
   echo "# generated code fails CI, which is how the pre-T107 drift stayed invisible."
   echo "# protoc: $PROTOC_VERSION"
   echo "# protoc_plugin: ${PLUGIN_VERSION:-unknown}"
-  (cd "$OUT_DIR" && sha256_of $(find . -maxdepth 1 -name '*.dart' -type f -exec basename {} \; | LC_ALL=C sort))
+  (cd "$OUT_DIR" && sha256_of $(find . -maxdepth 2 -name '*.dart' -type f | sed 's|^\./||' | LC_ALL=C sort))
 } > "$CODEGEN_LOCK"
 
 echo "generated:"
-ls -1 "$OUT_DIR"
+(cd "$OUT_DIR" && find . -maxdepth 2 -name '*.dart' -type f | sed 's|^\./||' | LC_ALL=C sort)

@@ -21,7 +21,7 @@ class KademliaIdProto extends $pb.GeneratedMessage {
   factory KademliaIdProto({
     $core.List<$core.int>? keyBytes,
   }) {
-    final result = create();
+    final result = KademliaIdProto._();
     if (keyBytes != null) result.keyBytes = keyBytes;
     return result;
   }
@@ -30,16 +30,16 @@ class KademliaIdProto extends $pb.GeneratedMessage {
 
   factory KademliaIdProto.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      KademliaIdProto()..mergeFromBuffer(data, registry);
   factory KademliaIdProto.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      KademliaIdProto()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'KademliaIdProto',
       package:
           const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
-      createEmptyInstance: create)
+      createEmptyInstance: KademliaIdProto.$_createMessage)
     ..a<$core.List<$core.int>>(
         1, _omitFieldNames ? '' : 'keyBytes', $pb.PbFieldType.OY)
     ..hasRequiredFields = false;
@@ -55,12 +55,15 @@ class KademliaIdProto extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use KademliaIdProto() / KademliaIdProto.new instead')
   static KademliaIdProto create() => KademliaIdProto._();
+  static $pb.GeneratedMessage $_createMessage() => KademliaIdProto._();
   @$core.override
-  KademliaIdProto createEmptyInstance() => create();
+  KademliaIdProto createEmptyInstance() => KademliaIdProto._();
   @$core.pragma('dart2js:noInline')
-  static KademliaIdProto getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<KademliaIdProto>(create);
+  static KademliaIdProto getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<KademliaIdProto>(
+          KademliaIdProto.$_createMessage);
   static KademliaIdProto? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -77,7 +80,7 @@ class NodeIdProto extends $pb.GeneratedMessage {
   factory NodeIdProto({
     $core.List<$core.int>? publicKeyBytes,
   }) {
-    final result = create();
+    final result = NodeIdProto._();
     if (publicKeyBytes != null) result.publicKeyBytes = publicKeyBytes;
     return result;
   }
@@ -86,16 +89,16 @@ class NodeIdProto extends $pb.GeneratedMessage {
 
   factory NodeIdProto.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      NodeIdProto()..mergeFromBuffer(data, registry);
   factory NodeIdProto.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      NodeIdProto()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'NodeIdProto',
       package:
           const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
-      createEmptyInstance: create)
+      createEmptyInstance: NodeIdProto.$_createMessage)
     ..a<$core.List<$core.int>>(
         1, _omitFieldNames ? '' : 'publicKeyBytes', $pb.PbFieldType.OY)
     ..hasRequiredFields = false;
@@ -111,12 +114,15 @@ class NodeIdProto extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use NodeIdProto() / NodeIdProto.new instead')
   static NodeIdProto create() => NodeIdProto._();
+  static $pb.GeneratedMessage $_createMessage() => NodeIdProto._();
   @$core.override
-  NodeIdProto createEmptyInstance() => create();
+  NodeIdProto createEmptyInstance() => NodeIdProto._();
   @$core.pragma('dart2js:noInline')
-  static NodeIdProto getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<NodeIdProto>(create);
+  static NodeIdProto getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<NodeIdProto>(
+          NodeIdProto.$_createMessage);
   static NodeIdProto? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -136,7 +142,7 @@ class PeerInfoProto extends $pb.GeneratedMessage {
     NodeIdProto? nodeId,
     $core.List<$core.int>? encryptionPublicKey,
   }) {
-    final result = create();
+    final result = PeerInfoProto._();
     if (ip != null) result.ip = ip;
     if (port != null) result.port = port;
     if (nodeId != null) result.nodeId = nodeId;
@@ -149,20 +155,20 @@ class PeerInfoProto extends $pb.GeneratedMessage {
 
   factory PeerInfoProto.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      PeerInfoProto()..mergeFromBuffer(data, registry);
   factory PeerInfoProto.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      PeerInfoProto()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'PeerInfoProto',
       package:
           const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
-      createEmptyInstance: create)
+      createEmptyInstance: PeerInfoProto.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'ip')
     ..aI(2, _omitFieldNames ? '' : 'port')
     ..aOM<NodeIdProto>(3, _omitFieldNames ? '' : 'nodeId',
-        subBuilder: NodeIdProto.create)
+        subBuilder: NodeIdProto.$_createMessage)
     ..a<$core.List<$core.int>>(
         4, _omitFieldNames ? '' : 'encryptionPublicKey', $pb.PbFieldType.OY)
     ..hasRequiredFields = false;
@@ -178,12 +184,15 @@ class PeerInfoProto extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use PeerInfoProto() / PeerInfoProto.new instead')
   static PeerInfoProto create() => PeerInfoProto._();
+  static $pb.GeneratedMessage $_createMessage() => PeerInfoProto._();
   @$core.override
-  PeerInfoProto createEmptyInstance() => create();
+  PeerInfoProto createEmptyInstance() => PeerInfoProto._();
   @$core.pragma('dart2js:noInline')
-  static PeerInfoProto getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<PeerInfoProto>(create);
+  static PeerInfoProto getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<PeerInfoProto>(
+          PeerInfoProto.$_createMessage);
   static PeerInfoProto? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -232,7 +241,7 @@ class SendPeerList extends $pb.GeneratedMessage {
   factory SendPeerList({
     $core.Iterable<PeerInfoProto>? peers,
   }) {
-    final result = create();
+    final result = SendPeerList._();
     if (peers != null) result.peers.addAll(peers);
     return result;
   }
@@ -241,18 +250,18 @@ class SendPeerList extends $pb.GeneratedMessage {
 
   factory SendPeerList.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      SendPeerList()..mergeFromBuffer(data, registry);
   factory SendPeerList.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      SendPeerList()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'SendPeerList',
       package:
           const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
-      createEmptyInstance: create)
+      createEmptyInstance: SendPeerList.$_createMessage)
     ..pPM<PeerInfoProto>(1, _omitFieldNames ? '' : 'peers',
-        subBuilder: PeerInfoProto.create)
+        subBuilder: PeerInfoProto.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -266,12 +275,15 @@ class SendPeerList extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use SendPeerList() / SendPeerList.new instead')
   static SendPeerList create() => SendPeerList._();
+  static $pb.GeneratedMessage $_createMessage() => SendPeerList._();
   @$core.override
-  SendPeerList createEmptyInstance() => create();
+  SendPeerList createEmptyInstance() => SendPeerList._();
   @$core.pragma('dart2js:noInline')
-  static SendPeerList getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<SendPeerList>(create);
+  static SendPeerList getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<SendPeerList>(
+          SendPeerList.$_createMessage);
   static SendPeerList? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -279,22 +291,22 @@ class SendPeerList extends $pb.GeneratedMessage {
 }
 
 class Ping extends $pb.GeneratedMessage {
-  factory Ping() => create();
+  factory Ping() => Ping._();
 
   Ping._();
 
   factory Ping.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      Ping()..mergeFromBuffer(data, registry);
   factory Ping.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      Ping()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'Ping',
       package:
           const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
-      createEmptyInstance: create)
+      createEmptyInstance: Ping.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -307,32 +319,34 @@ class Ping extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use Ping() / Ping.new instead')
   static Ping create() => Ping._();
+  static $pb.GeneratedMessage $_createMessage() => Ping._();
   @$core.override
-  Ping createEmptyInstance() => create();
+  Ping createEmptyInstance() => Ping._();
   @$core.pragma('dart2js:noInline')
-  static Ping getDefault() =>
-      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<Ping>(create);
+  static Ping getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<Ping>(Ping.$_createMessage);
   static Ping? _defaultInstance;
 }
 
 class Pong extends $pb.GeneratedMessage {
-  factory Pong() => create();
+  factory Pong() => Pong._();
 
   Pong._();
 
   factory Pong.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      Pong()..mergeFromBuffer(data, registry);
   factory Pong.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      Pong()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'Pong',
       package:
           const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
-      createEmptyInstance: create)
+      createEmptyInstance: Pong.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -345,32 +359,34 @@ class Pong extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use Pong() / Pong.new instead')
   static Pong create() => Pong._();
+  static $pb.GeneratedMessage $_createMessage() => Pong._();
   @$core.override
-  Pong createEmptyInstance() => create();
+  Pong createEmptyInstance() => Pong._();
   @$core.pragma('dart2js:noInline')
-  static Pong getDefault() =>
-      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<Pong>(create);
+  static Pong getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<Pong>(Pong.$_createMessage);
   static Pong? _defaultInstance;
 }
 
 class RequestPeerList extends $pb.GeneratedMessage {
-  factory RequestPeerList() => create();
+  factory RequestPeerList() => RequestPeerList._();
 
   RequestPeerList._();
 
   factory RequestPeerList.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RequestPeerList()..mergeFromBuffer(data, registry);
   factory RequestPeerList.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RequestPeerList()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RequestPeerList',
       package:
           const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
-      createEmptyInstance: create)
+      createEmptyInstance: RequestPeerList.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -384,12 +400,15 @@ class RequestPeerList extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use RequestPeerList() / RequestPeerList.new instead')
   static RequestPeerList create() => RequestPeerList._();
+  static $pb.GeneratedMessage $_createMessage() => RequestPeerList._();
   @$core.override
-  RequestPeerList createEmptyInstance() => create();
+  RequestPeerList createEmptyInstance() => RequestPeerList._();
   @$core.pragma('dart2js:noInline')
-  static RequestPeerList getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RequestPeerList>(create);
+  static RequestPeerList getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<RequestPeerList>(
+          RequestPeerList.$_createMessage);
   static RequestPeerList? _defaultInstance;
 }
 
@@ -398,7 +417,7 @@ class KademliaGet extends $pb.GeneratedMessage {
     $core.int? jobId,
     KademliaIdProto? searchedId,
   }) {
-    final result = create();
+    final result = KademliaGet._();
     if (jobId != null) result.jobId = jobId;
     if (searchedId != null) result.searchedId = searchedId;
     return result;
@@ -408,19 +427,19 @@ class KademliaGet extends $pb.GeneratedMessage {
 
   factory KademliaGet.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      KademliaGet()..mergeFromBuffer(data, registry);
   factory KademliaGet.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      KademliaGet()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'KademliaGet',
       package:
           const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
-      createEmptyInstance: create)
+      createEmptyInstance: KademliaGet.$_createMessage)
     ..aI(1, _omitFieldNames ? '' : 'jobId')
     ..aOM<KademliaIdProto>(2, _omitFieldNames ? '' : 'searchedId',
-        subBuilder: KademliaIdProto.create)
+        subBuilder: KademliaIdProto.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -434,12 +453,15 @@ class KademliaGet extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use KademliaGet() / KademliaGet.new instead')
   static KademliaGet create() => KademliaGet._();
+  static $pb.GeneratedMessage $_createMessage() => KademliaGet._();
   @$core.override
-  KademliaGet createEmptyInstance() => create();
+  KademliaGet createEmptyInstance() => KademliaGet._();
   @$core.pragma('dart2js:noInline')
-  static KademliaGet getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<KademliaGet>(create);
+  static KademliaGet getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<KademliaGet>(
+          KademliaGet.$_createMessage);
   static KademliaGet? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -471,7 +493,7 @@ class KademliaGetAnswer extends $pb.GeneratedMessage {
     $core.List<$core.int>? content,
     $core.List<$core.int>? signature,
   }) {
-    final result = create();
+    final result = KademliaGetAnswer._();
     if (ackId != null) result.ackId = ackId;
     if (timestamp != null) result.timestamp = timestamp;
     if (publicKey != null) result.publicKey = publicKey;
@@ -484,16 +506,16 @@ class KademliaGetAnswer extends $pb.GeneratedMessage {
 
   factory KademliaGetAnswer.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      KademliaGetAnswer()..mergeFromBuffer(data, registry);
   factory KademliaGetAnswer.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      KademliaGetAnswer()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'KademliaGetAnswer',
       package:
           const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
-      createEmptyInstance: create)
+      createEmptyInstance: KademliaGetAnswer.$_createMessage)
     ..aI(1, _omitFieldNames ? '' : 'ackId')
     ..aInt64(2, _omitFieldNames ? '' : 'timestamp')
     ..a<$core.List<$core.int>>(
@@ -515,12 +537,15 @@ class KademliaGetAnswer extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use KademliaGetAnswer() / KademliaGetAnswer.new instead')
   static KademliaGetAnswer create() => KademliaGetAnswer._();
+  static $pb.GeneratedMessage $_createMessage() => KademliaGetAnswer._();
   @$core.override
-  KademliaGetAnswer createEmptyInstance() => create();
+  KademliaGetAnswer createEmptyInstance() => KademliaGetAnswer._();
   @$core.pragma('dart2js:noInline')
-  static KademliaGetAnswer getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<KademliaGetAnswer>(create);
+  static KademliaGetAnswer getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<KademliaGetAnswer>(
+          KademliaGetAnswer.$_createMessage);
   static KademliaGetAnswer? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -577,7 +602,7 @@ class KademliaStore extends $pb.GeneratedMessage {
     $core.List<$core.int>? content,
     $core.List<$core.int>? signature,
   }) {
-    final result = create();
+    final result = KademliaStore._();
     if (jobId != null) result.jobId = jobId;
     if (timestamp != null) result.timestamp = timestamp;
     if (publicKey != null) result.publicKey = publicKey;
@@ -590,16 +615,16 @@ class KademliaStore extends $pb.GeneratedMessage {
 
   factory KademliaStore.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      KademliaStore()..mergeFromBuffer(data, registry);
   factory KademliaStore.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      KademliaStore()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'KademliaStore',
       package:
           const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
-      createEmptyInstance: create)
+      createEmptyInstance: KademliaStore.$_createMessage)
     ..aI(1, _omitFieldNames ? '' : 'jobId')
     ..aInt64(2, _omitFieldNames ? '' : 'timestamp')
     ..a<$core.List<$core.int>>(
@@ -621,12 +646,15 @@ class KademliaStore extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use KademliaStore() / KademliaStore.new instead')
   static KademliaStore create() => KademliaStore._();
+  static $pb.GeneratedMessage $_createMessage() => KademliaStore._();
   @$core.override
-  KademliaStore createEmptyInstance() => create();
+  KademliaStore createEmptyInstance() => KademliaStore._();
   @$core.pragma('dart2js:noInline')
-  static KademliaStore getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<KademliaStore>(create);
+  static KademliaStore getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<KademliaStore>(
+          KademliaStore.$_createMessage);
   static KademliaStore? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -679,7 +707,7 @@ class JobAck extends $pb.GeneratedMessage {
   factory JobAck({
     $core.int? jobId,
   }) {
-    final result = create();
+    final result = JobAck._();
     if (jobId != null) result.jobId = jobId;
     return result;
   }
@@ -688,16 +716,16 @@ class JobAck extends $pb.GeneratedMessage {
 
   factory JobAck.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      JobAck()..mergeFromBuffer(data, registry);
   factory JobAck.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      JobAck()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'JobAck',
       package:
           const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
-      createEmptyInstance: create)
+      createEmptyInstance: JobAck.$_createMessage)
     ..aI(1, _omitFieldNames ? '' : 'jobId')
     ..hasRequiredFields = false;
 
@@ -711,12 +739,14 @@ class JobAck extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use JobAck() / JobAck.new instead')
   static JobAck create() => JobAck._();
+  static $pb.GeneratedMessage $_createMessage() => JobAck._();
   @$core.override
-  JobAck createEmptyInstance() => create();
+  JobAck createEmptyInstance() => JobAck._();
   @$core.pragma('dart2js:noInline')
-  static JobAck getDefault() =>
-      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<JobAck>(create);
+  static JobAck getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<JobAck>(JobAck.$_createMessage);
   static JobAck? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -738,7 +768,7 @@ class FlaschenpostPut extends $pb.GeneratedMessage {
     $core.List<$core.int>? sessionTag,
     $core.List<$core.int>? returnPath,
   }) {
-    final result = create();
+    final result = FlaschenpostPut._();
     if (content != null) result.content = content;
     if (ohId != null) result.ohId = ohId;
     if (wantResponse != null) result.wantResponse = wantResponse;
@@ -752,16 +782,16 @@ class FlaschenpostPut extends $pb.GeneratedMessage {
 
   factory FlaschenpostPut.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      FlaschenpostPut()..mergeFromBuffer(data, registry);
   factory FlaschenpostPut.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      FlaschenpostPut()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'FlaschenpostPut',
       package:
           const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
-      createEmptyInstance: create)
+      createEmptyInstance: FlaschenpostPut.$_createMessage)
     ..a<$core.List<$core.int>>(
         1, _omitFieldNames ? '' : 'content', $pb.PbFieldType.OY)
     ..a<$core.List<$core.int>>(
@@ -785,12 +815,15 @@ class FlaschenpostPut extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use FlaschenpostPut() / FlaschenpostPut.new instead')
   static FlaschenpostPut create() => FlaschenpostPut._();
+  static $pb.GeneratedMessage $_createMessage() => FlaschenpostPut._();
   @$core.override
-  FlaschenpostPut createEmptyInstance() => create();
+  FlaschenpostPut createEmptyInstance() => FlaschenpostPut._();
   @$core.pragma('dart2js:noInline')
-  static FlaschenpostPut getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<FlaschenpostPut>(create);
+  static FlaschenpostPut getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<FlaschenpostPut>(
+          FlaschenpostPut.$_createMessage);
   static FlaschenpostPut? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -886,7 +919,7 @@ class PandaMessage extends $pb.GeneratedMessage {
     JobAck? jobAck,
     FlaschenpostPut? flaschenpostPut,
   }) {
-    final result = create();
+    final result = PandaMessage._();
     if (ping != null) result.ping = ping;
     if (pong != null) result.pong = pong;
     if (requestPeerList != null) result.requestPeerList = requestPeerList;
@@ -903,10 +936,10 @@ class PandaMessage extends $pb.GeneratedMessage {
 
   factory PandaMessage.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      PandaMessage()..mergeFromBuffer(data, registry);
   factory PandaMessage.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      PandaMessage()..mergeFromJson(json, registry);
 
   static const $core.Map<$core.int, PandaMessage_Content>
       _PandaMessage_ContentByTag = {
@@ -925,23 +958,26 @@ class PandaMessage extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'PandaMessage',
       package:
           const $pb.PackageName(_omitMessageNames ? '' : 'im.redpanda.proto'),
-      createEmptyInstance: create)
+      createEmptyInstance: PandaMessage.$_createMessage)
     ..oo(0, [1, 2, 3, 4, 5, 6, 7, 8, 9])
-    ..aOM<Ping>(1, _omitFieldNames ? '' : 'ping', subBuilder: Ping.create)
-    ..aOM<Pong>(2, _omitFieldNames ? '' : 'pong', subBuilder: Pong.create)
+    ..aOM<Ping>(1, _omitFieldNames ? '' : 'ping',
+        subBuilder: Ping.$_createMessage)
+    ..aOM<Pong>(2, _omitFieldNames ? '' : 'pong',
+        subBuilder: Pong.$_createMessage)
     ..aOM<RequestPeerList>(3, _omitFieldNames ? '' : 'requestPeerList',
-        subBuilder: RequestPeerList.create)
+        subBuilder: RequestPeerList.$_createMessage)
     ..aOM<SendPeerList>(4, _omitFieldNames ? '' : 'sendPeerList',
-        subBuilder: SendPeerList.create)
+        subBuilder: SendPeerList.$_createMessage)
     ..aOM<KademliaGet>(5, _omitFieldNames ? '' : 'kademliaGet',
-        subBuilder: KademliaGet.create)
+        subBuilder: KademliaGet.$_createMessage)
     ..aOM<KademliaGetAnswer>(6, _omitFieldNames ? '' : 'kademliaGetAnswer',
-        subBuilder: KademliaGetAnswer.create)
+        subBuilder: KademliaGetAnswer.$_createMessage)
     ..aOM<KademliaStore>(7, _omitFieldNames ? '' : 'kademliaStore',
-        subBuilder: KademliaStore.create)
-    ..aOM<JobAck>(8, _omitFieldNames ? '' : 'jobAck', subBuilder: JobAck.create)
+        subBuilder: KademliaStore.$_createMessage)
+    ..aOM<JobAck>(8, _omitFieldNames ? '' : 'jobAck',
+        subBuilder: JobAck.$_createMessage)
     ..aOM<FlaschenpostPut>(9, _omitFieldNames ? '' : 'flaschenpostPut',
-        subBuilder: FlaschenpostPut.create)
+        subBuilder: FlaschenpostPut.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -955,12 +991,15 @@ class PandaMessage extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use PandaMessage() / PandaMessage.new instead')
   static PandaMessage create() => PandaMessage._();
+  static $pb.GeneratedMessage $_createMessage() => PandaMessage._();
   @$core.override
-  PandaMessage createEmptyInstance() => create();
+  PandaMessage createEmptyInstance() => PandaMessage._();
   @$core.pragma('dart2js:noInline')
-  static PandaMessage getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<PandaMessage>(create);
+  static PandaMessage getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<PandaMessage>(
+          PandaMessage.$_createMessage);
   static PandaMessage? _defaultInstance;
 
   @$pb.TagNumber(1)
