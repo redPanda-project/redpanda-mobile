@@ -61,7 +61,8 @@ touch it anyway (TD077/TD084).
 The source of truth is `flutter-version:` in
 `.github/workflows/flutter_ci.yml`. Everything else must match it: the
 `flutter-version:` in `emu_duo_e2e.yml` (the pre-push script refuses to run
-when the two workflow pins differ), your local `~/tools/flutter`, and this
+when the two workflow pins differ, and CI checks the same via
+`tool/pre_push_validation.sh --pins-only`), your local `~/tools/flutter`, and this
 section. Read the version out of `flutter_ci.yml` — do not trust a version
 repeated anywhere else, including here. At the time of writing it is
 **Flutter 3.47.2 (Dart 3.13.2)**; if this line and `flutter_ci.yml` disagree,

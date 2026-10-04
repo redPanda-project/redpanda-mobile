@@ -92,6 +92,26 @@ jobs:
           yes | "$SDKMANAGER" --licenses > /dev/null
           "$SDKMANAGER" --install emulator platform-tools "system-images;android-35;google_apis;x86_64"
 
+      # TD122: sdkmanager has no revision pin for system images — it always
+      # installs the latest one. So pin by assertion: a new image revision fails
+      # here, with a clear message, instead of silently changing the gate
+      # environment under an unrelated code change. Fail, not warn: the gate is
+      # read as "code X is green"; a warning in a green run is not read, and a
+      # gate that flips because the image moved would then be blamed on the
+      # code. Bumping is one deliberate edit (like the Flutter pin), ideally in
+      # its own PR whose gate run shows the new image is fine.
+      - name: Verify system image revision (pinned)
+        env:
+          EXPECTED_IMAGE_REVISION: '9'
+        run: |
+          PROPS="$ANDROID_HOME/system-images/android-35/google_apis/x86_64/source.properties"
+          actual="$(sed -n 's/^Pkg.Revision=//p' "$PROPS" | tr -d '\r')"
+          echo "system-images;android-35;google_apis;x86_64 revision: ${actual:-<none>} (pinned: $EXPECTED_IMAGE_REVISION)"
+          if [ "$actual" != "$EXPECTED_IMAGE_REVISION" ]; then
+            echo "::error::system image revision is '${actual:-<none>}', the gate pins '$EXPECTED_IMAGE_REVISION'. Google published a new image (sdkmanager cannot install old revisions). Bump EXPECTED_IMAGE_REVISION in .github/workflows/emu_duo_e2e.yml in its own PR and gate that PR (TD122)."
+            exit 1
+          fi
+
       # Unlike the build CI this is a hard requirement: the harness starts a
       # local node from this jar and dies without it.
       - name: Download RedPanda JAR (Backend)
@@ -109,6 +129,10 @@ jobs:
       - name: Run emulator duo E2E
         env:
           RP_SCENARIOS: ${{ inputs.scenarios || 's1,s2,s3,s4' }}
+          # TD058: the 16 GB runner has room, so give each guest 2 GB here to
+          # cut low-memory-killer churn (lmkdKills in counters.json) and
+          # wall-clock. Local runs keep run.sh's host-friendly 1024 default.
+          RP_AVD_RAM_MB: '2048'
         # env -u XDG_CONFIG_HOME: the runner image sets XDG_CONFIG_HOME, which
         # makes avdmanager place AVDs in $XDG_CONFIG_HOME/.android/avd while
         # run.sh (and the emulator on a default dev box, where the variable is
