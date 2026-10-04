@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:fixnum/fixnum.dart';
-import 'package:protobuf/protobuf.dart' as pb_runtime;
+import 'package:redpanda_light_client/src/crypto/client_proto.dart';
 import 'package:redpanda_light_client/src/generated/client/channel_message.pb.dart'
     as client_pb;
 
@@ -110,13 +110,16 @@ class ChannelMessage {
   /// malformed UTF-8 in `content` decodes with U+FFFD instead of throwing.
   /// The bytes only ever come out of a successful AEAD decryption, i.e. from
   /// the channel partner, whose own encoder emits canonical proto3.
+  ///
+  /// An optional bytes field that is present but empty on the wire decodes
+  /// as null (the old decoder returned an empty list); no encoder emits one
+  /// and every caller treats null and empty alike.
   factory ChannelMessage.decode(List<int> bytes) {
-    final client_pb.ChannelMessage pb;
-    try {
-      pb = client_pb.ChannelMessage.fromBuffer(bytes);
-    } on pb_runtime.InvalidProtocolBufferException catch (e) {
-      throw FormatException('ChannelMessage: ${e.message}');
-    }
+    final pb = decodeClientProto(
+      bytes,
+      client_pb.ChannelMessage.fromBuffer,
+      'ChannelMessage',
+    );
     return ChannelMessage(
       messageId: Uint8List.fromList(pb.messageId),
       timestampMs: pb.timestampMs.toInt(),

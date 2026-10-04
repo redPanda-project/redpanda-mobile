@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:fixnum/fixnum.dart';
-import 'package:protobuf/protobuf.dart' as pb_runtime;
+import 'package:redpanda_light_client/src/crypto/client_proto.dart';
 import 'package:redpanda_light_client/src/garlic/garlic_builder.dart';
 import 'package:redpanda_light_client/src/generated/client/reverse_garlic_block.pb.dart'
     as client_pb;
@@ -105,12 +105,11 @@ class ReverseGarlicBlock {
   /// is skipped like an unknown one (protobuf runtime behaviour) and then
   /// fails the presence/length validation below.
   factory ReverseGarlicBlock.deserialize(List<int> bytes) {
-    final client_pb.ReverseGarlicBlock pb;
-    try {
-      pb = client_pb.ReverseGarlicBlock.fromBuffer(bytes);
-    } on pb_runtime.InvalidProtocolBufferException catch (e) {
-      throw FormatException('ReverseGarlicBlock: ${e.message}');
-    }
+    final pb = decodeClientProto(
+      bytes,
+      client_pb.ReverseGarlicBlock.fromBuffer,
+      'ReverseGarlicBlock',
+    );
     if (!pb.hasSessionTag() || !pb.hasOhId()) {
       throw const FormatException(
         'ReverseGarlicBlock: missing session_tag or oh_id',

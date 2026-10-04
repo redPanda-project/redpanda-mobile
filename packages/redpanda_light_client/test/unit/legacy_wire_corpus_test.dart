@@ -81,4 +81,58 @@ void main() {
       (b) => gc_pb.GroupHandshake.fromBuffer(b).writeToBuffer(),
     );
   });
+
+  group('malformed input throws FormatException, never an Error', () {
+    // Negative length prefix (-1 as a 5-byte varint) after a given tag byte.
+    List<int> negativeLength(int tag) => [tag, 0xff, 0xff, 0xff, 0xff, 0x0f];
+    final common = <List<int>>[
+      [0x0a], // tag without length
+      [0x0a, 0x05, 0x01], // length beyond the end
+      [0x08, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01],
+      [0x0f], // wire type 7
+    ];
+
+    void expectAllRejected(
+      String what,
+      Object? Function(List<int>) decode,
+      List<int> lengthDelimitedTags,
+    ) {
+      for (final input in [
+        ...common,
+        for (final tag in lengthDelimitedTags) negativeLength(tag),
+      ]) {
+        expect(
+          () => decode(input),
+          throwsA(isA<FormatException>()),
+          reason: '$what ${HEX.encode(input)}',
+        );
+      }
+    }
+
+    test('ChannelMessage', () {
+      expectAllRejected('ChannelMessage', ChannelMessage.decode, [
+        0x0a,
+        0x1a,
+        0x2a,
+        0x32,
+        0x3a,
+        0x42,
+        0x4a,
+      ]);
+    });
+
+    test('ReverseGarlicBlock', () {
+      expectAllRejected('ReverseGarlicBlock', ReverseGarlicBlock.deserialize, [
+        0x1a,
+        0x22,
+        0x2a,
+      ]);
+    });
+
+    test('GroupControl / KeyRotation / GroupHandshake', () {
+      expectAllRejected('GroupControl', GroupControl.decode, [0x0a, 0x12]);
+      expectAllRejected('KeyRotation', KeyRotation.decode, [0x0a, 0x1a, 0x22]);
+      expectAllRejected('GroupHandshake', GroupHandshake.decode, [0x0a, 0x12]);
+    });
+  });
 }

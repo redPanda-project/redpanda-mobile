@@ -162,7 +162,9 @@ void main() {
       // hashes above cannot see (TD098/T142 found 25.0.0 output under a 25.1.0
       // pin).
       final lockPath = '${generatedDir.parent.parent.parent.path}/pubspec.lock';
-      final pubspecLock = File(lockPath).readAsStringSync();
+      final pubspecLock = File(
+        lockPath,
+      ).readAsStringSync().replaceAll('\r\n', '\n');
       final pinned = RegExp(
         r'\n  protoc_plugin:\n(?:    .*\n)*?    version: "([^"]+)"',
       ).firstMatch(pubspecLock)?.group(1);

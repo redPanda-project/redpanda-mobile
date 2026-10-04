@@ -1,8 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:hex/hex.dart';
-import 'package:protobuf/protobuf.dart' as pb_runtime;
-
+import 'package:redpanda_light_client/src/crypto/client_proto.dart';
 import 'package:redpanda_light_client/src/domain/group_state.dart';
 import 'package:redpanda_light_client/src/generated/client/group_control.pb.dart'
     as client_pb;
@@ -18,11 +17,20 @@ import 'package:redpanda_light_client/src/generated/client/group_control.pb.dart
 /// this replaced did not. `test/unit/client_protos_roundtrip_test.dart` pins
 /// the bytes.
 ///
-/// Decoding leniency against that hand-written decoder (same reasoning as
-/// `RoutingAck.decode`): a known field with the wrong wire type is skipped
-/// like an unknown field, and `uint32` fields (`key_epoch`, `role`) keep only
-/// their low 32 bits. Every structural check (lengths, presence, epoch >= 1)
-/// is still enforced below.
+/// Decoding differences against that hand-written decoder, none of which any
+/// encoder produces (same reasoning as `RoutingAck.decode`):
+///  * a known field with the wrong wire type is skipped like an unknown one;
+///  * `uint32` fields (`key_epoch`, `role`) keep only their low 32 bits, and
+///    encoding a value outside uint32 throws [ArgumentError];
+///  * a present-but-empty `GroupMember.oh_id` reads as absent instead of
+///    being rejected;
+///  * protobuf merge semantics: when both oneof members are on the wire the
+///    last one wins (the old decoder preferred field 1), and a repeated
+///    embedded message is merged instead of replaced.
+/// The last point can only come from a modified admin or channel partner,
+/// who could already send any valid control (a rotation is sealed per
+/// member, so a split view is possible regardless). Lengths, required
+/// fields and epoch >= 1 are still validated below.
 class GroupControl {
   /// Set for a key rotation (sealed control, envelope v6).
   final KeyRotation? keyRotation;
@@ -46,7 +54,11 @@ class GroupControl {
   }
 
   factory GroupControl.decode(List<int> bytes) {
-    final pb = _parse(bytes, client_pb.GroupControl.fromBuffer, 'GroupControl');
+    final pb = decodeClientProto(
+      bytes,
+      client_pb.GroupControl.fromBuffer,
+      'GroupControl',
+    );
     switch (pb.whichAction()) {
       case client_pb.GroupControl_Action.keyRotation:
         return GroupControl.rotation(KeyRotation._fromProto(pb.keyRotation));
@@ -86,7 +98,7 @@ class KeyRotation {
   }
 
   factory KeyRotation.decode(List<int> bytes) => KeyRotation._fromProto(
-    _parse(bytes, client_pb.KeyRotation.fromBuffer, 'KeyRotation'),
+    decodeClientProto(bytes, client_pb.KeyRotation.fromBuffer, 'KeyRotation'),
   );
 
   factory KeyRotation._fromProto(client_pb.KeyRotation pb) {
@@ -157,7 +169,7 @@ class GroupInfoUpdate {
   }
 
   factory GroupInfoUpdate.decode(List<int> bytes) => GroupInfoUpdate(
-    name: _parse(
+    name: decodeClientProto(
       bytes,
       client_pb.GroupInfoUpdate.fromBuffer,
       'GroupInfoUpdate',
@@ -239,7 +251,7 @@ class GroupHandshake {
   }
 
   factory GroupHandshake.decode(List<int> bytes) {
-    final pb = _parse(
+    final pb = decodeClientProto(
       bytes,
       client_pb.GroupHandshake.fromBuffer,
       'GroupHandshake',
@@ -284,15 +296,5 @@ class GroupHandshake {
       case client_pb.GroupHandshake_Kind.notSet:
         throw const FormatException('GroupHandshake: no kind set');
     }
-  }
-}
-
-/// Parses [bytes] with [fromBuffer], mapping protobuf errors to
-/// [FormatException] as the callers expect.
-T _parse<T>(List<int> bytes, T Function(List<int>) fromBuffer, String what) {
-  try {
-    return fromBuffer(bytes);
-  } on pb_runtime.InvalidProtocolBufferException catch (e) {
-    throw FormatException('$what: ${e.message}');
   }
 }
