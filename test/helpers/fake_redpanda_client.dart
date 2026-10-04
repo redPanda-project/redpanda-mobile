@@ -158,9 +158,13 @@ class FakeRedPandaClient implements RedPandaClient {
     ohRedundancyCalls.add(channelId);
   }
 
+  /// When set, [connectionStatus] returns this stream instead of a single
+  /// `connected` — lets a test see whether anyone is still listening.
+  Stream<ConnectionStatus>? connectionStatusOverride;
+
   @override
   Stream<ConnectionStatus> get connectionStatus =>
-      Stream.value(ConnectionStatus.connected);
+      connectionStatusOverride ?? Stream.value(ConnectionStatus.connected);
 
   @override
   Stream<int> get peerCountStream => Stream.value(1);

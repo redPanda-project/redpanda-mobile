@@ -135,22 +135,7 @@ class _MyAppState extends ConsumerState<MyApp> {
         (Object e) => debugPrint('Failed to restore persisted groups: $e'),
       ),
     );
-    // Messages handed to the network but not R-ACKed before the last
-    // shutdown can never be confirmed (ack tags are in-memory only) —
-    // re-queue them so the retry queue delivers them again.
-    unawaited(
-      ref
-          .read(messageRepositoryProvider)
-          .requeueStuckSent()
-          .then((count) {
-            if (count > 0) {
-              debugPrint('Re-queued $count stuck sent message(s) on startup');
-            }
-          })
-          .catchError((Object e) {
-            debugPrint('Failed to re-queue stuck messages: $e');
-          }),
-    );
+    // Also re-queues what the previous process left `sent` (TD137).
     ref.read(outboxServiceProvider).start();
 
     // T16: keep the process (and with it the network isolate) alive in the

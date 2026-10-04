@@ -365,10 +365,11 @@ class MessageRepository {
   ///
   /// Ack tags live only in memory (AckTagStore), so after an app restart a
   /// message that was handed to the network but not yet R-ACKed can never be
-  /// confirmed or timed out — it would stay `sent` forever. Called once on
-  /// startup; the re-send reuses the stable network message id, so receivers
-  /// that already got the message deduplicate it. retryCount and lastRetryAt
-  /// are kept so the normal backoff continues instead of restarting.
+  /// confirmed or timed out — it would stay `sent` forever. Called once per
+  /// process by [OutboxService.recoverAfterRestart]; the re-send reuses the
+  /// stable network message id, so receivers that already got the message
+  /// deduplicate it. retryCount and lastRetryAt are kept so the normal
+  /// backoff continues instead of restarting.
   /// Returns the number of re-queued messages.
   Future<int> requeueStuckSent() {
     return (_db.update(

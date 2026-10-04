@@ -96,10 +96,7 @@ class ConversationStats {
       switch (msg.status) {
         case MessageStatus.pending:
           pending++;
-          // Mirrors OutboxService.isDue: no lastRetryAt means due now.
-          final due = msg.lastRetryAt == null
-              ? now
-              : msg.lastRetryAt!.add(OutboxService.backoffFor(msg.retryCount));
+          final due = OutboxService.nextAttemptAt(msg) ?? now;
           if (nextRetryAt == null || due.isBefore(nextRetryAt)) {
             nextRetryAt = due;
           }
