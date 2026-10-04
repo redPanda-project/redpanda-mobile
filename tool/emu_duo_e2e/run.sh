@@ -74,7 +74,8 @@ SEEDS="10.0.2.2:$NODE_PORT"
 START_NODE=1
 if [[ "${1:-}" == "--testnet" ]]; then
   # Non-deterministic variant: real network, no local node.
-  SEEDS="5.75.137.166:59558,46.224.156.238:59558"
+  # Same list as RedPandaLightClient.defaultSeeds (seed2 IP as DNS fallback).
+  SEEDS="seed1.redpanda.im:59558,seed2.redpanda.im:59558,5.75.137.166:59558"
   START_NODE=0
 fi
 

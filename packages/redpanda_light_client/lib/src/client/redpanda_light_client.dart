@@ -65,12 +65,31 @@ class RedPandaLightClient implements RedPandaClient {
       StreamController<ConnectionStatus>.broadcast();
   final _peerCountController = StreamController<int>.broadcast();
 
-  /// Bootstrap nodes of the first real v23 network (live since 2026-07-11).
-  /// Tests and local setups inject their own list via the `seeds` parameter.
+  /// Bootstrap nodes of the v23 test network. Tests and local setups inject
+  /// their own list via the `seeds` parameter.
+  ///
+  /// DNS names since T154 so a node can move to a new IP without an app
+  /// release (seed1 -> 91.98.79.117, seed2 -> 5.75.137.166). The trailing IP
+  /// literal is seed2's address as a fallback for as long as the DNS records
+  /// are missing or still propagating, and for devices whose resolver fails:
+  /// an unresolvable name only costs that one dial (it lands in backoff), and
+  /// the alias dedup in [_runConnectionCheck] keeps seed2 and its IP from
+  /// being dialled as two connections to the same node. The fallback can go
+  /// once both names resolve in production and an app build without it has
+  /// reached the devices.
   static const List<String> defaultSeeds = [
+    'seed1.redpanda.im:59558',
+    'seed2.redpanda.im:59558',
     '5.75.137.166:59558',
-    '46.224.156.238:59558',
   ];
+
+  /// Upper bound for one alias-dedup DNS lookup. A resolver that hangs (no
+  /// network, captive portal) must not hold up the dials of the candidates
+  /// after it in the same connection check, e.g. the fallback IP seed.
+  static const Duration lookupTimeout = Duration(seconds: 2);
+
+  /// DNS resolution used by the alias dedup; injectable for tests.
+  final Future<List<InternetAddress>> Function(String host) _lookup;
 
   final SocketFactory _socketFactory;
   // final Set<String> _knownAddresses = {}; // Replaced by PeerRepository
@@ -80,8 +99,8 @@ class RedPandaLightClient implements RedPandaClient {
   /// Addresses picked for a dial by a [_runConnectionCheck] that has not put
   /// its [ActivePeer] into [_peers] yet.
   ///
-  /// [_runConnectionCheck] awaits DNS lookups (`_resolveConnectedIps`,
-  /// `_isAliasOfConnected`) between choosing candidates and registering the
+  /// [_runConnectionCheck] awaits a DNS lookup (`_resolveEndpoint`) between
+  /// choosing a candidate and registering the
   /// peer, and it runs from three places at once: the constructor's
   /// `load().then(...)`, [connect], and the 3 s timer. Without this set a
   /// second check re-picks an address whose dial is still inside that await
@@ -93,6 +112,24 @@ class RedPandaLightClient implements RedPandaClient {
   /// moment earlier, yet `sendMessage` throws "no active peer available"
   /// (T78 — reproduced by pinning the e2e suite to two cores).
   final Set<String> _dialsInFlight = {};
+
+  /// The `ip:port` endpoints each address resolved to the last time the dial
+  /// loop looked at it (dialled or skipped as alias) — T154.
+  ///
+  /// For an address in [_peers] the entry is written in the same synchronous
+  /// step that inserts the peer, so two overlapping checks cannot both miss
+  /// each other: whichever finishes its lookup second sees the first one's
+  /// endpoints. Resolving at dial time instead of on every check also keeps
+  /// a connected hostname peer from costing a DNS query per 3 s tick.
+  /// [_livePeerFor] uses the entries to find the connection that serves an
+  /// endpoint under its other name (OH host `5.75.137.166` reached as
+  /// `seed2.redpanda.im`). Bounded by the peer repository's address set.
+  final Map<String, Set<String>> _resolvedEndpoints = {};
+
+  /// Retry delay for an address skipped as alias of a live connection: short
+  /// and fixed (no exponential growth), so the fallback IP is dialled soon
+  /// after the hostname connection it aliases is lost.
+  static const Duration aliasRetryDelay = Duration(seconds: 10);
 
   Timer? _connectionTimer;
   ConnectionStatus _currentStatus = ConnectionStatus.disconnected;
@@ -248,7 +285,10 @@ class RedPandaLightClient implements RedPandaClient {
     bool Function(PeerStats peer)? hopCandidateFilter,
     // Clock for the connection routine's time-based decisions (see [_now]).
     DateTime Function()? now,
+    // DNS resolution for the alias dedup (see [_lookup]).
+    Future<List<InternetAddress>> Function(String host)? lookup,
   }) : _now = now ?? DateTime.now,
+       _lookup = lookup ?? InternetAddress.lookup,
        _socketFactory =
            socketFactory ??
            // The explicit timeout matters (T27): without one, a dial started
@@ -641,13 +681,18 @@ class RedPandaLightClient implements RedPandaClient {
     _dialsInFlight.addAll(claimed);
 
     try {
-      // Resolve Deduplication done in ActivePeer or before connect?
-      // We do simplified resolve check here
-      final connectedIps = await _resolveConnectedIps();
-
       for (final address in toConnect) {
         try {
-          if (await _isAliasOfConnected(address, connectedIps)) {
+          final resolved = await _resolveEndpoint(address);
+          if (_disconnected) break; // shut down during the lookup
+          // Everything from here to `_peers[address] = peer` is synchronous
+          // (see [_resolvedEndpoints]).
+          _resolvedEndpoints[address] = resolved;
+          if (_isAliasOfConnected(address, resolved)) {
+            // E.g. seed2.redpanda.im next to its own fallback IP. Park it
+            // (without scoring a failure) so a permanent alias does not take
+            // a dial slot in every check.
+            _nextRetryTime[address] = _now().add(aliasRetryDelay);
             continue;
           }
 
@@ -691,10 +736,16 @@ class RedPandaLightClient implements RedPandaClient {
               // _runConnectionCheck();
             },
             onPeerListRequested: () {
-              // Return top 20 best peers to share
+              // Return top 20 best peers to share. IP literals only: nodes
+              // drop gossiped host names (redpandaj
+              // Utils.isPlausibleAdvertisedAddress), seeds are local config.
+              // Filter before capping so host-name entries (seeds) never
+              // eat the 20-slot budget (Copilot review on #129).
               return _peerRepository
-                  .getBestPeers(20)
+                  .getBestPeers(60)
                   .map((p) => p.address)
+                  .where(_isIpLiteralAddress)
+                  .take(20)
                   .toList();
             },
             onHandshakeComplete: () {
@@ -771,7 +822,9 @@ class RedPandaLightClient implements RedPandaClient {
 
     // Exponential backoff: 2s, 4s, 8s...
     // 2 * (2^(count-1))
-    int seconds = 2 * (1 << (count - 1));
+    // count > 5 already hits the cap; clamping first also keeps the shift
+    // from overflowing for an address that fails for hours.
+    int seconds = count > 5 ? 30 : 2 * (1 << (count - 1));
     // Cap at 30 s (was 5 min): after a ~1 min outage the old cap made the
     // next reconnect attempt wait up to several minutes — the dominant part
     // of post-airplane-mode delivery delay (T27). A capped attempt is one
@@ -803,45 +856,77 @@ class RedPandaLightClient implements RedPandaClient {
     await _runConnectionCheck();
   }
 
-  Future<Set<String>> _resolveConnectedIps() async {
-    final connectedIps = <String>{};
-    // Copy: _peers may be mutated by peer callbacks while we await lookups.
-    for (final peer in List.of(_peers.values)) {
-      if (!peer.isDisconnected) {
-        try {
-          final parts = peer.address.split(':');
-          final host = parts[0];
-          final lookup = await InternetAddress.lookup(host);
-          for (final addr in lookup) {
-            connectedIps.add('${addr.address}:${parts[1]}');
-          }
-        } catch (e) {
-          // Ignore lookup errors
-        }
-      }
-    }
-    return connectedIps;
-  }
-
-  Future<bool> _isAliasOfConnected(
-    String address,
-    Set<String> connectedIps,
-  ) async {
-    try {
-      final parts = address.split(':');
-      final host = parts[0];
-      final port = parts[1];
-      final lookup = await InternetAddress.lookup(host);
-
-      for (final addr in lookup) {
-        if (connectedIps.contains('${addr.address}:$port')) {
-          return true;
-        }
-      }
-    } catch (e) {
-      // resolution failed
+  /// Whether one of [endpoints] belongs to a live entry of [_peers] other
+  /// than [address] itself.
+  bool _isAliasOfConnected(String address, Set<String> endpoints) {
+    for (final entry in _peers.entries) {
+      if (entry.key == address || entry.value.isDisconnected) continue;
+      final known = _resolvedEndpoints[entry.key];
+      if (known != null && known.any(endpoints.contains)) return true;
     }
     return false;
+  }
+
+  /// The live peer serving [endpoint]: the connection under that exact
+  /// address, else one under another name of the same `ip:port` (T154 alias
+  /// dedup only ever keeps one of them connected). Falls back to the exact
+  /// entry, live or not, so callers keep their previous view of it.
+  ActivePeer? _livePeerFor(String endpoint) {
+    final exact = _peers[endpoint];
+    if (exact != null && !exact.isDisconnected) return exact;
+    final wanted = _resolvedEndpoints[endpoint] ?? _literalEndpoint(endpoint);
+    if (wanted == null || wanted.isEmpty) return exact;
+    for (final entry in _peers.entries) {
+      if (entry.value.isDisconnected) continue;
+      final known = _resolvedEndpoints[entry.key];
+      if (known != null && known.any(wanted.contains)) return entry.value;
+    }
+    return exact;
+  }
+
+  /// [endpoint] plus the address of the live peer serving it under another
+  /// name (see [_livePeerFor]) — for excluding an OH's host node by address.
+  Set<String> _hostAddresses(String? endpoint) => {
+    ?endpoint,
+    if (endpoint != null) ?_livePeerFor(endpoint)?.address,
+  };
+
+  /// Node identity of the live peer serving [endpoint] (under any of its
+  /// names), for excluding an OH's host node from its own garlic routes even
+  /// when the peer list knows it under a different address.
+  String? _hostNodeId(String? endpoint) =>
+      endpoint == null ? null : _livePeerFor(endpoint)?.discoveredNodeId;
+
+  /// `{ip:port}` for an IP-literal [address], null for a host name or a
+  /// malformed address.
+  static Set<String>? _literalEndpoint(String address) {
+    final parts = address.split(':');
+    if (parts.length != 2) return null;
+    final literal = InternetAddress.tryParse(parts[0]);
+    return literal == null ? null : {'${literal.address}:${parts[1]}'};
+  }
+
+  static bool _isIpLiteralAddress(String address) =>
+      InternetAddress.tryParse(address.split(':').first) != null;
+
+  /// The `ip:port` endpoints [address] (`host:port`) resolves to. IP literals
+  /// skip DNS (TD260). A failed or timed-out lookup yields an empty set: the
+  /// address is then not recognised as an alias and simply dialled, where
+  /// the same failure ends in the regular backoff.
+  Future<Set<String>> _resolveEndpoint(String address) async {
+    final literal = _literalEndpoint(address);
+    if (literal != null) return literal;
+    final parts = address.split(':');
+    if (parts.length != 2) return const {};
+    final host = parts[0];
+    final port = parts[1];
+    try {
+      final lookup = await _lookup(host).timeout(lookupTimeout);
+      return {for (final addr in lookup) '${addr.address}:$port'};
+    } catch (e) {
+      RpLog.debug('RedPandaLightClient: Lookup of $host failed: $e');
+      return const {};
+    }
   }
 
   @override
@@ -866,11 +951,14 @@ class RedPandaLightClient implements RedPandaClient {
     _pollingTimer = null;
     _renewalTimer?.cancel();
     _renewalTimer = null;
-    for (final peer in _peers.values) {
+    // Copy: a connection check suspended in a DNS lookup may still insert
+    // into _peers while we await here.
+    for (final peer in List.of(_peers.values)) {
       await peer.disconnect();
     }
     _peers.clear();
     _dialsInFlight.clear();
+    _resolvedEndpoints.clear();
     _registeredOHs.clear();
     _pendingResponses.clear();
     _putResponses.clear();
@@ -1910,7 +1998,7 @@ class RedPandaLightClient implements RedPandaClient {
           ..reset()
           ..start();
         if (endpoint != null) {
-          final hostPeer = _peers[endpoint];
+          final hostPeer = _livePeerFor(endpoint);
           if (hostPeer != null && hostPeer.isHandshakeVerified) {
             stages.add(
               _stage(
@@ -2192,8 +2280,12 @@ class RedPandaLightClient implements RedPandaClient {
   }) {
     var hops = _hopSelector.selectHops(
       count: defaultHopCount,
-      excludeAddresses: {submitVia.address, ?ohEndpoint},
-      excludeNodeIds: {?submitVia.discoveredNodeId, ...excludeNodeIds},
+      excludeAddresses: {submitVia.address, ..._hostAddresses(ohEndpoint)},
+      excludeNodeIds: {
+        ?submitVia.discoveredNodeId,
+        ?_hostNodeId(ohEndpoint),
+        ...excludeNodeIds,
+      },
     );
     if (hops.isEmpty && excludeNodeIds.isNotEmpty) {
       // Not enough DISJOINT candidates left for this extra route — reuse relay
@@ -2202,8 +2294,8 @@ class RedPandaLightClient implements RedPandaClient {
       // routeCount × hopCount relay candidates).
       hops = _hopSelector.selectHops(
         count: defaultHopCount,
-        excludeAddresses: {submitVia.address, ?ohEndpoint},
-        excludeNodeIds: {?submitVia.discoveredNodeId},
+        excludeAddresses: {submitVia.address, ..._hostAddresses(ohEndpoint)},
+        excludeNodeIds: {?submitVia.discoveredNodeId, ?_hostNodeId(ohEndpoint)},
       );
     }
     if (hops.isNotEmpty) return (hops: hops, selfHop: false);
@@ -2319,7 +2411,7 @@ class RedPandaLightClient implements RedPandaClient {
     final rgb = _rgbBuilder.build(
       ohId: ownOh.ohId,
       hopCount: defaultHopCount,
-      excludeAddresses: {?ownOh.serverEndpoint},
+      excludeAddresses: _hostAddresses(ownOh.serverEndpoint),
     );
     if (rgb == null) {
       RpLog.info(
@@ -2401,8 +2493,14 @@ class RedPandaLightClient implements RedPandaClient {
     // never relays its own acks; the submit node sees us directly).
     final returnHops = _hopSelector.selectHops(
       count: defaultHopCount,
-      excludeAddresses: {?ownOh.serverEndpoint, submitVia.address},
-      excludeNodeIds: {?submitVia.discoveredNodeId},
+      excludeAddresses: {
+        ..._hostAddresses(ownOh.serverEndpoint),
+        submitVia.address,
+      },
+      excludeNodeIds: {
+        ?submitVia.discoveredNodeId,
+        ?_hostNodeId(ownOh.serverEndpoint),
+      },
     );
     final withinBudget =
         payloadLength <=
@@ -2446,11 +2544,12 @@ class RedPandaLightClient implements RedPandaClient {
     final ohEndpoint = _channelCounterpartOhEndpoints[channelId];
     return _hopSelector.selectHops(
       count: defaultHopCount,
-      excludeAddresses: {submitVia.address, ?ohEndpoint},
+      excludeAddresses: {submitVia.address, ..._hostAddresses(ohEndpoint)},
       excludeNodeIds: {
-        // The submission node may be known in the peer list under a
-        // different address (e.g. seed alias) — exclude it by identity too.
+        // The submission node and the OH host may be known in the peer list
+        // under a different address (e.g. seed alias) — exclude by identity too.
         ?submitVia.discoveredNodeId,
+        ?_hostNodeId(ohEndpoint),
       },
     );
   }
@@ -2665,7 +2764,10 @@ class RedPandaLightClient implements RedPandaClient {
     final endpoint = oh.serverEndpoint;
     final verified = _peers.values.where((p) => p.isHandshakeVerified);
     if (endpoint == null) return verified.firstOrNull;
-    final host = verified.where((p) => p.address == endpoint).firstOrNull;
+    final candidate = _livePeerFor(endpoint);
+    final host = candidate != null && candidate.isHandshakeVerified
+        ? candidate
+        : null;
     if (host == null) {
       RpLog.info(
         'RedPandaLightClient: $what: host node $endpoint not connected — '
@@ -2727,8 +2829,9 @@ class RedPandaLightClient implements RedPandaClient {
   /// otherwise this is a local outage (airplane mode, no WiFi) and moving
   /// the mailbox would not help anyone.
   void _noteHostUnreachable(OHRegistration oh) {
+    final hostAddresses = _hostAddresses(oh.serverEndpoint);
     final hasAlternative = _peers.values.any(
-      (p) => p.isHandshakeVerified && p.address != oh.serverEndpoint,
+      (p) => p.isHandshakeVerified && !hostAddresses.contains(p.address),
     );
     if (!hasAlternative) return;
     final key = _hexEncode(oh.ohId);
@@ -2778,7 +2881,7 @@ class RedPandaLightClient implements RedPandaClient {
       try {
         replacement = await registerOutboundHandle(
           channelId: channelId,
-          excludeEndpoints: {?oldOh.serverEndpoint},
+          excludeEndpoints: _hostAddresses(oldOh.serverEndpoint),
         );
       } on RateLimitException {
         RpLog.info(
@@ -2947,8 +3050,14 @@ class RedPandaLightClient implements RedPandaClient {
 
     final returnHops = _hopSelector.selectHops(
       count: defaultHopCount,
-      excludeAddresses: {?ownOh.serverEndpoint, submitVia.address},
-      excludeNodeIds: {?submitVia.discoveredNodeId},
+      excludeAddresses: {
+        ..._hostAddresses(ownOh.serverEndpoint),
+        submitVia.address,
+      },
+      excludeNodeIds: {
+        ?submitVia.discoveredNodeId,
+        ?_hostNodeId(ownOh.serverEndpoint),
+      },
     );
     final now = nowThrottle.millisecondsSinceEpoch;
     final keys = await _rendezvous.lookupKeys(channelId, now);
@@ -3144,14 +3253,13 @@ class RedPandaLightClient implements RedPandaClient {
     // in the single-node emulator gate). Endpoints AND node ids already
     // hosting one of our OHs are excluded.
     final usedEndpoints = <String>{
-      for (final oh in own)
-        if (oh.serverEndpoint != null) oh.serverEndpoint!,
+      for (final oh in own) ..._hostAddresses(oh.serverEndpoint),
     };
     final usedNodeIds = <String>{
       for (final oh in own)
         if (oh.serverEndpoint != null &&
-            _peers[oh.serverEndpoint]?.discoveredNodeId != null)
-          _peers[oh.serverEndpoint]!.discoveredNodeId!,
+            _livePeerFor(oh.serverEndpoint!)?.discoveredNodeId != null)
+          _livePeerFor(oh.serverEndpoint!)!.discoveredNodeId!,
     };
     // Without a known node id for at least one existing OH host we cannot
     // prove a candidate is a DIFFERENT node — defer to a later cycle (node ids
@@ -4128,8 +4236,14 @@ class RedPandaLightClient implements RedPandaClient {
 
     final hops = _hopSelector.selectHops(
       count: defaultHopCount,
-      excludeAddresses: {submitVia.address, ?member.ohEndpoint},
-      excludeNodeIds: {?submitVia.discoveredNodeId},
+      excludeAddresses: {
+        submitVia.address,
+        ..._hostAddresses(member.ohEndpoint),
+      },
+      excludeNodeIds: {
+        ?submitVia.discoveredNodeId,
+        ?_hostNodeId(member.ohEndpoint),
+      },
     );
     if (hops.isNotEmpty) {
       if (payload.length > GarlicBuilder.maxPayloadLength(hops.length)) {
