@@ -151,7 +151,9 @@ void main() {
   /// finished chain, so under full-suite load I1 asserted before the third
   /// `ratchet:done` and went red (TD121). Waiting for the concrete count has
   /// no such window; the timeout is only the failure deadline. The exact
-  /// order assertions that follow still catch any surplus entry.
+  /// order assertions that follow catch a surplus entry logged up to the n-th
+  /// one, not one that would only arrive later — neither did the quiet window
+  /// beyond its 150 ms.
   Future<void> waitForLog(int entries) => waitFor(
     () => service.order.length >= entries,
     timeout: const Duration(seconds: 10),

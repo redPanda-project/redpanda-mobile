@@ -16,9 +16,10 @@ void main() {
     // name, not by number.
     final portPattern = RegExp(r'\b50\d{3}\b');
     final owners = <int, Set<String>>{};
-    final suites = Directory(
-      'test/e2e',
-    ).listSync().whereType<File>().where((f) => f.path.endsWith('_test.dart'));
+    final suites = Directory('test/e2e')
+        .listSync(recursive: true)
+        .whereType<File>()
+        .where((f) => f.path.endsWith('_test.dart'));
     for (final file in suites) {
       final name = file.uri.pathSegments.last;
       for (final match in portPattern.allMatches(file.readAsStringSync())) {

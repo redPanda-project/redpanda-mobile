@@ -100,16 +100,24 @@ void main() async {
     });
 
     tearDown(() async {
-      await alice.disconnect();
-      await bob.disconnect();
-      await Future.delayed(const Duration(seconds: 1));
-      for (final launcher in launchers) {
-        await launcher.stop();
+      // The nodes are stopped in `finally` (TD120): when setUp fails before
+      // the clients exist (a node did not come up), `alice` is unassigned and
+      // its disconnect throws. Without the `finally` the nodes already
+      // started stayed bound, and the @Retry attempt then died with
+      // `could not bound to port` on this suite's own ports.
+      try {
+        await alice.disconnect();
+        await bob.disconnect();
+        await Future.delayed(const Duration(seconds: 1));
+      } finally {
+        for (final launcher in launchers) {
+          await launcher.stop();
+        }
+        launchers.clear();
+        // deadRelay is normally stopped mid-test; stop again is a no-op safety.
+        await deadRelay?.stop();
+        deadRelay = null;
       }
-      launchers.clear();
-      // deadRelay is normally stopped mid-test; stop again is a no-op safety.
-      await deadRelay?.stop();
-      deadRelay = null;
     });
 
     /// Polls until Alice knows all FOUR relay candidates incl. their X25519
