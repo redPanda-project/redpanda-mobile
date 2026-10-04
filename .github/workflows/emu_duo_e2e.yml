@@ -93,7 +93,8 @@ jobs:
           "$SDKMANAGER" --install emulator platform-tools "system-images;android-35;google_apis;x86_64"
 
       # TD122: sdkmanager has no revision pin for system images — it always
-      # installs the latest one. So pin by assertion: a new image revision fails
+      # installs the latest one. Only the image is pinned; `emulator` and
+      # `platform-tools` still float (their revisions are logged below). So pin by assertion: a new image revision fails
       # here, with a clear message, instead of silently changing the gate
       # environment under an unrelated code change. Fail, not warn: the gate is
       # read as "code X is green"; a warning in a green run is not read, and a
@@ -105,6 +106,10 @@ jobs:
           EXPECTED_IMAGE_REVISION: '9'
         run: |
           PROPS="$ANDROID_HOME/system-images/android-35/google_apis/x86_64/source.properties"
+          [ -r "$PROPS" ] || { echo "::error::$PROPS not found — sdkmanager installed the image elsewhere?"; exit 1; }
+          for pkg in emulator platform-tools; do
+            echo "$pkg revision (not pinned): $(sed -n 's/^Pkg.Revision=//p' "$ANDROID_HOME/$pkg/source.properties" 2>/dev/null)"
+          done
           actual="$(sed -n 's/^Pkg.Revision=//p' "$PROPS" | tr -d '\r')"
           echo "system-images;android-35;google_apis;x86_64 revision: ${actual:-<none>} (pinned: $EXPECTED_IMAGE_REVISION)"
           if [ "$actual" != "$EXPECTED_IMAGE_REVISION" ]; then

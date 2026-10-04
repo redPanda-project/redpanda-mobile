@@ -2,6 +2,7 @@
 # Pre-push validation — mirrors .github/workflows/flutter_ci.yml step by step.
 #
 # Usage:  tool/pre_push_validation.sh [--with-e2e] [--skip-tests]
+#         tool/pre_push_validation.sh --pins-only
 #
 #   --with-e2e    also run the node-backed E2E suites (CI ALWAYS runs them;
 #                 locally they are opt-in because they take ~20 min and need
@@ -51,6 +52,11 @@ for arg in "$@"; do
 done
 if [ "$WITH_E2E" -eq 1 ] && [ "$SKIP_TESTS" -eq 1 ]; then
   fail_usage "--with-e2e and --skip-tests contradict each other"
+fi
+# --pins-only stops after the pin check; combined with another flag its OK
+# would read as if that flag's work had run.
+if [ "$PINS_ONLY" -eq 1 ] && { [ "$WITH_E2E" -eq 1 ] || [ "$SKIP_TESTS" -eq 1 ]; }; then
+  fail_usage "--pins-only cannot be combined with --with-e2e or --skip-tests"
 fi
 
 # Resolve symlinks without `readlink -f` (absent on macOS/BSD).
