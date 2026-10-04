@@ -1,3 +1,4 @@
+// T145 negative control: simulated drift, will be reverted
 syntax = "proto3";
 
 package im.redpanda.proto;
