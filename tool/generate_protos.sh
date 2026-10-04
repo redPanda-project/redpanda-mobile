@@ -23,8 +23,10 @@
 #
 # Requirements:
 #   * protoc — on PATH, or $PROTOC, or ~/tools/protoc/bin/protoc.
-#     These are proto3 schemas, so protoc >= 3.0 is required; any current
-#     release (the 3.x line or the later 21+ versioning, e.g. 25.1) works.
+#     protoc >= 3.15 is required: protos/client/reverse_garlic_block.proto
+#     uses proto3 `optional` (rejected before 3.12, behind an experimental
+#     flag until 3.15). Any later release (the 21+ versioning, e.g. 25.1)
+#     works; the script checks this before generating.
 #   * protoc_plugin — already a dev_dependency of the package, invoked through
 #     `dart run protoc_plugin`, so its version is pinned by pubspec.lock.
 #   * flutter/dart on PATH (local toolchain: export PATH=~/tools/flutter/bin:$PATH)
@@ -68,6 +70,15 @@ if [ -z "$PROTOC" ]; then
   else
     die "protoc not found — install it or set \$PROTOC"
   fi
+fi
+# proto3 `optional` (protos/client/) needs protoc >= 3.15; the 21+ releases
+# dropped the leading "3." from the version.
+PROTOC_VER="$("$PROTOC" --version | awk '{print $2}')"
+PROTOC_MAJOR="${PROTOC_VER%%.*}"
+PROTOC_MINOR="$(echo "$PROTOC_VER" | cut -d. -f2)"
+if ! [[ "$PROTOC_MAJOR" =~ ^[0-9]+$ && "$PROTOC_MINOR" =~ ^[0-9]+$ ]] \
+   || { [ "$PROTOC_MAJOR" -lt 21 ] && { [ "$PROTOC_MAJOR" -lt 3 ] || { [ "$PROTOC_MAJOR" -eq 3 ] && [ "$PROTOC_MINOR" -lt 15 ]; }; }; }; then
+  die "protoc >= 3.15 required (proto3 optional), found '$("$PROTOC" --version)'"
 fi
 command -v dart >/dev/null 2>&1 || die "dart not on PATH (export PATH=~/tools/flutter/bin:\$PATH)"
 
