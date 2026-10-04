@@ -39,10 +39,12 @@ final RegExp _cmdLooseDeclaration = RegExp(
 );
 
 /// Call sites that must name their command byte instead of using a literal
-/// (TD091): `sendCommand(142, …)`, `command == 158`, `_pendingResponses[153]`.
+/// (TD091): `sendCommand(142, …)`, `command == 158`, `_pendingResponses[153]`
+/// and the command byte of a signed request (`signingBuffer.addByte(159)`).
+/// A literal is any decimal or hex number, e.g. `0xA0`.
 final RegExp _bareCommandLiteral = RegExp(
-  r'sendCommand\(\s*(?:0x)?\d|command\s*==\s*(?:0x)?\d'
-  r'|_pendingResponses(?:\[|\.remove\()\s*(?:0x)?\d',
+  r'(?:sendCommand\(|command\s*==|_pendingResponses(?:\[|\.remove\()'
+  r'|signingBuffer\.addByte\()\s*(?:0x[0-9A-Fa-f]|\d)',
 );
 
 /// A registry table row: `| `NAME` | 142 | `0x8E` |`.
