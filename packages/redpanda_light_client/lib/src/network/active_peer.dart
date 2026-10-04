@@ -46,7 +46,23 @@ class ActivePeer {
   /// 20 s is deliberately looser than the node's 10 s: the node should be the
   /// one to end a handshake it cannot finish, and this is the backstop for when
   /// it does not.
+  ///
+  /// The deadline covers the whole handshake including the key exchange: it
+  /// only stops once transport encryption is active (TD274). A peer that is
+  /// verified but stuck before its codec cannot carry commands, so it must not
+  /// hold its slot forever either.
   static const Duration handshakeTimeout = Duration(seconds: 20);
+
+  /// TEST SEAM (T156) — never set in production code.
+  ///
+  /// Unit suites drive the wire exchange in plaintext over a scripted socket
+  /// and never complete the key exchange. With this flag the handshake ends at
+  /// the magic again (as before T156): the peer counts as connected and
+  /// [canSendCommands] right after it, and the handshake deadline stops there.
+  /// A real node drops every plaintext command, so this must stay `false`
+  /// outside tests. Each test file runs in its own isolate, so setting it in
+  /// one suite does not leak into another.
+  static bool plaintextTransportForTesting = false;
 
   // Commands
   static const int _cmdRequestPublicKey = 1;
@@ -128,6 +144,20 @@ class ActivePeer {
   Stopwatch? _pingStopwatch;
 
   bool get isEncryptionActive => _codec != null;
+
+  /// Whether payload commands ([sendCommand]) may be sent over this peer:
+  /// connected AND transport encryption active (T156/TD273).
+  ///
+  /// [isHandshakeVerified] flips at the plaintext magic, before the key
+  /// exchange has produced the codec. A command written in that window goes
+  /// out in plaintext; the node reads its first bytes as a GCM frame length
+  /// (e.g. 0x96… for REGISTER_OH) and drops the connection. Every caller that
+  /// picks a peer to send a command over must gate on this, not on
+  /// [isHandshakeVerified]. (A real node also requires the first encrypted
+  /// command to be the PING sent from the key-exchange finalization, which
+  /// is queued before this flips.)
+  bool get canSendCommands =>
+      _handshakeVerified && (_codec != null || plaintextTransportForTesting);
   bool get isPongSent => _pongSent;
   bool get isHandshakeVerified => _handshakeVerified;
   bool get isDisconnected => _socket == null && _isDisconnecting;
@@ -141,8 +171,8 @@ class ActivePeer {
   bool _pongSent = false;
   bool _isProcessingBuffer = false;
 
-  /// Armed on a successful dial, cancelled by [_processHandshake] and
-  /// [_shutdown]. See [handshakeTimeout].
+  /// Armed on a successful dial, cancelled once encryption is active
+  /// ([_finalizeEncryption]) and by [_shutdown]. See [handshakeTimeout].
   Timer? _handshakeTimer;
 
   ActivePeer({
@@ -152,12 +182,16 @@ class ActivePeer {
     required this.socketFactory,
     required this.onStatusChange,
     required this.onDisconnect,
+    Duration? handshakeDeadline,
     this.onPeersReceived,
     this.onPeerListRequested,
     this.onLatencyUpdate,
     this.onHandshakeComplete,
     this.onNodeIdDiscovered,
-  });
+  }) : _handshakeDeadline = handshakeDeadline ?? handshakeTimeout;
+
+  /// [handshakeTimeout] unless overridden (tests only).
+  final Duration _handshakeDeadline;
 
   Future<void> connect() async {
     try {
@@ -172,11 +206,12 @@ class ActivePeer {
       // Armed before the handshake goes out: from here on the peer occupies a
       // slot in RedPandaLightClient._peers, and nothing else would ever give it
       // back if the node stays silent (see [handshakeTimeout]).
-      _handshakeTimer = Timer(handshakeTimeout, () {
-        if (_handshakeVerified || _isDisconnecting) return;
+      _handshakeTimer = Timer(_handshakeDeadline, () {
+        if (_codec != null || _isDisconnecting) return;
         RpLog.info(
-          'ActivePeer: no handshake from the node within '
-          '${handshakeTimeout.inSeconds}s — dropping the connection',
+          'ActivePeer($address): handshake/key exchange not complete within '
+          '${_handshakeDeadline.inSeconds}s '
+          '(verified=$_handshakeVerified) — dropping the connection',
         );
         _shutdown();
       });
@@ -276,7 +311,12 @@ class ActivePeer {
 
     try {
       while (true) {
-        if (_buffer.isEmpty) break;
+        // A shut-down peer parses nothing more. Without this, bytes still
+        // queued on the rx chain at shutdown (>= 30 of them) went back
+        // through the magic check — `_handshakeVerified` is reset by
+        // [_shutdown] — whose failure path consumes nothing: a busy loop
+        // that froze the isolate (found by the T156 shutdown test).
+        if (_buffer.isEmpty || _isDisconnecting) break;
 
         if (!_handshakeVerified) {
           if (_buffer.length >= _handshakeLength) {
@@ -439,11 +479,12 @@ class ActivePeer {
     }
 
     RpLog.debug('ActivePeer($address): Handshake Verified.');
-    _handshakeTimer?.cancel();
-    _handshakeTimer = null;
     _handshakeVerified = true;
-    onStatusChange(ConnectionStatus.connected); // Notify manager
-    onHandshakeComplete?.call();
+    if (plaintextTransportForTesting) _reportConnected();
+    // Otherwise the handshake timer keeps running and "connected" is only
+    // reported once encryption is active (see [_finalizeEncryption]): the
+    // client's connect edge immediately sends payload commands (subscribe,
+    // catch-up poll), which must not go out before the codec exists (T156).
 
     _buffer.removeRange(0, _handshakeLength);
 
@@ -538,11 +579,16 @@ class ActivePeer {
         _ephemeralFromUs!.privateKey,
         ephemeralFromThem,
       );
-      _codec = await GcmFramedCodec.deriveForInitiator(
+      final codec = await GcmFramedCodec.deriveForInitiator(
         sharedSecret: shared,
         ourVerifyKey: selfKeys.verifyKeyBytes,
         theirVerifyKey: _peerPublicExport!.sublist(0, 32),
       );
+      // Shut down while the key exchange was in flight (node closed, timer,
+      // rotation, client disconnect): "disconnected" was already reported —
+      // a late "connected" would wedge the client's aggregate status (T156).
+      if (_isDisconnecting) return;
+      _codec = codec;
 
       RpLog.debug('ActivePeer($address): Encryption Active!');
       // The server requires the first encrypted client command to be PING.
@@ -552,6 +598,11 @@ class ActivePeer {
       // Auto-bootstrap: Request Peer List
       RpLog.debug('ActivePeer($address): Requesting Peer List (Encrypted)...');
       requestPeerList();
+
+      // Handshake complete: stop the deadline (TD274) and report the peer as
+      // connected. Only now may payload commands be sent ([canSendCommands]);
+      // the PING above is already queued first on the tx chain.
+      _reportConnected();
 
       if (_buffer.isNotEmpty) {
         // Bytes after ACTIVATE_ENCRYPTION in the same segment are already
@@ -569,6 +620,19 @@ class ActivePeer {
     }
   }
 
+  bool _connectedReported = false;
+
+  /// Ends the handshake: stops the deadline (TD274), scores the peer as a
+  /// success and reports "connected" — once per connection.
+  void _reportConnected() {
+    _handshakeTimer?.cancel();
+    _handshakeTimer = null;
+    if (_connectedReported || _isDisconnecting) return;
+    _connectedReported = true;
+    onHandshakeComplete?.call();
+    onStatusChange(ConnectionStatus.connected);
+  }
+
   void _sendPong() {
     RpLog.debug('ActivePeer($address): Sending pong...');
     _sendData([_cmdPong]);
@@ -583,9 +647,9 @@ class ActivePeer {
   /// A PING written in that window would go out in plaintext; the node reads
   /// it as the first GCM frame (`invalid GCM frame length: 83886080` =
   /// 0x05000000) and drops the connection (T153). Guarding here rather than
-  /// in the connection check covers every caller of the latency ping. (Other
-  /// senders such as [sendCommand] are not guarded by this.) The codec is
-  /// checked at call time: once it is set, [_sendData] encrypts everything
+  /// in the connection check covers every caller of the latency ping.
+  /// [sendCommand] callers gate on [canSendCommands] instead (T156). The codec
+  /// is checked at call time: once it is set, [_sendData] encrypts everything
   /// queued after it.
   void ping() {
     if (_codec == null) return; // Encryption not active yet (T153)
@@ -636,6 +700,11 @@ class ActivePeer {
   }
 
   /// Sends a command with [CMD][4 length big-endian][protobuf bytes].
+  ///
+  /// Callers must only pick peers with [canSendCommands] (T156). There is no
+  /// pre-encryption queue here: deferring or dropping writes on a live peer
+  /// would desync the client's FIFO response matching. (A write to a peer
+  /// that has meanwhile shut down is still lost, as before.)
   void sendCommand(int command, Uint8List protobufBytes) {
     final buffer = BytesBuilder();
     buffer.addByte(command);

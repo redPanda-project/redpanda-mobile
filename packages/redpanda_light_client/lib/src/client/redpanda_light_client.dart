@@ -366,10 +366,8 @@ class RedPandaLightClient implements RedPandaClient {
       seededStream(() => [_currentStatus], _connectionStatusController.stream);
 
   @override
-  Stream<int> get peerCountStream => seededStream(
-    () => [_peers.values.where((p) => p.isHandshakeVerified).length],
-    _peerCountController.stream,
-  );
+  Stream<int> get peerCountStream =>
+      seededStream(() => [_sendablePeers.length], _peerCountController.stream);
 
   /// PROVISIONAL: Stream of currently connected peer addresses.
   Stream<List<String>> get activePeersStream => seededStream(
@@ -384,20 +382,21 @@ class RedPandaLightClient implements RedPandaClient {
     _peerCountController.stream.map((_) => _verifiedAddresses(false)),
   );
 
+  // "Active" = can carry commands (encryption up, T156), matching the
+  // aggregate status: ActivePeer reports "connected" only at that point.
   List<String> _verifiedAddresses(bool verified) => _peers.values
-      .where((p) => p.isHandshakeVerified == verified)
+      .where((p) => p.canSendCommands == verified)
       .map((p) => p.address)
       .toList();
 
-  /// Currently active (handshake-verified) peer addresses.
-  Set<String> get activePeerAddresses => _peers.values
-      .where((p) => p.isHandshakeVerified)
-      .map((p) => p.address)
-      .toSet();
+  /// Currently active peer addresses: handshake done AND transport
+  /// encryption active ([ActivePeer.canSendCommands], T156).
+  Set<String> get activePeerAddresses =>
+      _sendablePeers.map((p) => p.address).toSet();
 
-  /// Currently connecting (not yet verified) peer addresses.
+  /// Currently connecting (handshake or key exchange pending) addresses.
   Set<String> get connectingPeerAddresses => _peers.values
-      .where((p) => !p.isHandshakeVerified && !p.isDisconnected)
+      .where((p) => !p.canSendCommands && !p.isDisconnected)
       .map((p) => p.address)
       .toSet();
 
@@ -415,9 +414,7 @@ class RedPandaLightClient implements RedPandaClient {
 
   void _updateStatus(ConnectionStatus status) {
     // Recalculate connected peers
-    int connectedCount = _peers.values
-        .where((p) => p.isHandshakeVerified)
-        .length;
+    int connectedCount = _sendablePeers.length;
     _peerCountController.add(connectedCount);
 
     // Simple aggregation: If ANY connected -> Connected.
@@ -427,6 +424,9 @@ class RedPandaLightClient implements RedPandaClient {
     // If incoming is disconnected -> Check if others are connected.
 
     if (status == ConnectionStatus.connected) {
+      // Defence in depth (T156): a late "connected" from a peer that already
+      // shut down must not flip the aggregate status with nothing sendable.
+      if (_sendablePeers.isEmpty) return;
       if (_currentStatus != ConnectionStatus.connected) {
         _currentStatus = ConnectionStatus.connected;
         _connectionStatusController.add(ConnectionStatus.connected);
@@ -439,7 +439,7 @@ class RedPandaLightClient implements RedPandaClient {
         // Let's modify ActivePeer to pass itself or address?
         // Or cleaner: Iterate peers and clear for connected ones.
         for (final entry in _peers.entries) {
-          if (entry.value.isHandshakeVerified) {
+          if (entry.value.canSendCommands) {
             _nextRetryTime.remove(entry.key);
             _retryCounts.remove(entry.key);
           }
@@ -464,7 +464,11 @@ class RedPandaLightClient implements RedPandaClient {
       }
     } else {
       // Check if any peer is connected
-      bool anyConnected = _peers.values.any((p) => p.isHandshakeVerified);
+      // Same predicate as the connect edge (ActivePeer reports "connected"
+      // only once encryption is active, T156): a peer still in its key
+      // exchange must not keep the client "connected", or its later connect
+      // would not re-run the edge (subscribe, catch-up poll).
+      bool anyConnected = _sendablePeers.isNotEmpty;
       if (!anyConnected && _currentStatus != ConnectionStatus.disconnected) {
         _currentStatus = ConnectionStatus.disconnected;
         _connectionStatusController.add(ConnectionStatus.disconnected);
@@ -569,7 +573,7 @@ class RedPandaLightClient implements RedPandaClient {
         return true;
       }
       // Also ping active peers periodically
-      if (peer.isHandshakeVerified) {
+      if (peer.canSendCommands) {
         // If hasn't pinged in 10s, ping
         // We can do this based on timer or here
         peer.ping();
@@ -1745,9 +1749,7 @@ class RedPandaLightClient implements RedPandaClient {
     // Send to a connected peer (best available). The node routes garlic
     // packets toward their first hop / deposits direct puts locally or
     // forwards them (MS02b), so any connected Full Node works.
-    final activePeer = _peers.values
-        .where((p) => p.isHandshakeVerified)
-        .firstOrNull;
+    final activePeer = _sendablePeers.firstOrNull;
 
     if (activePeer == null) {
       // No connected Full Node — the retry queue will try again later.
@@ -1846,9 +1848,7 @@ class RedPandaLightClient implements RedPandaClient {
     if (encKey == null) {
       return const LoopbackResult.failed('channel keys not registered');
     }
-    final activePeer = _peers.values
-        .where((p) => p.isHandshakeVerified)
-        .firstOrNull;
+    final activePeer = _sendablePeers.firstOrNull;
     if (activePeer == null) {
       return const LoopbackResult.failed('not connected to any node');
     }
@@ -1975,9 +1975,7 @@ class RedPandaLightClient implements RedPandaClient {
     final ownOhs = _registeredOHs
         .where((oh) => oh.channelId == channelId)
         .toList(growable: false);
-    final verifiedCount = _peers.values
-        .where((p) => p.isHandshakeVerified)
-        .length;
+    final verifiedCount = _sendablePeers.length;
     if (ownOhs.isEmpty) {
       stages.add(
         verifiedCount > 0
@@ -2018,7 +2016,7 @@ class RedPandaLightClient implements RedPandaClient {
           ..start();
         if (endpoint != null) {
           final hostPeer = _livePeerFor(endpoint);
-          if (hostPeer != null && hostPeer.isHandshakeVerified) {
+          if (hostPeer != null && hostPeer.canSendCommands) {
             stages.add(
               _stage(
                 'Host node reachable$suffix',
@@ -2649,10 +2647,8 @@ class RedPandaLightClient implements RedPandaClient {
 
     // Send to best active peer. A failover registration (T21) excludes the
     // dead host so the replacement mailbox lands on a different node.
-    final activePeer = _peers.values
-        .where(
-          (p) => p.isHandshakeVerified && !excludeEndpoints.contains(p.address),
-        )
+    final activePeer = _sendablePeers
+        .where((p) => !excludeEndpoints.contains(p.address))
         .firstOrNull;
 
     var expiresAtMs = expiresAt.millisecondsSinceEpoch;
@@ -2772,6 +2768,19 @@ class RedPandaLightClient implements RedPandaClient {
       ..signature = signature;
   }
 
+  /// Peers that may carry payload commands: connected with transport
+  /// encryption active ([ActivePeer.canSendCommands], T156/TD273).
+  ///
+  /// EVERY peer selection that ends in [ActivePeer.sendCommand] goes through
+  /// this (or checks [ActivePeer.canSendCommands] on a specific peer).
+  /// The peer counts and connection status use it too. Only connection
+  /// management (backoff, rotation) and diagnostics use
+  /// [ActivePeer.isHandshakeVerified] — it flips at the plaintext magic,
+  /// before the codec exists, and a command sent then is plaintext the node
+  /// drops the connection over.
+  Iterable<ActivePeer> get _sendablePeers =>
+      _peers.values.where((p) => p.canSendCommands);
+
   /// The connected peer hosting [oh]'s mailbox.
   ///
   /// OH state (mailbox, cursor, expiry) lives ONLY on the node the handle
@@ -2781,13 +2790,12 @@ class RedPandaLightClient implements RedPandaClient {
   /// When the host is currently not connected, a connection attempt is
   /// kicked off and null is returned — the caller skips this cycle and the
   /// next one reaches the host. Registrations without a recorded endpoint
-  /// (never talked to a node) fall back to the first verified peer.
+  /// (never talked to a node) fall back to the first sendable peer.
   ActivePeer? _peerForHandle(OHRegistration oh, String what) {
     final endpoint = oh.serverEndpoint;
-    final verified = _peers.values.where((p) => p.isHandshakeVerified);
-    if (endpoint == null) return verified.firstOrNull;
+    if (endpoint == null) return _sendablePeers.firstOrNull;
     final candidate = _livePeerFor(endpoint);
-    final host = candidate != null && candidate.isHandshakeVerified
+    final host = candidate != null && candidate.canSendCommands
         ? candidate
         : null;
     if (host == null) {
@@ -2852,8 +2860,8 @@ class RedPandaLightClient implements RedPandaClient {
   /// the mailbox would not help anyone.
   void _noteHostUnreachable(OHRegistration oh) {
     final hostAddresses = _hostAddresses(oh.serverEndpoint);
-    final hasAlternative = _peers.values.any(
-      (p) => p.isHandshakeVerified && !hostAddresses.contains(p.address),
+    final hasAlternative = _sendablePeers.any(
+      (p) => !hostAddresses.contains(p.address),
     );
     if (!hasAlternative) return;
     final key = _hexEncode(oh.ohId);
@@ -2996,9 +3004,7 @@ class RedPandaLightClient implements RedPandaClient {
   /// never sees the query interest). Best-effort, no response.
   Future<void> _publishRendezvous(String channelId) async {
     try {
-      final submitVia = _peers.values
-          .where((p) => p.isHandshakeVerified)
-          .firstOrNull;
+      final submitVia = _sendablePeers.firstOrNull;
       if (submitVia == null) return;
       // Select hops BEFORE building the record so the per-poll-cycle retry does
       // no signing/AEAD work while no relay path exists (e.g. a single-node
@@ -3048,9 +3054,7 @@ class RedPandaLightClient implements RedPandaClient {
         nowThrottle.difference(lastAttempt) < _recoveryMinInterval) {
       return;
     }
-    final submitVia = _peers.values
-        .where((p) => p.isHandshakeVerified)
-        .firstOrNull;
+    final submitVia = _sendablePeers.firstOrNull;
     if (submitVia == null) return;
     final ownOh = _registeredOHs
         .where((oh) => oh.channelId == channelId && oh.serverEndpoint != null)
@@ -3293,9 +3297,8 @@ class RedPandaLightClient implements RedPandaClient {
       // A disjoint node must be verified, on a new address AND expose a new,
       // KNOWN node id. When none exists (e.g. the single-node gate) redundancy
       // gracefully degrades to the single reachable mailbox.
-      final hasDisjoint = _peers.values.any(
+      final hasDisjoint = _sendablePeers.any(
         (p) =>
-            p.isHandshakeVerified &&
             !usedEndpoints.contains(p.address) &&
             p.discoveredNodeId != null &&
             !usedNodeIds.contains(p.discoveredNodeId),
@@ -3365,9 +3368,7 @@ class RedPandaLightClient implements RedPandaClient {
       _pendingOhUpdates.remove(channelId);
       return;
     }
-    final activePeer = _peers.values
-        .where((p) => p.isHandshakeVerified)
-        .firstOrNull;
+    final activePeer = _sendablePeers.firstOrNull;
     if (activePeer == null) return; // retry on the next poll cycle
 
     final message = ChannelMessage(
@@ -4030,9 +4031,7 @@ class RedPandaLightClient implements RedPandaClient {
         counterpartOhId.length != GarlicHop.nodeIdLength) {
       return;
     }
-    final activePeer = _peers.values
-        .where((p) => p.isHandshakeVerified)
-        .firstOrNull;
+    final activePeer = _sendablePeers.firstOrNull;
     if (activePeer == null) {
       RpLog.info(
         'RedPandaLightClient: no active peer to send a channel ack over',
@@ -4211,9 +4210,7 @@ class RedPandaLightClient implements RedPandaClient {
     Uint8List payload, {
     String? messageIdHex,
   }) async {
-    final activePeer = _peers.values
-        .where((p) => p.isHandshakeVerified)
-        .firstOrNull;
+    final activePeer = _sendablePeers.firstOrNull;
     if (activePeer == null) {
       throw StateError('group fan-out: no active peer available');
     }
@@ -4409,9 +4406,7 @@ class RedPandaLightClient implements RedPandaClient {
   /// via [retryPendingRotations]; the app also retries periodically).
   Future<void> _deliverPendingRotations(_GroupState group) async {
     if (group.pendingRotations.isEmpty) return;
-    final activePeer = _peers.values
-        .where((p) => p.isHandshakeVerified)
-        .firstOrNull;
+    final activePeer = _sendablePeers.firstOrNull;
     if (activePeer == null) {
       throw GroupSendException(
         group.pendingRotations.keys.toList(),
@@ -4481,9 +4476,7 @@ class RedPandaLightClient implements RedPandaClient {
         'sendGroupHandshake: channel $channelId has no counterpart OH',
       );
     }
-    final activePeer = _peers.values
-        .where((p) => p.isHandshakeVerified)
-        .firstOrNull;
+    final activePeer = _sendablePeers.firstOrNull;
     if (activePeer == null) {
       throw StateError('sendGroupHandshake: no active peer available');
     }
@@ -5003,7 +4996,7 @@ class RedPandaLightClient implements RedPandaClient {
       // right away instead of waiting a full idle interval. Not yet
       // connected: the connect edge in _updateStatus pulls the first poll
       // forward once the connection is up.
-      final connected = _peers.values.any((p) => p.isHandshakeVerified);
+      final connected = _sendablePeers.isNotEmpty;
       _schedulePoll(connected ? const Duration(seconds: 2) : _pollInterval);
     }
     _renewalTimer ??= Timer.periodic(renewalCheckInterval, (_) {

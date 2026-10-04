@@ -8,6 +8,7 @@ import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/generated/outbound.pb.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
+import 'package:redpanda_light_client/src/network/active_peer.dart';
 
 /// T26 resume catch-up: after [RedPandaLightClient.onResume] the next
 /// mailbox poll happens within ~1 s instead of waiting for the regular
@@ -135,6 +136,11 @@ Future<void> pumpUntil(
 }
 
 void main() {
+  // Plaintext scripted-socket suite: the key exchange never completes, so
+  // let commands flow right after the magic (T156 test seam).
+  setUpAll(() => ActivePeer.plaintextTransportForTesting = true);
+  tearDownAll(() => ActivePeer.plaintextTransportForTesting = false);
+
   test('onResume pulls the next mailbox poll forward to ~1 s', () async {
     final socket = ScriptedSocket();
     final keys = await KeyPair.generate();

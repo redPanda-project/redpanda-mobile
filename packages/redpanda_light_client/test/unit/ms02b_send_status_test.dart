@@ -158,6 +158,11 @@ Future<(RedPandaLightClient, ScriptedSocket)> connectedClient({
 }
 
 void main() {
+  // Plaintext scripted-socket suite: the key exchange never completes, so
+  // let commands flow right after the magic (T156 test seam).
+  setUpAll(() => ActivePeer.plaintextTransportForTesting = true);
+  tearDownAll(() => ActivePeer.plaintextTransportForTesting = false);
+
   group('MS02b protobuf: FlaschenpostPut want_response / hop_count', () {
     test('roundtrips fields 3 and 4 and stays wire-compatible', () {
       final put = FlaschenpostPut()

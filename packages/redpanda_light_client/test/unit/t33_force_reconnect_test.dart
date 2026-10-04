@@ -11,6 +11,7 @@ import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/generated/outbound.pb.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
+import 'package:redpanda_light_client/src/network/active_peer.dart';
 
 /// T33 force-reconnect unit tests: consecutive fetch timeouts on the same
 /// connection are the signature of a half-open socket — the client must tear
@@ -175,6 +176,11 @@ Future<OHRegistration> hostRegistration() async {
 }
 
 void main() {
+  // Plaintext scripted-socket suite: the key exchange never completes, so
+  // let commands flow right after the magic (T156 test seam).
+  setUpAll(() => ActivePeer.plaintextTransportForTesting = true);
+  tearDownAll(() => ActivePeer.plaintextTransportForTesting = false);
+
   late List<ScriptedSocket> sockets;
   late RedPandaLightClient client;
 

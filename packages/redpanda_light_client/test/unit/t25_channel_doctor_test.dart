@@ -13,6 +13,7 @@ import 'package:redpanda_light_client/src/generated/outbound.pb.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
 import 'package:redpanda_light_client/src/peer_repository.dart';
+import 'package:redpanda_light_client/src/network/active_peer.dart';
 
 import '../helpers/garlic_test_utils.dart';
 
@@ -223,6 +224,11 @@ DoctorStage stageNamed(ChannelDoctorReport report, String name) =>
     report.stages.firstWhere((s) => s.name == name);
 
 void main() {
+  // Plaintext scripted-socket suite: the key exchange never completes, so
+  // let commands flow right after the magic (T156 test seam).
+  setUpAll(() => ActivePeer.plaintextTransportForTesting = true);
+  tearDownAll(() => ActivePeer.plaintextTransportForTesting = false);
+
   group('T25 runChannelDoctor', () {
     test('healthy channel: all six stages are green', () async {
       final (client, socket, relays) = await connectedClient();

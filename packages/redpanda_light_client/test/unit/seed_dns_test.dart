@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:test/test.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
+import 'package:redpanda_light_client/src/network/active_peer.dart';
 
 import '../helpers/wait_for.dart';
 
@@ -105,6 +106,11 @@ class _HandshakingSocket implements Socket {
 /// None of them calls `connect()`: without its 3 s timer, the constructor's
 /// check and explicit `addPeer` calls are the only connection checks.
 void main() {
+  // Plaintext scripted-socket suite: the key exchange never completes, so
+  // let commands flow right after the magic (T156 test seam).
+  setUpAll(() => ActivePeer.plaintextTransportForTesting = true);
+  tearDownAll(() => ActivePeer.plaintextTransportForTesting = false);
+
   const hostSeed = 'seed2.test:59558';
   const ipSeed = '5.75.137.166:59558';
   final seed2Ip = [InternetAddress('5.75.137.166')];
