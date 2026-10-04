@@ -1360,7 +1360,11 @@ class RedPandaLightClient implements RedPandaClient {
   /// The partner's currently known mailbox ids for [channelId], primary
   /// first (read-only view, for tests and diagnostics — mirrors
   /// [registeredOutboundHandles] for the own side).
-  List<List<int>> counterpartMailboxIds(String channelId) => [
+  ///
+  /// T143 (TD153): named with the `Oh` morpheme like every other
+  /// `counterpartOh*` member; these two accessors were the last
+  /// `counterpartMailbox*` spellings for the same concept.
+  List<List<int>> counterpartOhIds(String channelId) => [
     for (final oh
         in _channelCounterpartOhSet[channelId] ?? const <_CounterpartOh>[])
       List.unmodifiable(oh.ohId),
@@ -1368,7 +1372,7 @@ class RedPandaLightClient implements RedPandaClient {
 
   /// host:port of the node hosting the partner's PRIMARY mailbox, if known
   /// (read-only view, for tests and diagnostics).
-  String? counterpartMailboxEndpoint(String channelId) =>
+  String? counterpartOhEndpoint(String channelId) =>
       _channelCounterpartOhEndpoints[channelId];
 
   /// T42: the FULL set of the partner's known OH mailboxes per channel.
