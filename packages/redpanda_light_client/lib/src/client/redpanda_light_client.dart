@@ -881,6 +881,13 @@ class RedPandaLightClient implements RedPandaClient {
     return exact;
   }
 
+  /// [endpoint] plus the address of the live peer serving it under another
+  /// name (see [_livePeerFor]) — for excluding an OH's host node by address.
+  Set<String> _hostAddresses(String? endpoint) => {
+    ?endpoint,
+    if (endpoint != null) ?_livePeerFor(endpoint)?.address,
+  };
+
   /// `{ip:port}` for an IP-literal [address], null for a host name or a
   /// malformed address.
   static Set<String>? _literalEndpoint(String address) {
@@ -2802,8 +2809,9 @@ class RedPandaLightClient implements RedPandaClient {
   /// otherwise this is a local outage (airplane mode, no WiFi) and moving
   /// the mailbox would not help anyone.
   void _noteHostUnreachable(OHRegistration oh) {
+    final hostAddresses = _hostAddresses(oh.serverEndpoint);
     final hasAlternative = _peers.values.any(
-      (p) => p.isHandshakeVerified && p.address != oh.serverEndpoint,
+      (p) => p.isHandshakeVerified && !hostAddresses.contains(p.address),
     );
     if (!hasAlternative) return;
     final key = _hexEncode(oh.ohId);
@@ -2853,7 +2861,7 @@ class RedPandaLightClient implements RedPandaClient {
       try {
         replacement = await registerOutboundHandle(
           channelId: channelId,
-          excludeEndpoints: {?oldOh.serverEndpoint},
+          excludeEndpoints: _hostAddresses(oldOh.serverEndpoint),
         );
       } on RateLimitException {
         RpLog.info(
@@ -3219,8 +3227,7 @@ class RedPandaLightClient implements RedPandaClient {
     // in the single-node emulator gate). Endpoints AND node ids already
     // hosting one of our OHs are excluded.
     final usedEndpoints = <String>{
-      for (final oh in own)
-        if (oh.serverEndpoint != null) oh.serverEndpoint!,
+      for (final oh in own) ..._hostAddresses(oh.serverEndpoint),
     };
     final usedNodeIds = <String>{
       for (final oh in own)
