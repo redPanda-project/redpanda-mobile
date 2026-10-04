@@ -1361,8 +1361,9 @@ class RedPandaLightClient implements RedPandaClient {
   /// first (read-only view, for tests and diagnostics — mirrors
   /// [registeredOutboundHandles] for the own side).
   ///
-  /// T143 (TD153): named with the `Oh` morpheme like every other
-  /// `counterpartOh*` member; these two accessors were the last
+  /// T143 (TD153): named with the `Oh` morpheme used by the
+  /// `counterpartOh*` parameters of [addChannelKeys] and the
+  /// `_channelCounterpartOh*` state; these two accessors were the last
   /// `counterpartMailbox*` spellings for the same concept.
   List<List<int>> counterpartOhIds(String channelId) => [
     for (final oh
