@@ -710,6 +710,80 @@ void main() {
         expect(client.sentMessages, isEmpty);
       });
 
+      test('a pending row and a row left sent both go out exactly once in the '
+          'first pass', () async {
+        final stuck = await insertSent(messageId: 'net-s');
+        final fresh = await insertPending(messageId: 'net-p');
+
+        outbox.start();
+        await pumpEventQueue();
+        await outbox.settled;
+
+        expect(
+          client.sentMessages.map((m) => m.messageId),
+          unorderedEquals(['net-s', 'net-p']),
+        );
+        expect((await messageById(stuck)).status, MessageStatus.sent);
+        expect((await messageById(fresh)).status, MessageStatus.sent);
+      });
+
+      test('stop() then start() does not recover again', () async {
+        outbox.start();
+        await pumpEventQueue();
+        await outbox.settled;
+        outbox.stop();
+        final id = await insertSent(messageId: 'net-4');
+
+        outbox.start();
+        await pumpEventQueue();
+        await outbox.settled;
+
+        expect((await messageById(id)).status, MessageStatus.sent);
+        expect(client.sentMessages, isEmpty);
+      });
+
+      test('start() after a pass already ran does not re-queue what that pass '
+          'sent', () async {
+        final id = await insertPending(messageId: 'net-5');
+        await outbox.runPass();
+        expect((await messageById(id)).status, MessageStatus.sent);
+
+        outbox.start();
+        await pumpEventQueue();
+        await outbox.settled;
+
+        expect(client.sentMessages.map((m) => m.messageId), ['net-5']);
+        expect((await messageById(id)).status, MessageStatus.sent);
+      });
+
+      test(
+        'a failing recovery sends nothing and is retried by the next pass',
+        () async {
+          final flaky = _FlakyRecoveryRepository(db);
+          final local = OutboxService(flaky, client, GroupRepository(db));
+          final stuck = await insertSent(messageId: 'net-s');
+          final fresh = await insertPending(messageId: 'net-p');
+
+          local.start();
+          await pumpEventQueue();
+          await expectLater(local.settled, throwsStateError);
+
+          // Nothing went out: a row sent now would be re-queued by the retry.
+          expect(client.sentMessages, isEmpty);
+
+          await local.runPass(ignoreBackoff: true);
+
+          expect(flaky.calls, 2);
+          expect(
+            client.sentMessages.map((m) => m.messageId),
+            unorderedEquals(['net-s', 'net-p']),
+          );
+          expect((await messageById(stuck)).status, MessageStatus.sent);
+          expect((await messageById(fresh)).status, MessageStatus.sent);
+          await local.dispose();
+        },
+      );
+
       test('a pass without start() does not recover', () async {
         final id = await insertSent(messageId: 'net-3');
 
@@ -755,6 +829,14 @@ void main() {
       await status.close();
     });
 
+    test('start() after dispose() is a no-op', () async {
+      await outbox.dispose();
+
+      final timers = await recordingTimers(() async => outbox.start());
+
+      expect(timers, isEmpty);
+    });
+
     test('disposing the provider scope disposes the outbox', () async {
       final status = StreamController<ConnectionStatus>.broadcast();
       client.connectionStatusOverride = status.stream;
@@ -778,4 +860,18 @@ void main() {
       await status.close();
     });
   });
+}
+
+/// Throws on the first restart recovery, then behaves.
+class _FlakyRecoveryRepository extends MessageRepository {
+  _FlakyRecoveryRepository(AppDatabase db) : super(db);
+
+  int calls = 0;
+
+  @override
+  Future<int> requeueStuckSent() {
+    calls++;
+    if (calls == 1) return Future.error(StateError('database is locked'));
+    return super.requeueStuckSent();
+  }
 }
