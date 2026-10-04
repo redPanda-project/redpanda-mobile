@@ -9,6 +9,7 @@ import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/generated/outbound.pb.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
+import 'package:redpanda_light_client/src/network/active_peer.dart';
 
 /// Connection-Notify (T38) unit tests. A scripted in-memory Socket captures
 /// the client's writes and lets the test inject node frames. The exchange
@@ -168,6 +169,10 @@ bool _sameBytes(List<int> a, List<int> b) {
 }
 
 void main() {
+  // Plaintext scripted-socket suite: the key exchange never completes, so
+  // let commands flow right after the magic (T156 test seam).
+  setUpAll(() => ActivePeer.plaintextTransportForTesting = true);
+
   group('T38 proto: Subscribe/Notify wire compatibility', () {
     test('SubscribeRequest roundtrips all fields', () {
       final req = SubscribeRequest()

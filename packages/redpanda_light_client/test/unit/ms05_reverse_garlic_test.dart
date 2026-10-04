@@ -20,6 +20,7 @@ import 'package:redpanda_light_client/src/generated/outbound.pb.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
 import 'package:redpanda_light_client/src/peer_repository.dart';
+import 'package:redpanda_light_client/src/network/active_peer.dart';
 import 'package:fixnum/fixnum.dart' as fixnum;
 
 import '../helpers/garlic_test_utils.dart';
@@ -142,6 +143,10 @@ class ScriptedSocket implements Socket {
 }
 
 void main() {
+  // Plaintext scripted-socket suite: the key exchange never completes, so
+  // let commands flow right after the magic (T156 test seam).
+  setUpAll(() => ActivePeer.plaintextTransportForTesting = true);
+
   final counterpartOhId = List<int>.generate(20, (i) => 200 - i);
   final ownOhId = List<int>.generate(20, (i) => 50 + i);
 

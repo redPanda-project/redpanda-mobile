@@ -207,6 +207,7 @@ class ScriptedV23Server implements Socket {
 
 Future<(ActivePeer, ScriptedV23Server, List<ConnectionStatus>)> connect({
   void Function()? onDisconnect,
+  Duration? handshakeDeadline,
 }) async {
   final server = await ScriptedV23Server.create();
   final keys = await KeyPair.generate();
@@ -218,6 +219,7 @@ Future<(ActivePeer, ScriptedV23Server, List<ConnectionStatus>)> connect({
     socketFactory: (h, p) async => server,
     onStatusChange: statuses.add,
     onDisconnect: onDisconnect ?? () {},
+    handshakeDeadline: handshakeDeadline,
   );
   await peer.connect();
   return (peer, server, statuses);

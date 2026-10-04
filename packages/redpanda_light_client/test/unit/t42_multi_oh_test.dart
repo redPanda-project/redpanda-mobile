@@ -20,6 +20,7 @@ import 'package:redpanda_light_client/src/generated/outbound.pb.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
 import 'package:redpanda_light_client/src/peer_repository.dart';
+import 'package:redpanda_light_client/src/network/active_peer.dart';
 
 import '../helpers/garlic_test_utils.dart';
 
@@ -191,6 +192,10 @@ OHDescriptor counterpartOh(int seed, String endpoint) => OHDescriptor(
 );
 
 void main() {
+  // Plaintext scripted-socket suite: the key exchange never completes, so
+  // let commands flow right after the magic (T156 test seam).
+  setUpAll(() => ActivePeer.plaintextTransportForTesting = true);
+
   group('T45 multi-OH: one garlic route per counterpart OH (never direct)', () {
     test(
       'fans out to every counterpart OH over garlic; no direct deposit',

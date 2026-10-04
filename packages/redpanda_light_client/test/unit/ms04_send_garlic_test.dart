@@ -14,6 +14,7 @@ import 'package:redpanda_light_client/src/garlic/garlic_builder.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
 import 'package:redpanda_light_client/src/peer_repository.dart';
+import 'package:redpanda_light_client/src/network/active_peer.dart';
 
 import '../helpers/garlic_test_utils.dart';
 import '../helpers/wait_for.dart';
@@ -122,6 +123,10 @@ class ScriptedSocket implements Socket {
 }
 
 void main() {
+  // Plaintext scripted-socket suite: the key exchange never completes, so
+  // let commands flow right after the magic (T156 test seam).
+  setUpAll(() => ActivePeer.plaintextTransportForTesting = true);
+
   final ohId = List<int>.generate(20, (i) => 200 - i);
 
   /// Address of the scripted node. An IP literal on purpose (TD141): the
