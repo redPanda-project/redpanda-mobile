@@ -18,3 +18,7 @@
   Command-Klassen: `CmdInit`, `CmdConnect`, `CmdAddPeer`, `CmdLifecyclePause`,
   `CmdLifecycleResume`, `CmdSendMessage`.
   Event-Klassen: `EventConnectionStatus`, `EventPeerCount`, `EventLog`.
+
+* 📄 **pending_command_queue.dart** — `PendingCommandQueue`: puffert Commands, solange kein Worker-Isolate läuft.
+
+* 📄 **worker_replay_state.dart** — `WorkerReplayState`: Zustand, mit dem ein neu gestarteter Netzwerk-Worker re-initialisiert wird.

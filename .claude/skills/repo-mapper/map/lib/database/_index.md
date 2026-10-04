@@ -13,3 +13,5 @@
 
 * 📄 **database.g.dart** — Von Drift generierter Code (Companion-Klassen,
   Queries). Nicht manuell bearbeiten.
+
+* 📄 **counterpart_oh.dart** — schreibt die Gegenüber-Mailbox-Spalten von `Channels` als eine Einheit.

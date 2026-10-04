@@ -19,3 +19,7 @@
 * 📄 **key_pair.dart** — EC-Schlüsselpaar (`KeyPair`) auf brainpoolp256r1.
   Generierung via `KeyPair.generate()`, Public Key als unkomprimierte Bytes
   (0x04 + X + Y). Private Key für Signing/ECDH.
+
+* 📄 **discovered_peer.dart** — `DiscoveredPeer`: Peer-Eintrag aus dem `SendPeerList`-Austausch (MS04).
+
+* 📄 **peer_stats_snapshot.dart** — `PeerStatsSnapshot`: Momentaufnahme aller bekannten Peers und ihrer Verbindungszustände.
