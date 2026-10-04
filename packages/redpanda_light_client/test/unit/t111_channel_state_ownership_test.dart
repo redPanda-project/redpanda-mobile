@@ -52,8 +52,8 @@ void main() {
     );
 
     expect(client.knowsChannel('chan'), isTrue);
-    expect(client.counterpartMailboxIds('chan'), equals([ohId(1), ohId(2)]));
-    expect(client.counterpartMailboxEndpoint('chan'), equals('host-a:59558'));
+    expect(client.counterpartOhIds('chan'), equals([ohId(1), ohId(2)]));
+    expect(client.counterpartOhEndpoint('chan'), equals('host-a:59558'));
   });
 
   test('a re-register with a stale primary never re-points the live set', () {
@@ -81,15 +81,15 @@ void main() {
       isChannelCreator: false,
     );
 
-    expect(client.counterpartMailboxIds('chan'), equals([ohId(5), ohId(6)]));
-    expect(client.counterpartMailboxEndpoint('chan'), equals('live-a:59558'));
+    expect(client.counterpartOhIds('chan'), equals([ohId(5), ohId(6)]));
+    expect(client.counterpartOhEndpoint('chan'), equals('live-a:59558'));
   });
 
   test('a re-register still fills a gap: no live mailbox yet', () {
     // A channel joined by QR knows no partner mailbox until the rendezvous
     // lookup answers, so the restore path must still be able to seed one.
     client.addChannelKeys('chan', channelKey, isChannelCreator: false);
-    expect(client.counterpartMailboxIds('chan'), isEmpty);
+    expect(client.counterpartOhIds('chan'), isEmpty);
 
     client.addChannelKeys(
       'chan',
@@ -99,8 +99,8 @@ void main() {
       isChannelCreator: false,
     );
 
-    expect(client.counterpartMailboxIds('chan'), equals([ohId(4)]));
-    expect(client.counterpartMailboxEndpoint('chan'), equals('host-c:59558'));
+    expect(client.counterpartOhIds('chan'), equals([ohId(4)]));
+    expect(client.counterpartOhEndpoint('chan'), equals('host-c:59558'));
   });
 
   test('a re-registration without a display name keeps the published one', () {
@@ -205,7 +205,7 @@ void main() {
 
     expect(client.knowsChannel('chan'), isTrue);
     expect(client.channelEncryptionKeyOf('chan'), equals(keyBefore));
-    expect(client.counterpartMailboxIds('chan'), equals([ohId(1)]));
+    expect(client.counterpartOhIds('chan'), equals([ohId(1)]));
     expect(client.rendezvousOwnNameOf('chan'), equals('Alice'));
   });
 
