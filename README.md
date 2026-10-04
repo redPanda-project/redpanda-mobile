@@ -56,7 +56,7 @@ redpanda-mobile/
 | Cryptography       | PointyCastle (ECC, SHA-256)         |
 | Serialization      | Protocol Buffers (Protobuf)         |
 | QR Codes           | qr_flutter / mobile_scanner         |
-| Architecture       | Screens → repositories/services → Drift (guideline, see CLAUDE.md) |
+| Architecture       | Repository layer (guideline, unenforced) |
 
 ## 📦 Getting Started
 
