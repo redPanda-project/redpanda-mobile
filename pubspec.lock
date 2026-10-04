@@ -17,14 +17,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "9.0.0"
-  arch_test:
-    dependency: "direct dev"
-    description:
-      name: arch_test
-      sha256: "98271c23aa5f3f2e05e783ae5dab1b2fe4ac5da5b888910d3c8ba3a09218e833"
-      url: "https://pub.dev"
-    source: hosted
-    version: "1.0.0"
   args:
     dependency: transitive
     description:

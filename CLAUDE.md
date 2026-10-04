@@ -30,6 +30,17 @@ differ — see *Flutter / Dart Versions* below.
 - **build_runner**: App uses Drift ORM. Run `dart run build_runner build
   --delete-conflicting-outputs` before analyze to regenerate `database.g.dart`.
 
+## Architecture guideline (not enforced)
+
+New code under `lib/screens/**` should not import
+`package:redpanda/database/**` or run Drift queries itself. It should go
+through `lib/repositories/**` or `lib/services/**`. Nothing checks this
+automatically. `import_lint` (#109) and `arch_test` (T138) were both removed
+because neither one ever ran. Two screens still break the rule:
+`onboarding_screen.dart` (user insert) and `chat_screen.dart` (user lookup,
+message/channel stream providers, Drift row types). Move that code behind
+repositories only when you touch it anyway (TD077/TD084).
+
 ## Validation Steps Summary
 
 1. **Light Client** (`packages/redpanda_light_client`):
