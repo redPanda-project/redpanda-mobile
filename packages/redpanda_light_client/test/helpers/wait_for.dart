@@ -13,8 +13,9 @@ import 'package:test/test.dart';
 /// *nothing* happens within a window. There a too-short wait only weakens the
 /// check, it cannot make it red.
 ///
-/// [interval] is the pause between polls. [onPoll] runs once per failed poll,
-/// right before the pause — for pollers that must nudge the system (e.g.
+/// [interval] is the pause between polls. [onPoll] runs after every failed
+/// poll that is followed by a pause (not on the final, timing-out one) — for
+/// pollers that must nudge the system (e.g.
 /// `requestPeerLists()`) instead of only watching it. [message], if given,
 /// builds the failure text lazily at timeout, so it can report the state at
 /// that moment (e.g. how many of N items were found); it replaces the
