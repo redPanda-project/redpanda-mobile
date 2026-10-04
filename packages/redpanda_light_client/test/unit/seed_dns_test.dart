@@ -109,6 +109,7 @@ void main() {
   // Plaintext scripted-socket suite: the key exchange never completes, so
   // let commands flow right after the magic (T156 test seam).
   setUpAll(() => ActivePeer.plaintextTransportForTesting = true);
+  tearDownAll(() => ActivePeer.plaintextTransportForTesting = false);
 
   const hostSeed = 'seed2.test:59558';
   const ipSeed = '5.75.137.166:59558';

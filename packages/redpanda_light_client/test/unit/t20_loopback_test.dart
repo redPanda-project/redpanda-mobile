@@ -245,6 +245,7 @@ void main() {
   // Plaintext scripted-socket suite: the key exchange never completes, so
   // let commands flow right after the magic (T156 test seam).
   setUpAll(() => ActivePeer.plaintextTransportForTesting = true);
+  tearDownAll(() => ActivePeer.plaintextTransportForTesting = false);
 
   group('T20 runLoopbackTest', () {
     test('round trip: deposit comes back via fetch, never surfaces as a '

@@ -19,6 +19,9 @@ class StalledKeyExchangeSocket implements Socket {
 
   bool _handshakeAnswered = false;
 
+  /// Injects node → client bytes.
+  void reply(List<int> data) => _reply(data);
+
   void _reply(List<int> data) {
     if (!_incoming.isClosed) _incoming.add(Uint8List.fromList(data));
   }

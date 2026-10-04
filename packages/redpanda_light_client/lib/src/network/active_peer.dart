@@ -311,7 +311,12 @@ class ActivePeer {
 
     try {
       while (true) {
-        if (_buffer.isEmpty) break;
+        // A shut-down peer parses nothing more. Without this, bytes still
+        // queued on the rx chain at shutdown (>= 30 of them) went back
+        // through the magic check — `_handshakeVerified` is reset by
+        // [_shutdown] — whose failure path consumes nothing: a busy loop
+        // that froze the isolate (found by the T156 shutdown test).
+        if (_buffer.isEmpty || _isDisconnecting) break;
 
         if (!_handshakeVerified) {
           if (_buffer.length >= _handshakeLength) {
@@ -475,12 +480,7 @@ class ActivePeer {
 
     RpLog.debug('ActivePeer($address): Handshake Verified.');
     _handshakeVerified = true;
-    onHandshakeComplete?.call();
-    if (plaintextTransportForTesting) {
-      _handshakeTimer?.cancel();
-      _handshakeTimer = null;
-      onStatusChange(ConnectionStatus.connected);
-    }
+    if (plaintextTransportForTesting) _reportConnected();
     // Otherwise the handshake timer keeps running and "connected" is only
     // reported once encryption is active (see [_finalizeEncryption]): the
     // client's connect edge immediately sends payload commands (subscribe,
@@ -579,11 +579,16 @@ class ActivePeer {
         _ephemeralFromUs!.privateKey,
         ephemeralFromThem,
       );
-      _codec = await GcmFramedCodec.deriveForInitiator(
+      final codec = await GcmFramedCodec.deriveForInitiator(
         sharedSecret: shared,
         ourVerifyKey: selfKeys.verifyKeyBytes,
         theirVerifyKey: _peerPublicExport!.sublist(0, 32),
       );
+      // Shut down while the key exchange was in flight (node closed, timer,
+      // rotation, client disconnect): "disconnected" was already reported —
+      // a late "connected" would wedge the client's aggregate status (T156).
+      if (_isDisconnecting) return;
+      _codec = codec;
 
       RpLog.debug('ActivePeer($address): Encryption Active!');
       // The server requires the first encrypted client command to be PING.
@@ -597,9 +602,7 @@ class ActivePeer {
       // Handshake complete: stop the deadline (TD274) and report the peer as
       // connected. Only now may payload commands be sent ([canSendCommands]);
       // the PING above is already queued first on the tx chain.
-      _handshakeTimer?.cancel();
-      _handshakeTimer = null;
-      onStatusChange(ConnectionStatus.connected);
+      _reportConnected();
 
       if (_buffer.isNotEmpty) {
         // Bytes after ACTIVATE_ENCRYPTION in the same segment are already
@@ -615,6 +618,19 @@ class ActivePeer {
       RpLog.debug(stack.toString());
       _shutdown();
     }
+  }
+
+  bool _connectedReported = false;
+
+  /// Ends the handshake: stops the deadline (TD274), scores the peer as a
+  /// success and reports "connected" — once per connection.
+  void _reportConnected() {
+    _handshakeTimer?.cancel();
+    _handshakeTimer = null;
+    if (_connectedReported || _isDisconnecting) return;
+    _connectedReported = true;
+    onHandshakeComplete?.call();
+    onStatusChange(ConnectionStatus.connected);
   }
 
   void _sendPong() {
@@ -685,9 +701,10 @@ class ActivePeer {
 
   /// Sends a command with [CMD][4 length big-endian][protobuf bytes].
   ///
-  /// Callers must only pick peers with [canSendCommands] (T156): this method
-  /// neither drops nor defers a write, since a silently lost request would
-  /// desync the client's FIFO response matching.
+  /// Callers must only pick peers with [canSendCommands] (T156). There is no
+  /// pre-encryption queue here: deferring or dropping writes on a live peer
+  /// would desync the client's FIFO response matching. (A write to a peer
+  /// that has meanwhile shut down is still lost, as before.)
   void sendCommand(int command, Uint8List protobufBytes) {
     final buffer = BytesBuilder();
     buffer.addByte(command);

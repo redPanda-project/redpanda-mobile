@@ -55,10 +55,11 @@ void main() {
         final before = socket.writes.length;
 
         // No peer can carry the request: the registration comes back
-        // unconfirmed (no host endpoint) instead of hitting the wire. Not
-        // awaited yet — on the old code it waits 10 s for a response, and the
-        // wire check below is the one that matters.
-        final registration = client.registerOutboundHandle(channelId: 'c');
+        // unconfirmed (no host endpoint) instead of hitting the wire. On the
+        // old code it went out and waited 10 s for a response.
+        final registration = await client.registerOutboundHandle(
+          channelId: 'c',
+        );
 
         // Asserting that nothing happens: a fixed delay is the right tool
         // (see waitFor). Covers the tx chain and the queued subscribe.
@@ -70,7 +71,7 @@ void main() {
               'a plaintext REGISTER_OH (0x96…) is read by the node as a GCM '
               'frame length and kills the connection',
         );
-        expect((await registration).serverEndpoint, isNull);
+        expect(registration.serverEndpoint, isNull);
         // "connected" is only reported once encryption is active, so the
         // connect edge (subscribe, catch-up poll) has not fired either.
         expect(statuses, isNot(contains(ConnectionStatus.connected)));
@@ -99,6 +100,43 @@ void main() {
       expect(encrypted.isEncryptionActive, isTrue);
       expect(statuses, contains(ConnectionStatus.connected));
     });
+    test(
+      'a shutdown during the key exchange never reports connected',
+      () async {
+        final socket = StalledKeyExchangeSocket(await KeyPair.generate());
+        final keys = await KeyPair.generate();
+        final statuses = <ConnectionStatus>[];
+        final peer = ActivePeer(
+          address: 'scripted:23',
+          selfNodeId: NodeId.fromPublicKey(keys),
+          selfKeys: keys,
+          socketFactory: (h, p) async => socket,
+          onStatusChange: statuses.add,
+          onDisconnect: () {},
+        );
+        await peer.connect();
+        // Public key parsed: the client now sits in the 100 ms delay before
+        // its own ACTIVATE_ENCRYPTION.
+        await waitFor(
+          () => peer.discoveredNodeId != null,
+          description: 'node public key parsed',
+        );
+
+        // The node's ACTIVATE_ENCRYPTION arrives first; its handler waits for
+        // the client's own initiation (the 100 ms delay) before finalizing.
+        // The peer shuts down inside that wait, so finalization resumes on a
+        // dead peer — it must not report "connected" (that would wedge the
+        // client's aggregate status at connected with nothing sendable).
+        socket.reply([3, ...List<int>.filled(32, 9)]);
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        expect(peer.isEncryptionActive, isFalse);
+        await peer.disconnect();
+        await Future.delayed(const Duration(milliseconds: 400));
+
+        expect(statuses, equals([ConnectionStatus.disconnected]));
+        expect(peer.canSendCommands, isFalse);
+      },
+    );
   });
 
   group('T156/TD274: handshake deadline covers the key exchange', () {

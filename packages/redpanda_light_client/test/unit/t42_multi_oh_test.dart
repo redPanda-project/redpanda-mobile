@@ -195,6 +195,7 @@ void main() {
   // Plaintext scripted-socket suite: the key exchange never completes, so
   // let commands flow right after the magic (T156 test seam).
   setUpAll(() => ActivePeer.plaintextTransportForTesting = true);
+  tearDownAll(() => ActivePeer.plaintextTransportForTesting = false);
 
   group('T45 multi-OH: one garlic route per counterpart OH (never direct)', () {
     test(

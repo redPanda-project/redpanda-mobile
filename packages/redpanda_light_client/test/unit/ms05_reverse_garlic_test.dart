@@ -146,6 +146,7 @@ void main() {
   // Plaintext scripted-socket suite: the key exchange never completes, so
   // let commands flow right after the magic (T156 test seam).
   setUpAll(() => ActivePeer.plaintextTransportForTesting = true);
+  tearDownAll(() => ActivePeer.plaintextTransportForTesting = false);
 
   final counterpartOhId = List<int>.generate(20, (i) => 200 - i);
   final ownOhId = List<int>.generate(20, (i) => 50 + i);

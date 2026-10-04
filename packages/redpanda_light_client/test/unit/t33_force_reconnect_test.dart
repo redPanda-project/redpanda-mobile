@@ -179,6 +179,7 @@ void main() {
   // Plaintext scripted-socket suite: the key exchange never completes, so
   // let commands flow right after the magic (T156 test seam).
   setUpAll(() => ActivePeer.plaintextTransportForTesting = true);
+  tearDownAll(() => ActivePeer.plaintextTransportForTesting = false);
 
   late List<ScriptedSocket> sockets;
   late RedPandaLightClient client;

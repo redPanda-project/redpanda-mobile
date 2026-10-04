@@ -424,6 +424,9 @@ class RedPandaLightClient implements RedPandaClient {
     // If incoming is disconnected -> Check if others are connected.
 
     if (status == ConnectionStatus.connected) {
+      // Defence in depth (T156): a late "connected" from a peer that already
+      // shut down must not flip the aggregate status with nothing sendable.
+      if (_sendablePeers.isEmpty) return;
       if (_currentStatus != ConnectionStatus.connected) {
         _currentStatus = ConnectionStatus.connected;
         _connectionStatusController.add(ConnectionStatus.connected);
@@ -436,7 +439,7 @@ class RedPandaLightClient implements RedPandaClient {
         // Let's modify ActivePeer to pass itself or address?
         // Or cleaner: Iterate peers and clear for connected ones.
         for (final entry in _peers.entries) {
-          if (entry.value.isHandshakeVerified) {
+          if (entry.value.canSendCommands) {
             _nextRetryTime.remove(entry.key);
             _retryCounts.remove(entry.key);
           }
