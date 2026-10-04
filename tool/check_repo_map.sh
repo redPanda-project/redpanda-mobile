@@ -8,7 +8,7 @@
 #   - every markdown link to a *.md file must point at an existing map file,
 #   - every backticked relative path with a "/" and a file extension must be
 #     tracked relative to <dir> or the repo root.
-# Not checked: backticked bare file names without "/", paths with a suffix
+# Not checked: backticked bare file names without "/", globs (`dir/*.ext`), paths with a suffix
 # such as `lib/x.dart:12`, and whether the map lists every file (curation,
 # see SKILL.md).
 # Exit 0 = clean, 1 = dead paths found (listed on stderr).

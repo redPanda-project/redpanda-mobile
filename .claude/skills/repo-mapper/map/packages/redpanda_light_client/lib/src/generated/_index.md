@@ -1,7 +1,8 @@
 # 📂 packages/redpanda_light_client/lib/src/generated/
 
 > Automatisch generierter Protobuf-Dart-Code. Nicht manuell bearbeiten.
-> Generiert aus `protos/*.proto` via `tool/generate_protos.sh` (Repo-Root).
+> Generiert aus `packages/redpanda_light_client/protos/commands.proto` und
+> `packages/redpanda_light_client/protos/outbound.proto` via `tool/generate_protos.sh` (Repo-Root).
 
 ## Dateien
 
