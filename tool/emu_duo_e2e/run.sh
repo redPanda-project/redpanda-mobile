@@ -283,8 +283,8 @@ collect_counters() {
       "${PROBE_FIRST_BREACH_SEC:-null}"
     printf '"adbOk": %s, "adbErrors": %s, "maxBlindSec": %s, "maxBlindLimitSec": %s, ' \
       "$PROBE_ADB_OK" "$PROBE_ADB_ERRORS" "${PROBE_MAX_BLIND_SEC:-null}" "$S4_MAX_BLIND_SEC"
-    printf '"settle": {"minSec": %s, "minChecks": %s, "checks": %s, "quietChecks": %s, "adbErrors": %s, "windowSec": %s, "startedAt": %s, "endedAt": %s}}, ' \
-      "$S4_SETTLE_SEC" "$S4_SETTLE_MIN_CHECKS" "$SETTLE_CHECKS" "$SETTLE_QUIET_CHECKS" "$SETTLE_ADB_ERRORS" \
+    printf '"settle": {"minSec": %s, "minChecks": %s, "checks": %s, "quietChecks": %s, "resets": %s, "adbErrors": %s, "windowSec": %s, "startedAt": %s, "endedAt": %s}}, ' \
+      "$S4_SETTLE_SEC" "$S4_SETTLE_MIN_CHECKS" "$SETTLE_CHECKS" "$SETTLE_QUIET_CHECKS" "$SETTLE_RESETS" "$SETTLE_ADB_ERRORS" \
       "${SETTLE_WINDOW_SEC:-null}" \
       "$([[ -n "$SETTLE_STARTED_AT" ]] && printf '"%s"' "$SETTLE_STARTED_AT" || echo null)" \
       "$([[ -n "$SETTLE_ENDED_AT" ]] && printf '"%s"' "$SETTLE_ENDED_AT" || echo null)"
@@ -458,6 +458,7 @@ PROBE_MAX_BLIND_SEC=""
 SETTLE_CHECKS=0
 SETTLE_ADB_ERRORS=0
 SETTLE_QUIET_CHECKS=0
+SETTLE_RESETS=0
 SETTLE_WINDOW_SEC=""
 SETTLE_STARTED_AT=""
 SETTLE_ENDED_AT=""
@@ -869,7 +870,10 @@ if has_scenario s4; then
       fi
     else
       if [[ $s4_rc -eq 2 ]]; then SETTLE_ADB_ERRORS=$(( SETTLE_ADB_ERRORS + 1 )); fi
-      if [[ $s4_quiet -gt 0 ]]; then log "S4: cut not stable yet — $PROBE_ONLINE_VIA"; fi
+      if [[ $s4_quiet -gt 0 ]]; then
+        SETTLE_RESETS=$(( SETTLE_RESETS + 1 ))
+        log "S4: cut not stable yet — quiet streak of $s4_quiet check(s) over $(( s4_quiet_last - s4_quiet_since ))s broken: $PROBE_ONLINE_VIA"
+      fi
       s4_quiet=0
     fi
     sleep 2
