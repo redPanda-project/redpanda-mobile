@@ -145,6 +145,15 @@ class OutboxService {
   bool _rerunIgnoresBackoff = false;
   StreamSubscription<ConnectionStatus>? _connectionSub;
   ConnectionStatus? _lastSeenStatus;
+
+  /// Set by the first [start]: the next pass begins with
+  /// [recoverAfterRestart]. Running the recovery inside the pass (instead of
+  /// next to it) serializes it with the first send attempts, so it can never
+  /// flip a row back to `pending` that this process has just sent. Cleared
+  /// only once the recovery succeeded; until then no pass sends anything.
+  bool _started = false;
+  bool _recoveryDue = false;
+  bool _disposed = false;
   final _attemptController = StreamController<DeliveryAttempt>.broadcast();
 
   OutboxService(this._messages, this._client, this._groups);
@@ -161,7 +170,16 @@ class OutboxService {
   /// the attempt to have happened.
   Future<void> get settled => _passFuture ?? Future<void>.value();
 
+  /// Starts the schedule. The first call also queues [recoverAfterRestart]
+  /// ahead of the first pass (TD137) — this is the process start. Not when a
+  /// pass already ran: rows it sent carry live ack tags and must stay `sent`.
+  /// A no-op after [dispose].
   void start() {
+    if (_disposed) return;
+    if (!_started) {
+      _started = true;
+      _recoveryDue = _passFuture == null;
+    }
     _timer ??= Timer.periodic(
       checkInterval,
       (_) => unawaited(
@@ -197,11 +215,14 @@ class OutboxService {
     _lastSeenStatus = null;
   }
 
-  /// Stops the schedule and releases the attempt stream. Waits for a pass
-  /// that is still in flight: it holds the message repository and the
-  /// network client, and callers (tests, a torn-down provider scope) close
-  /// those right after.
+  /// Stops the schedule and releases the attempt stream. A pass still in
+  /// flight ends after its current attempt and runs no rerun; the returned
+  /// future waits for that, so a caller that awaits it can close the message
+  /// repository and the network client afterwards. (A torn-down provider
+  /// scope does not await it — the early end of the pass is what keeps it
+  /// off a closed database there.)
   Future<void> dispose() async {
+    _disposed = true;
     stop();
     try {
       await settled;
@@ -209,6 +230,23 @@ class OutboxService {
       debugPrint('OutboxService: pass failed while disposing: $e');
     }
     await _attemptController.close();
+  }
+
+  /// Re-queues every message the previous process left `sent` (TD137).
+  ///
+  /// Ack tags live only in memory, so a message handed to the network but
+  /// not R-ACKed before the last shutdown can never be confirmed or timed
+  /// out — it would stay `sent` forever. The re-send reuses the stable
+  /// network message id, so receivers that already got it deduplicate it.
+  /// Runs once, as the first step of the first pass after [start]; returns
+  /// the number of re-queued messages.
+  @visibleForTesting
+  Future<int> recoverAfterRestart() async {
+    final count = await _messages.requeueStuckSent();
+    if (count > 0) {
+      debugPrint('OutboxService: re-queued $count stuck sent message(s)');
+    }
+    return count;
   }
 
   /// Backoff window after [retryCount] failed attempts.
@@ -233,11 +271,17 @@ class OutboxService {
     return Duration(minutes: minutes);
   }
 
+  /// When the backoff window for [msg] ends, i.e. the earliest time the
+  /// outbox attempts it again. Null when it has no previous attempt — it is
+  /// due immediately. The one place that turns a row's backoff bookkeeping
+  /// into a time (TD136): the UI reads this instead of re-deriving it.
+  static DateTime? nextAttemptAt(Message msg) =>
+      msg.lastRetryAt?.add(backoffFor(msg.retryCount));
+
   /// True if the backoff window for [msg] has elapsed.
   static bool isDue(Message msg, DateTime now) {
-    final lastRetryAt = msg.lastRetryAt;
-    if (lastRetryAt == null) return true;
-    return now.difference(lastRetryAt) >= backoffFor(msg.retryCount);
+    final next = nextAttemptAt(msg);
+    return next == null || !now.isBefore(next);
   }
 
   /// Queues a locally composed message and kicks a send pass. The ONLY way
@@ -315,7 +359,7 @@ class OutboxService {
         _rerunRequested = false;
         _rerunIgnoresBackoff = false;
         await _pass(ignoreBackoff: ignore);
-        if (!_rerunRequested) break;
+        if (!_rerunRequested || _disposed) break;
         ignore = _rerunIgnoresBackoff;
       }
     } finally {
@@ -326,6 +370,13 @@ class OutboxService {
   }
 
   Future<void> _pass({required bool ignoreBackoff}) async {
+    if (_recoveryDue) {
+      // A failure aborts the pass BEFORE anything is sent and leaves the
+      // recovery due, so the next pass retries it. Sending first and
+      // recovering later would re-queue rows this process just sent.
+      await recoverAfterRestart();
+      _recoveryDue = false;
+    }
     // TD002/T51: pull back anything stuck `sent` without an ack tag before
     // looking at the pending set, so a message this sweep just requeued is
     // picked up by the very same pass instead of waiting another tick.
@@ -334,6 +385,7 @@ class OutboxService {
     final now = DateTime.now();
 
     for (final msg in pending) {
+      if (_disposed) return;
       if (msg.retryCount >= maxRetries) {
         await _messages.markFailed(msg.id);
         continue;

@@ -1,14 +1,17 @@
 import 'dart:async';
 
 import 'package:drift/drift.dart' as drift;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:redpanda/database/database.dart';
 import 'package:redpanda/repositories/group_repository.dart';
 import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/services/outbox_service.dart';
+import 'package:redpanda/shared/providers.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart'
     show
         ChannelAckUpdate,
+        ConnectionStatus,
         DepositException,
         DepositStatus,
         RoutingAck,
@@ -661,4 +664,214 @@ void main() {
       expect(OutboxService.isDue(msg, DateTime.now()), isTrue);
     });
   });
+
+  group(
+    'OutboxService.recoverAfterRestart (TD137: recovery is the outbox\'s)',
+    () {
+      Future<int> insertSent({String? messageId}) async {
+        final id = await insertPending(messageId: messageId);
+        await repo.markSent(id);
+        return id;
+      }
+
+      test('re-queues rows the previous process left sent', () async {
+        final id = await insertSent(messageId: 'net-1');
+
+        expect(await outbox.recoverAfterRestart(), 1);
+
+        expect((await messageById(id)).status, MessageStatus.pending);
+      });
+
+      test('start() re-sends a row left sent, before anything else, with the '
+          'same network id', () async {
+        final id = await insertSent(messageId: 'net-1');
+
+        outbox.start();
+        // The connection stream reports `connected` → immediate pass, whose
+        // first step is the recovery.
+        await pumpEventQueue();
+        await outbox.settled;
+
+        expect(client.sentMessages.map((m) => m.messageId), ['net-1']);
+        expect((await messageById(id)).status, MessageStatus.sent);
+      });
+
+      test('runs once per process, not on every pass', () async {
+        outbox.start();
+        await pumpEventQueue();
+        await outbox.settled;
+        // A row sent by THIS process: its ack tag is live, so a later pass
+        // must leave it alone.
+        final id = await insertSent(messageId: 'net-2');
+
+        await outbox.runPass(ignoreBackoff: true);
+
+        expect((await messageById(id)).status, MessageStatus.sent);
+        expect(client.sentMessages, isEmpty);
+      });
+
+      test('a pending row and a row left sent both go out exactly once in the '
+          'first pass', () async {
+        final stuck = await insertSent(messageId: 'net-s');
+        final fresh = await insertPending(messageId: 'net-p');
+
+        outbox.start();
+        await pumpEventQueue();
+        await outbox.settled;
+
+        expect(
+          client.sentMessages.map((m) => m.messageId),
+          unorderedEquals(['net-s', 'net-p']),
+        );
+        expect((await messageById(stuck)).status, MessageStatus.sent);
+        expect((await messageById(fresh)).status, MessageStatus.sent);
+      });
+
+      test('stop() then start() does not recover again', () async {
+        outbox.start();
+        await pumpEventQueue();
+        await outbox.settled;
+        outbox.stop();
+        final id = await insertSent(messageId: 'net-4');
+
+        outbox.start();
+        await pumpEventQueue();
+        await outbox.settled;
+
+        expect((await messageById(id)).status, MessageStatus.sent);
+        expect(client.sentMessages, isEmpty);
+      });
+
+      test('start() after a pass already ran does not re-queue what that pass '
+          'sent', () async {
+        final id = await insertPending(messageId: 'net-5');
+        await outbox.runPass();
+        expect((await messageById(id)).status, MessageStatus.sent);
+
+        outbox.start();
+        await pumpEventQueue();
+        await outbox.settled;
+
+        expect(client.sentMessages.map((m) => m.messageId), ['net-5']);
+        expect((await messageById(id)).status, MessageStatus.sent);
+      });
+
+      test(
+        'a failing recovery sends nothing and is retried by the next pass',
+        () async {
+          final flaky = _FlakyRecoveryRepository(db);
+          final local = OutboxService(flaky, client, GroupRepository(db));
+          final stuck = await insertSent(messageId: 'net-s');
+          final fresh = await insertPending(messageId: 'net-p');
+
+          local.start();
+          await pumpEventQueue();
+          await expectLater(local.settled, throwsStateError);
+
+          // Nothing went out: a row sent now would be re-queued by the retry.
+          expect(client.sentMessages, isEmpty);
+
+          await local.runPass(ignoreBackoff: true);
+
+          expect(flaky.calls, 2);
+          expect(
+            client.sentMessages.map((m) => m.messageId),
+            unorderedEquals(['net-s', 'net-p']),
+          );
+          expect((await messageById(stuck)).status, MessageStatus.sent);
+          expect((await messageById(fresh)).status, MessageStatus.sent);
+          await local.dispose();
+        },
+      );
+
+      test('a pass without start() does not recover', () async {
+        final id = await insertSent(messageId: 'net-3');
+
+        await outbox.runPass(ignoreBackoff: true);
+
+        expect((await messageById(id)).status, MessageStatus.sent);
+      });
+    },
+  );
+
+  group('OutboxService.dispose (TD139)', () {
+    /// Runs [body] in a zone that records every periodic timer it creates.
+    Future<List<Timer>> recordingTimers(Future<void> Function() body) async {
+      final timers = <Timer>[];
+      await runZoned(
+        body,
+        zoneSpecification: ZoneSpecification(
+          createPeriodicTimer: (self, parent, zone, period, f) {
+            final t = parent.createPeriodicTimer(zone, period, f);
+            timers.add(t);
+            return t;
+          },
+        ),
+      );
+      return timers;
+    }
+
+    test('cancels the tick timer and the connection subscription', () async {
+      final status = StreamController<ConnectionStatus>.broadcast();
+      client.connectionStatusOverride = status.stream;
+
+      final timers = await recordingTimers(() async => outbox.start());
+      expect(timers, hasLength(1));
+      expect(timers.single.isActive, isTrue);
+      expect(status.hasListener, isTrue);
+
+      await outbox.dispose();
+
+      expect(timers.single.isActive, isFalse);
+      expect(status.hasListener, isFalse);
+      // The attempt stream is closed: a listener is told it is done.
+      await expectLater(outbox.attempts, emitsDone);
+      await status.close();
+    });
+
+    test('start() after dispose() is a no-op', () async {
+      await outbox.dispose();
+
+      final timers = await recordingTimers(() async => outbox.start());
+
+      expect(timers, isEmpty);
+    });
+
+    test('disposing the provider scope disposes the outbox', () async {
+      final status = StreamController<ConnectionStatus>.broadcast();
+      client.connectionStatusOverride = status.stream;
+      final container = ProviderContainer(
+        overrides: [
+          dbProvider.overrideWithValue(db),
+          redPandaClientProvider.overrideWithValue(client),
+        ],
+      );
+      final scoped = container.read(outboxServiceProvider);
+
+      final timers = await recordingTimers(() async => scoped.start());
+      expect(status.hasListener, isTrue);
+
+      container.dispose();
+      await pumpEventQueue();
+
+      expect(timers.single.isActive, isFalse);
+      expect(status.hasListener, isFalse);
+      await expectLater(scoped.attempts, emitsDone);
+      await status.close();
+    });
+  });
+}
+
+/// Throws on the first restart recovery, then behaves.
+class _FlakyRecoveryRepository extends MessageRepository {
+  _FlakyRecoveryRepository(super.db);
+
+  int calls = 0;
+
+  @override
+  Future<int> requeueStuckSent() {
+    calls++;
+    if (calls == 1) return Future.error(StateError('database is locked'));
+    return super.requeueStuckSent();
+  }
 }

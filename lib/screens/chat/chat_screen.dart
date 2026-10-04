@@ -188,9 +188,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final canRetry =
         msg.status == MessageStatus.pending ||
         msg.status == MessageStatus.failed;
-    final nextAttempt =
-        msg.status == MessageStatus.pending && msg.lastRetryAt != null
-        ? msg.lastRetryAt!.add(OutboxService.backoffFor(msg.retryCount))
+    final nextAttempt = msg.status == MessageStatus.pending
+        ? OutboxService.nextAttemptAt(msg)
         : null;
 
     showModalBottomSheet<void>(
