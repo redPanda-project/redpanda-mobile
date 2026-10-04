@@ -34,9 +34,12 @@ import 'test_helpers.dart';
 void main() async {
   final jarAvailable = e2eJarAvailable();
 
-  const entryPort = 50590;
-  const liveRelayPorts = [50591, 50592, 50593];
-  const deadRelayPort = 50594;
+  // Own range — this suite used to share ms06's ports, so a node
+  // left bound by one wedged the other (TD120). Every e2e suite keeps a
+  // disjoint range; `e2e_port_isolation_test.dart` pins that.
+  const entryPort = 50660;
+  const liveRelayPorts = [50661, 50662, 50663];
+  const deadRelayPort = 50664;
   const entryAddress = '127.0.0.1:$entryPort';
   final liveRelayAddresses = liveRelayPorts.map((p) => '127.0.0.1:$p').toSet();
   const deadRelayAddress = '127.0.0.1:$deadRelayPort';

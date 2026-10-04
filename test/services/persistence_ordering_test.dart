@@ -12,6 +12,7 @@ import 'package:redpanda_light_client/redpanda_light_client.dart';
 
 import '../helpers/fake_redpanda_client.dart';
 import '../helpers/test_database.dart';
+import '../helpers/wait_for.dart';
 
 /// T110 — ordering invariants of the single persistence channel.
 ///
@@ -141,39 +142,21 @@ void main() {
         );
   }
 
-  /// Waits until the persistence chain has gone quiet: the write-order log
-  /// must stay unchanged for [quiet] before we assert on it.
+  /// Waits until the write-order log holds [entries] entries, i.e. until the
+  /// last write the test emitted has finished: every handler logs its exit
+  /// only after its write committed, and the chain is serial.
   ///
-  /// Was a flat 200 ms sleep, which measured a serialized 3x30 ms handler
-  /// chain plus real Drift writes and went red under full-suite load (T111
-  /// added a channel-table watcher that does its own reads at start()).
-  /// Waiting for the condition instead of guessing a duration keeps the
-  /// invariant the same and the test honest — the cap is only a failure
-  /// deadline, not the expected wait.
-  Future<void> settle({
-    Duration quiet = const Duration(milliseconds: 150),
-    Duration cap = const Duration(seconds: 10),
-  }) async {
-    final deadline = DateTime.now().add(cap);
-    var lastLength = -1;
-    var stableSince = DateTime.now();
-    while (DateTime.now().isBefore(deadline)) {
-      await Future<void>.delayed(const Duration(milliseconds: 10));
-      if (service.order.length != lastLength) {
-        lastLength = service.order.length;
-        stableSince = DateTime.now();
-        continue;
-      }
-      if (DateTime.now().difference(stableSince) >= quiet) return;
-    }
-    // Never fall through silently: a hit deadline means the chain is still
-    // writing (or wedged), and letting the caller assert anyway would report
-    // that as an unrelated "wrong write order" failure.
-    fail(
-      'the persistence chain did not go quiet within ${cap.inSeconds}s — '
-      'write order so far: ${service.order}',
-    );
-  }
+  /// Was `settle()` — "the log stayed unchanged for 150 ms". A scheduling
+  /// stall of that length between two chained writes looked exactly like a
+  /// finished chain, so under full-suite load I1 asserted before the third
+  /// `ratchet:done` and went red (TD121). Waiting for the concrete count has
+  /// no such window; the timeout is only the failure deadline. The exact
+  /// order assertions that follow still catch any surplus entry.
+  Future<void> waitForLog(int entries) => waitFor(
+    () => service.order.length >= entries,
+    timeout: const Duration(seconds: 10),
+    description: '$entries write-order entries',
+  );
 
   test('I1: same-kind writes land in emission order, newest wins', () async {
     await insertChannel('channel-1');
@@ -184,7 +167,7 @@ void main() {
         RatchetStateUpdate(channelId: 'channel-1', stateJson: 'state-$i'),
       );
     }
-    await settle();
+    await waitForLog(6);
 
     expect(
       service.order,
@@ -223,7 +206,7 @@ void main() {
         timestampMs: 1700000000000,
       ),
     );
-    await settle();
+    await waitForLog(4);
 
     expect(service.order, contains('ratchet:throw'));
     expect(service.order, contains('channelAck:done'));
@@ -259,7 +242,7 @@ void main() {
         timestampMs: 1700000000000,
       ),
     );
-    await settle();
+    await waitForLog(4);
 
     expect(
       service.order,
@@ -303,7 +286,7 @@ void main() {
       await cursorWhenWarned.future.timeout(const Duration(seconds: 5)),
       equals(12),
     );
-    await settle();
+    await waitForLog(2);
 
     final handle = await db.select(db.outboundHandles).getSingle();
     expect(handle.lastCursor, equals(12));
@@ -319,7 +302,7 @@ void main() {
     client.stateController.add(
       const RatchetStateUpdate(channelId: 'channel-1', stateJson: 'slow'),
     );
-    // No settle(): stop() is called while the slow write is still running.
+    // No wait: stop() is called while the slow write is still running.
     await service.stop();
 
     expect(service.order, equals(['ratchet:start', 'ratchet:done']));
@@ -346,7 +329,9 @@ void main() {
         groupIdHex: 'ff' * 32,
       ),
     );
-    await settle();
+    // Asserting that NOTHING happens: a fixed window is the right tool here
+    // (a slow host only weakens the check, it cannot turn it red).
+    await Future<void>.delayed(const Duration(milliseconds: 200));
 
     expect(service.order, isEmpty);
   });
