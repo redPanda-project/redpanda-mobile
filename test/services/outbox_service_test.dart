@@ -864,7 +864,7 @@ void main() {
 
 /// Throws on the first restart recovery, then behaves.
 class _FlakyRecoveryRepository extends MessageRepository {
-  _FlakyRecoveryRepository(AppDatabase db) : super(db);
+  _FlakyRecoveryRepository(super.db);
 
   int calls = 0;
 

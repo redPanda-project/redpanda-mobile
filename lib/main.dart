@@ -4,7 +4,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:redpanda/repositories/channel_repository.dart';
-import 'package:redpanda/repositories/message_repository.dart';
 import 'package:redpanda/router.dart';
 import 'package:redpanda/services/field_logging.dart';
 import 'package:redpanda/services/foreground_service.dart';
