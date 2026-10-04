@@ -12,6 +12,34 @@ permissions:
   contents: read
 
 jobs:
+  # Cheap guards that need only bash + git (+ gh for the proto fetch), kept out
+  # of the Flutter job so they report within seconds and an upstream proto
+  # drift does not hide the test results (or vice versa).
+  repo-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      # Both workflows pin Flutter; a drift would turn every local pre-push red
+      # after merge and let the emulator gate test another toolchain (TD280).
+      - name: Flutter pins agree (flutter_ci.yml = emu_duo_e2e.yml)
+        run: tool/pre_push_validation.sh --pins-only
+
+      # The repo-mapper map must not point at deleted files (TD277).
+      - name: Repo map has no dead paths
+        run: tool/check_repo_map.sh
+
+      # Vendored protos must equal redpandaj main (TD097). Deliberate trade-off:
+      # a proto change merged on redpandaj turns this red on every mobile PR
+      # until `tool/sync_protos.sh && tool/generate_protos.sh` is committed.
+      # With --ref the script fails instead of skipping when GitHub is
+      # unreachable, so a missing token cannot pass silently.
+      - name: Vendored protos in sync with redpandaj main
+        run: tool/sync_protos.sh --check --ref main
+        env:
+          GH_TOKEN: ${{ github.token }}
+
   build:
     runs-on: ubuntu-latest
     # Hard ceiling: a hung E2E node (leaked java subprocess keeping the test

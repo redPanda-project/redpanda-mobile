@@ -13,6 +13,7 @@
 #   tool/sync_protos.sh --ref REF              # ... from GitHub at tag/branch/commit REF
 #   tool/sync_protos.sh --check                # verify only, write nothing
 #   tool/sync_protos.sh --check --no-upstream  # only the offline integrity check
+#   tool/sync_protos.sh --check --ref main     # freshness vs. GitHub; fails (no skip) if unreachable
 #
 # Source resolution order (unless --ref forces a download):
 #   --source DIR  >  $REDPANDAJ_DIR  >  <repo>/../redpandaj  >  GitHub (main)
@@ -201,6 +202,9 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
     exit 0
   fi
   if ! resolve_source; then
+    # An explicit --ref is a request for the freshness check (CI uses it,
+    # TD097), so an unreachable GitHub must not pass as a silent skip.
+    [ -z "$REF" ] || die "cannot fetch $REPO at ref '$REF' (network down, or gh not authenticated — in CI set GH_TOKEN)"
     echo "protos: upstream comparison SKIPPED — no redpandaj checkout and no network/gh." >&2
     echo "        Integrity against UPSTREAM.lock passed; freshness unverified." >&2
     exit 0

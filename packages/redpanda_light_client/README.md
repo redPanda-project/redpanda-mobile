@@ -109,9 +109,10 @@ the protos, `UPSTREAM.lock` and the regenerated Dart in one change.
   pre-T107 defect was a hand-edited *generated* file, not a hand-edited proto.
 * `tool/sync_protos.sh --check` — additionally diffs against live upstream when
   a redpandaj checkout or the GitHub API is reachable. Run from
-  `tool/pre_push_validation.sh`; it is **not** wired into
-  `.github/workflows/`, so the "is this still what redpandaj has today"
-  question is answered locally, not by CI.
+  `tool/pre_push_validation.sh`, and in CI (`repo-checks` job in
+  `.github/workflows/flutter_ci.yml`) as `--check --ref main`, which fails
+  instead of skipping when GitHub is unreachable (TD097). So a proto change
+  merged on redpandaj main turns mobile CI red until it is synced here.
 
 ## 🔬 Testing
 

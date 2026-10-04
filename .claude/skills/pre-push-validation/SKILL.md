@@ -71,8 +71,10 @@ tool/sync_protos.sh --check
 which fails when (a) the vendored `.proto` set no longer matches
 `protos/UPSTREAM.lock` (someone edited or added a copy) or (b) it no longer
 equals upstream — (b) is skipped with a notice when neither a redpandaj
-checkout nor the GitHub API is reachable, and is therefore a *local* guard
-only. `test/unit/vendored_protos_test.dart` runs offline and so also guards CI:
+checkout nor the GitHub API is reachable. CI's `repo-checks` job runs
+`tool/sync_protos.sh --check --ref main`, which never skips (TD097): a proto
+change merged on redpandaj main turns mobile CI red until it is synced.
+`test/unit/vendored_protos_test.dart` runs offline and also guards CI:
 it checks (a) plus the generated Dart against
 `lib/src/generated/CODEGEN.lock`.
 

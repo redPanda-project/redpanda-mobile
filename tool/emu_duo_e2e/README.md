@@ -209,6 +209,9 @@ triaged as "the gate flaked" or "the gate found something" without opening a
   (`-qemu -m`), the apk is built before the emulators boot, the gradle
   daemon is stopped, and the T101 pre-flight refuses to start a run the
   host cannot hold. Do not run RAM-heavy jobs in parallel.
+  The CI gate (`.github/workflows/emu_duo_e2e.yml`, 16 GB runner) sets
+  `RP_AVD_RAM_MB=2048` (TD058): at 1024 MB Alice's guest logged ~33 lmkd
+  kills per run; local runs keep the 1024 default.
 - The QR *scan* is bypassed (headless emulators have no camera); everything
   else drives the real UI. On the creator side the peer-OH import writes only
   the peer-OH columns instead of re-scanning — a real scan would go through
