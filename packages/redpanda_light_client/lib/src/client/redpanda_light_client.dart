@@ -58,6 +58,22 @@ import 'package:redpanda_light_client/src/network/active_peer.dart';
 /// The implementation of the RedPanda Light Client.
 /// Manages network connections, encryption, and routing.
 class RedPandaLightClient implements RedPandaClient {
+  // Wire command bytes this class sends or matches responses by. Mirrors of
+  // redpandaj `im.redpanda.core.Command`; checked against the wire registry by
+  // test/unit/command_bytes_test.dart (TD091).
+  static const int _cmdFlaschenpostPut = 141;
+  static const int _cmdFlaschenpostV2 = 142;
+  static const int _cmdOutboundRegisterOhReq = 150;
+  static const int _cmdOutboundRegisterOhRes = 151;
+  static const int _cmdOutboundFetchReq = 152;
+  static const int _cmdOutboundFetchRes = 153;
+  static const int _cmdOutboundAckFetchReq = 156;
+  static const int _cmdOutboundAckFetchRes = 157;
+  static const int _cmdFlaschenpostPutRes = 158;
+  static const int _cmdOutboundSubscribeReq = 159;
+  static const int _cmdOutboundSubscribeRes = 160;
+  static const int _cmdOutboundNotify = 161;
+
   final NodeId selfNodeId;
   final KeyPair selfKeys;
 
@@ -1109,20 +1125,20 @@ class RedPandaLightClient implements RedPandaClient {
   }
 
   void _handleCommandResponse(int command, List<int> payload) {
-    if (command == 158) {
+    if (command == _cmdFlaschenpostPutRes) {
       _putResponses.handle(payload);
       return;
     }
-    if (command == 151) {
+    if (command == _cmdOutboundRegisterOhRes) {
       _registerResponses.handle(payload);
       return;
     }
-    if (command == 160) {
+    if (command == _cmdOutboundSubscribeRes) {
       // Connection-Notify (T38): SubscribeResponse, FIFO-matched.
       _subscribeResponses.handle(payload);
       return;
     }
-    if (command == 161) {
+    if (command == _cmdOutboundNotify) {
       // Connection-Notify (T38): unsolicited Notify — new mail for an OH.
       _handleNotify(payload);
       return;
@@ -1190,7 +1206,7 @@ class RedPandaLightClient implements RedPandaClient {
     final now = DateTime.now();
 
     final signingBuffer = BytesBuilder();
-    signingBuffer.addByte(159); // OUTBOUND_SUBSCRIBE_REQ
+    signingBuffer.addByte(_cmdOutboundSubscribeReq);
     signingBuffer.add(oh.ohId);
     signingBuffer.add(_int64Bytes(now.millisecondsSinceEpoch));
     signingBuffer.add(nonce);
@@ -1206,7 +1222,10 @@ class RedPandaLightClient implements RedPandaClient {
 
     // FIFO-matched: several OH subscribes can be in flight at once.
     final completer = _subscribeResponses.register();
-    activePeer.sendCommand(159, Uint8List.fromList(request.writeToBuffer()));
+    activePeer.sendCommand(
+      _cmdOutboundSubscribeReq,
+      Uint8List.fromList(request.writeToBuffer()),
+    );
 
     final List<int> responseBytes;
     try {
@@ -2458,7 +2477,7 @@ class RedPandaLightClient implements RedPandaClient {
       sessionTag: rgb.sessionTag,
       returnPath: returnPath,
     );
-    submitVia.sendCommand(142, packet);
+    submitVia.sendCommand(_cmdFlaschenpostV2, packet);
     lastSendHopCount = rgb.hops.length;
     lastSendViaRgb = true;
     lastSendAckRequested = returnPath != null;
@@ -2603,7 +2622,7 @@ class RedPandaLightClient implements RedPandaClient {
       payload: payload,
       returnPath: returnPath,
     );
-    submitVia.sendCommand(142, packet);
+    submitVia.sendCommand(_cmdFlaschenpostV2, packet);
     lastSendHopCount = hops.length;
     lastSendAckRequested = returnPath != null;
     RpLog.debug(
@@ -2649,7 +2668,10 @@ class RedPandaLightClient implements RedPandaClient {
       // timeout, keep the legacy optimistic behavior (the handle is returned
       // and renewed/confirmed later).
       final completer = _registerResponses.register();
-      activePeer.sendCommand(150, Uint8List.fromList(buffer));
+      activePeer.sendCommand(
+        _cmdOutboundRegisterOhReq,
+        Uint8List.fromList(buffer),
+      );
 
       List<int>? responseBytes;
       try {
@@ -2731,7 +2753,7 @@ class RedPandaLightClient implements RedPandaClient {
     );
 
     final signingBuffer = BytesBuilder();
-    signingBuffer.addByte(150); // OUTBOUND_REGISTER_OH_REQ
+    signingBuffer.addByte(_cmdOutboundRegisterOhReq);
     signingBuffer.add(ohId);
     signingBuffer.add(_int64Bytes(expiresAt.millisecondsSinceEpoch));
     signingBuffer.add(_int64Bytes(now.millisecondsSinceEpoch));
@@ -2996,7 +3018,7 @@ class RedPandaLightClient implements RedPandaClient {
         hops: hops,
         kademliaStore: store,
       );
-      submitVia.sendCommand(142, packet);
+      submitVia.sendCommand(_cmdFlaschenpostV2, packet);
       // Mark as published only on an actual send with hops — otherwise the
       // poll cycle keeps retrying until garlic hops become available (the
       // publish-on-registration can race ahead of hop discovery).
@@ -3076,7 +3098,7 @@ class RedPandaLightClient implements RedPandaClient {
             hops: returnHops,
           ),
         );
-        submitVia.sendCommand(142, packet);
+        submitVia.sendCommand(_cmdFlaschenpostV2, packet);
         RpLog.debug(
           'RedPandaLightClient: rendezvous lookup for $channelId sent over '
           '${hops.length} hops',
@@ -3461,7 +3483,10 @@ class RedPandaLightClient implements RedPandaClient {
     // registration cannot clobber this renewal's completer.
     final completer = _registerResponses.register();
 
-    activePeer.sendCommand(150, Uint8List.fromList(request.writeToBuffer()));
+    activePeer.sendCommand(
+      _cmdOutboundRegisterOhReq,
+      Uint8List.fromList(request.writeToBuffer()),
+    );
 
     final List<int> responseBytes;
     try {
@@ -3544,7 +3569,7 @@ class RedPandaLightClient implements RedPandaClient {
     // Build signing bytes (v2 Ed25519, 0x02 prefix added by OHKeypair.sign):
     // [CMD_BYTE(152) | oh_id | timestamp_ms(8 BE) | nonce | limit(4 BE) | cursor(8 BE)]
     final signingBuffer = BytesBuilder();
-    signingBuffer.addByte(152); // OUTBOUND_FETCH_REQ
+    signingBuffer.addByte(_cmdOutboundFetchReq);
     signingBuffer.add(oh.ohId);
     signingBuffer.add(_int64Bytes(now.millisecondsSinceEpoch));
     signingBuffer.add(nonce);
@@ -3591,13 +3616,13 @@ class RedPandaLightClient implements RedPandaClient {
 
     // Register completer for command 153 (OUTBOUND_FETCH_RES) before sending
     final completer = Completer<List<int>>();
-    _pendingResponses[153] = completer;
+    _pendingResponses[_cmdOutboundFetchRes] = completer;
 
     final buffer = request.writeToBuffer();
     RpLog.debug(
       'RedPandaLightClient: fetchMessages() serialized ${buffer.length} bytes',
     );
-    activePeer.sendCommand(152, Uint8List.fromList(buffer));
+    activePeer.sendCommand(_cmdOutboundFetchReq, Uint8List.fromList(buffer));
 
     // Await the response
     final List<int> responseBytes;
@@ -3605,7 +3630,7 @@ class RedPandaLightClient implements RedPandaClient {
       responseBytes = await completer.future.timeout(fetchResponseTimeout);
       activePeer.consecutiveFetchTimeouts = 0;
     } on TimeoutException {
-      _pendingResponses.remove(153);
+      _pendingResponses.remove(_cmdOutboundFetchRes);
       RpLog.info(
         'RedPandaLightClient: fetchMessages() timed out waiting for response',
       );
@@ -4049,7 +4074,7 @@ class RedPandaLightClient implements RedPandaClient {
       ohId: counterpartOhId,
       payload: payload,
     );
-    activePeer.sendCommand(142, packet);
+    activePeer.sendCommand(_cmdFlaschenpostV2, packet);
   }
 
   // =========================================================================
@@ -4268,7 +4293,7 @@ class RedPandaLightClient implements RedPandaClient {
         payload: payload,
         returnPath: returnPath,
       );
-      submitVia.sendCommand(142, packet);
+      submitVia.sendCommand(_cmdFlaschenpostV2, packet);
       return returnPath != null;
     }
 
@@ -4278,7 +4303,7 @@ class RedPandaLightClient implements RedPandaClient {
       ..content = payload
       ..ohId = ohId;
     submitVia.sendCommand(
-      141,
+      _cmdFlaschenpostPut,
       Uint8List.fromList(flaschenpost.writeToBuffer()),
     );
     return false;
@@ -4481,7 +4506,7 @@ class RedPandaLightClient implements RedPandaClient {
         ohId: counterpartOhId,
         payload: payload,
       );
-      activePeer.sendCommand(142, packet);
+      activePeer.sendCommand(_cmdFlaschenpostV2, packet);
       return;
     }
 
@@ -4493,7 +4518,7 @@ class RedPandaLightClient implements RedPandaClient {
       ..wantResponse = true;
     final completer = _putResponses.register();
     activePeer.sendCommand(
-      141,
+      _cmdFlaschenpostPut,
       Uint8List.fromList(flaschenpost.writeToBuffer()),
     );
     final List<int> responseBytes;
@@ -4906,7 +4931,7 @@ class RedPandaLightClient implements RedPandaClient {
     // Signing bytes (v2 Ed25519, 0x02 prefix added by OHKeypair.sign):
     // [CMD_BYTE(156) | oh_id | acked_sequence_id(8 BE) | timestamp_ms(8 BE) | nonce]
     final signingBuffer = BytesBuilder();
-    signingBuffer.addByte(156); // OUTBOUND_ACK_FETCH_REQ
+    signingBuffer.addByte(_cmdOutboundAckFetchReq);
     signingBuffer.add(oh.ohId);
     signingBuffer.add(_int64Bytes(ackedSequenceId));
     signingBuffer.add(_int64Bytes(now.millisecondsSinceEpoch));
@@ -4925,9 +4950,12 @@ class RedPandaLightClient implements RedPandaClient {
 
     // Register completer for command 157 (OUTBOUND_ACK_FETCH_RES)
     final completer = Completer<List<int>>();
-    _pendingResponses[157] = completer;
+    _pendingResponses[_cmdOutboundAckFetchRes] = completer;
 
-    activePeer.sendCommand(156, Uint8List.fromList(request.writeToBuffer()));
+    activePeer.sendCommand(
+      _cmdOutboundAckFetchReq,
+      Uint8List.fromList(request.writeToBuffer()),
+    );
 
     final List<int> responseBytes;
     try {
@@ -4935,7 +4963,7 @@ class RedPandaLightClient implements RedPandaClient {
         const Duration(seconds: 10),
       );
     } on TimeoutException {
-      _pendingResponses.remove(157);
+      _pendingResponses.remove(_cmdOutboundAckFetchRes);
       RpLog.info(
         'RedPandaLightClient: ackFetch() timed out waiting for response',
       );
