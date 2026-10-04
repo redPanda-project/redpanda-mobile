@@ -65,12 +65,31 @@ class RedPandaLightClient implements RedPandaClient {
       StreamController<ConnectionStatus>.broadcast();
   final _peerCountController = StreamController<int>.broadcast();
 
-  /// Bootstrap nodes of the first real v23 network (live since 2026-07-11).
-  /// Tests and local setups inject their own list via the `seeds` parameter.
+  /// Bootstrap nodes of the v23 test network. Tests and local setups inject
+  /// their own list via the `seeds` parameter.
+  ///
+  /// DNS names since T154 so a node can move to a new IP without an app
+  /// release (seed1 -> 91.98.79.117, seed2 -> 5.75.137.166). The trailing IP
+  /// literal is seed2's address as a fallback for as long as the DNS records
+  /// are missing or still propagating, and for devices whose resolver fails:
+  /// an unresolvable name only costs that one dial (it lands in backoff), and
+  /// the alias dedup in [_runConnectionCheck] keeps seed2 and its IP from
+  /// being dialled as two connections to the same node. The fallback can go
+  /// once both names resolve in production and an app build without it has
+  /// reached the devices.
   static const List<String> defaultSeeds = [
+    'seed1.redpanda.im:59558',
+    'seed2.redpanda.im:59558',
     '5.75.137.166:59558',
-    '46.224.156.238:59558',
   ];
+
+  /// Upper bound for one alias-dedup DNS lookup. A resolver that hangs (no
+  /// network, captive portal) must not hold up the dials of the candidates
+  /// after it in the same connection check, e.g. the fallback IP seed.
+  static const Duration lookupTimeout = Duration(seconds: 2);
+
+  /// DNS resolution used by the alias dedup; injectable for tests.
+  final Future<List<InternetAddress>> Function(String host) _lookup;
 
   final SocketFactory _socketFactory;
   // final Set<String> _knownAddresses = {}; // Replaced by PeerRepository
@@ -81,7 +100,7 @@ class RedPandaLightClient implements RedPandaClient {
   /// its [ActivePeer] into [_peers] yet.
   ///
   /// [_runConnectionCheck] awaits DNS lookups (`_resolveConnectedIps`,
-  /// `_isAliasOfConnected`) between choosing candidates and registering the
+  /// `_resolveEndpoint`) between choosing candidates and registering the
   /// peer, and it runs from three places at once: the constructor's
   /// `load().then(...)`, [connect], and the 3 s timer. Without this set a
   /// second check re-picks an address whose dial is still inside that await
@@ -248,7 +267,10 @@ class RedPandaLightClient implements RedPandaClient {
     bool Function(PeerStats peer)? hopCandidateFilter,
     // Clock for the connection routine's time-based decisions (see [_now]).
     DateTime Function()? now,
+    // DNS resolution for the alias dedup (see [_lookup]).
+    Future<List<InternetAddress>> Function(String host)? lookup,
   }) : _now = now ?? DateTime.now,
+       _lookup = lookup ?? InternetAddress.lookup,
        _socketFactory =
            socketFactory ??
            // The explicit timeout matters (T27): without one, a dial started
@@ -647,9 +669,14 @@ class RedPandaLightClient implements RedPandaClient {
 
       for (final address in toConnect) {
         try {
-          if (await _isAliasOfConnected(address, connectedIps)) {
+          final resolved = await _resolveEndpoint(address);
+          if (resolved.any(connectedIps.contains)) {
             continue;
           }
+          // Dials of this same cycle count as connected too: on a cold start
+          // nothing is connected yet, and a hostname seed plus its own IP
+          // (defaultSeeds) would otherwise both be dialled.
+          connectedIps.addAll(resolved);
 
           final peer = ActivePeer(
             address: address,
@@ -808,40 +835,30 @@ class RedPandaLightClient implements RedPandaClient {
     // Copy: _peers may be mutated by peer callbacks while we await lookups.
     for (final peer in List.of(_peers.values)) {
       if (!peer.isDisconnected) {
-        try {
-          final parts = peer.address.split(':');
-          final host = parts[0];
-          final lookup = await InternetAddress.lookup(host);
-          for (final addr in lookup) {
-            connectedIps.add('${addr.address}:${parts[1]}');
-          }
-        } catch (e) {
-          // Ignore lookup errors
-        }
+        connectedIps.addAll(await _resolveEndpoint(peer.address));
       }
     }
     return connectedIps;
   }
 
-  Future<bool> _isAliasOfConnected(
-    String address,
-    Set<String> connectedIps,
-  ) async {
+  /// The `ip:port` endpoints [address] (`host:port`) resolves to. IP literals
+  /// skip DNS (TD260). A failed or timed-out lookup yields an empty set: the
+  /// address is then not recognised as an alias and simply dialled, where
+  /// the same failure ends in the regular backoff.
+  Future<Set<String>> _resolveEndpoint(String address) async {
+    final parts = address.split(':');
+    if (parts.length != 2) return const {};
+    final host = parts[0];
+    final port = parts[1];
+    final literal = InternetAddress.tryParse(host);
+    if (literal != null) return {'${literal.address}:$port'};
     try {
-      final parts = address.split(':');
-      final host = parts[0];
-      final port = parts[1];
-      final lookup = await InternetAddress.lookup(host);
-
-      for (final addr in lookup) {
-        if (connectedIps.contains('${addr.address}:$port')) {
-          return true;
-        }
-      }
+      final lookup = await _lookup(host).timeout(lookupTimeout);
+      return {for (final addr in lookup) '${addr.address}:$port'};
     } catch (e) {
-      // resolution failed
+      RpLog.debug('RedPandaLightClient: Lookup of $host failed: $e');
+      return const {};
     }
-    return false;
   }
 
   @override
