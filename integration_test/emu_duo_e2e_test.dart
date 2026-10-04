@@ -680,6 +680,18 @@ Future<void> runBob(WidgetTester tester) async {
   final container = containerOf(tester);
   final channelId = (await Channel.fromJson(aliceQr)).id;
   log('joined channel from Alice QR via JoinChannelScreen');
+  // The screen's "Joined channel" snackbar lives on the root
+  // ScaffoldMessenger and outlasts the route: for ~4 s it covers the chat's
+  // send button, and a tap there is silently swallowed (first T140 gate run:
+  // s2-02 never left Bob). Let it run out, as a user would.
+  if (!await pumpUntil(
+    tester,
+    () => find.byType(SnackBar).evaluate().isEmpty,
+    timeout: const Duration(seconds: 20),
+    what: 'join snackbar dismissed',
+  )) {
+    throw StateError('join snackbar never went away');
+  }
 
   // QR v4 carries only the secret; Alice's OH arrives out of band (stands in
   // for the rendezvous DHT) and is attached as the counterpart descriptor.
