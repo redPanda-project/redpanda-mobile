@@ -13,3 +13,7 @@
   ConsumerStatefulWidget). Öffnet Kamera via `MobileScanner`, scannt QR-Code,
   dekodiert JSON zu `Channel`-Objekt, speichert via `channelRepositoryProvider`.
   Navigiert nach Erfolg zurück zur Home-Seite.
+
+* 📄 **channel_status_screen.dart** — `ChannelStatusScreen`: Transparenzseite je Kanal (Hintergrund-Jobs, Loopback-Test).
+
+* 📄 **connection_doctor_screen.dart** — `ConnectionDoctorScreen`: Verbindungs-Doctor mit Diagnose-Stufen (T25).

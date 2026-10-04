@@ -93,6 +93,9 @@ Commit all `map/` files together with your code changes.
 * If you **create, delete, move, or significantly change** a file,
   update the affected `_index.md` and all parents up to root.
 * For a complete regeneration: Delete `map/` and run steps 1–4.
+* Before committing, run `tool/check_repo_map.sh` (also step 0c of
+  `tool/pre_push_validation.sh`): it fails on any map entry, link or
+  backticked path that no longer exists.
 
 ## Format of `_index.md`
 

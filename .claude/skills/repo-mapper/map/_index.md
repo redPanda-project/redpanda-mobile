@@ -1,7 +1,7 @@
 # 📂 RedPanda Mobile
 
 > Dezentrale, verschlüsselte Chat-App (Flutter). Peer-to-Peer-Kommunikation
-> über Kademlia-DHT mit Ende-zu-Ende-Verschlüsselung (ECDH + AES-256).
+> über Kademlia-DHT mit Ende-zu-Ende-Verschlüsselung (X25519/Ed25519 + AES-256-GCM, Double Ratchet).
 
 ## Unterordner
 

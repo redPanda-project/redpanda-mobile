@@ -9,3 +9,9 @@
   zu/von Drift-Modellen, konvertiert Encryption-Keys zu/von Hex.
   Bietet `getChannels()`, `addChannel()`, `watchChannels()`.
   Exponiert `channelRepositoryProvider` und `channelsProvider` (StreamProvider).
+
+* 📄 **group_repository.dart** — `GroupRepository`: Gruppen, Mitglieder, gepufferte Items (MS08).
+
+* 📄 **message_repository.dart** — `MessageRepository`: Nachrichten, Pending-Queries, Retry-Buchhaltung.
+
+* 📄 **outbound_handle_repository.dart** — `OutboundHandleRepository`: eigene OH-Registrierungen je Kanal.

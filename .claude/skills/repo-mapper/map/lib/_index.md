@@ -5,10 +5,11 @@
 
 ## Unterordner
 
+* 📁 **[domain/](domain/_index.md)** — App-Domänenregeln (Nachrichtenrichtung, Status-Lebenszyklus).
 * 📁 **[database/](database/_index.md)** — Drift-ORM-Schema (Users, Channels, Messages, Peers).
-* 📁 **[repositories/](repositories/_index.md)** — Repository-Pattern für Channel-Zugriff.
+* 📁 **[repositories/](repositories/_index.md)** — Repository-Pattern für Channels, Messages, Gruppen, eigene OHs.
 * 📁 **[screens/](screens/_index.md)** — Alle App-Screens (Home, Chat, Channels, Onboarding, Debug).
-* 📁 **[services/](services/_index.md)** — Drift-basierte PeerRepository-Implementierung.
+* 📁 **[services/](services/_index.md)** — Outbox (Send-/Retry-Pfad), Persistenz-Kanal, Gruppen, Foreground-Service, Peer-Repository.
 * 📁 **[shared/](shared/_index.md)** — Provider-Registry und wiederverwendbare Widgets.
 
 ## Dateien

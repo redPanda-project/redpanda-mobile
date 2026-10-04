@@ -154,6 +154,10 @@ fi
 step "0b. vendored protos in sync with redpandaj (T107)"
 "$REPO_ROOT/tool/sync_protos.sh" --check
 
+# The repo-mapper skill map must not point agents at files that are gone (TD100).
+step "0c. repo map has no dead paths (T130)"
+"$REPO_ROOT/tool/check_repo_map.sh"
+
 TREE_BEFORE="$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no)"
 
 # --- Light client package ---------------------------------------------------

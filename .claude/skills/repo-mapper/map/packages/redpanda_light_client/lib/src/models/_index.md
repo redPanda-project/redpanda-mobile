@@ -16,6 +16,10 @@
   Success/Failure-Counts, lastSeen. Scoring-Formel balanciert Latenz,
   Zuverlässigkeit und Zeit-Decay (halbiert nach 24h, 90% nach 1 Woche).
 
-* 📄 **key_pair.dart** — EC-Schlüsselpaar (`KeyPair`) auf brainpoolp256r1.
-  Generierung via `KeyPair.generate()`, Public Key als unkomprimierte Bytes
-  (0x04 + X + Y). Private Key für Signing/ECDH.
+* 📄 **key_pair.dart** — Node-Identität (`KeyPair`, MS03): Dual-Keypair mit
+  strikter Schlüsseltrennung (Ed25519 zum Signieren, X25519 für Key-Agreement),
+  analog zum Backend-`NodeId`.
+
+* 📄 **discovered_peer.dart** — `DiscoveredPeer`: Peer-Eintrag aus dem `SendPeerList`-Austausch (MS04).
+
+* 📄 **peer_stats_snapshot.dart** — `PeerStatsSnapshot`: Momentaufnahme aller bekannten Peers und ihrer Verbindungszustände.

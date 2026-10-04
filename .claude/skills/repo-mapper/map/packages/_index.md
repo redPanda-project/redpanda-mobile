@@ -5,4 +5,4 @@
 ## Unterordner
 
 * 📁 **[redpanda_light_client/](redpanda_light_client/_index.md)** — P2P-Netzwerk-Client
-  mit Kademlia-DHT, ECDH/AES-Verschlüsselung und Protobuf-Protokoll.
+  mit Kademlia-DHT, X25519/AES-256-GCM-Verschlüsselung und Protobuf-Protokoll.

@@ -1,9 +1,8 @@
 # 📂 packages/redpanda_light_client/lib/src/security/
 
-> Verschlüsselungsschicht: ECDH-Schlüsselaustausch und AES-Cipher.
+> Transport-Verschlüsselung der TCP-Verbindungen (Protokoll v23).
 
 ## Dateien
 
-* 📄 **encryption_manager.dart** — Ableitung von AES/CTR-Cipher-Paaren aus
-  ECDH-Shared-Secret und Zufallsbytes (`EncryptionManager`). Separate
-  Send-/Receive-Cipher mit eigenen Keys und IVs. `encrypt()` / `decrypt()`.
+* 📄 **gcm_framed_codec.dart** — `GcmFramedCodec`: framed AES-256-GCM mit Schlüssel
+  je Richtung, abgeleitet aus dem ephemeren X25519-Handshake.
