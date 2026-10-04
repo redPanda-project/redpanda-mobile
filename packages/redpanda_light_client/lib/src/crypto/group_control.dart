@@ -1,62 +1,28 @@
-import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:hex/hex.dart';
+import 'package:protobuf/protobuf.dart' as pb_runtime;
 
 import 'package:redpanda_light_client/src/domain/group_state.dart';
+import 'package:redpanda_light_client/src/generated/client/group_control.pb.dart'
+    as client_pb;
 
-/// Hand-rolled proto3-compatible codecs for the MS08 group control plane —
-/// same rationale as `ChannelMessage`: the committed generated protobuf
-/// files are hand-post-processed and not regenerable here, and these
-/// messages never touch the backend (client-to-client only), so plain
-/// proto3 wire compatibility is all that is required.
+/// Codecs for the MS08 group control plane. These messages never touch the
+/// backend (client-to-client only); the schema is
+/// `protos/client/group_control.proto` (TD098/T142) and the classes below are
+/// hex/nullable views over the generated `client_pb` messages.
 ///
-/// ```
-/// GroupMember {
-///   bytes  member_id   = 1;  // 32 B Ed25519 verify key (= identity)
-///   string display_name = 2;
-///   bytes  oh_id        = 3;  // 20 B group-OH mailbox id
-///   string oh_endpoint  = 4;  // host:port of the OH host
-///   bytes  x25519_pub   = 5;  // 32 B, for sealed controls
-///   uint32 role         = 6;  // 0 = admin, 1 = member
-/// }
+/// Wire compatibility with deployed clients: the encoders set only
+/// non-default fields, because the protobuf-dart runtime writes an explicitly
+/// set default (`display_name = ''` → `12 00`) while the hand-written encoder
+/// this replaced did not. `test/unit/client_protos_roundtrip_test.dart` pins
+/// the bytes.
 ///
-/// GroupControl {
-///   oneof action {
-///     KeyRotation     key_rotation = 1;  // travels sealed (envelope v6)
-///     GroupInfoUpdate info_update  = 2;  // travels as group message (v5)
-///   }
-/// }
-///
-/// KeyRotation {
-///   bytes  group_secret = 1;  // 32 B epoch secret (Decision 3)
-///   uint32 key_epoch    = 2;
-///   repeated GroupMember members = 3;  // full replacement list
-///   string group_name   = 4;
-/// }
-///
-/// GroupInfoUpdate { string name = 1; }
-///
-/// GroupHandshake {                      // 1:1 channel, Decision 8
-///   oneof kind {
-///     InviteProposal proposal = 1;
-///     JoinAccept     accept   = 2;
-///   }
-/// }
-/// InviteProposal {
-///   bytes  group_id        = 1;
-///   string group_name      = 2;
-///   bytes  admin_member_id = 3;  // pinned by the invitee: rotations must be
-///                                // signed by this Ed25519 key
-/// }
-/// JoinAccept {
-///   bytes  group_id    = 1;
-///   bytes  member_id   = 2;
-///   bytes  x25519_pub  = 3;
-///   bytes  oh_id       = 4;
-///   string oh_endpoint = 5;
-/// }
-/// ```
+/// Decoding leniency against that hand-written decoder (same reasoning as
+/// `RoutingAck.decode`): a known field with the wrong wire type is skipped
+/// like an unknown field, and `uint32` fields (`key_epoch`, `role`) keep only
+/// their low 32 bits. Every structural check (lengths, presence, epoch >= 1)
+/// is still enforced below.
 class GroupControl {
   /// Set for a key rotation (sealed control, envelope v6).
   final KeyRotation? keyRotation;
@@ -68,34 +34,27 @@ class GroupControl {
   const GroupControl.info(GroupInfoUpdate this.infoUpdate) : keyRotation = null;
 
   Uint8List encode() {
-    final out = BytesBuilder();
+    final pb = client_pb.GroupControl();
     final rotation = keyRotation;
-    if (rotation != null) {
-      _Proto.writeBytes(out, 1, rotation.encode());
-    }
+    if (rotation != null) pb.keyRotation = rotation._toProto();
     final info = infoUpdate;
-    if (info != null) {
-      _Proto.writeBytes(out, 2, info.encode());
-    }
-    return out.toBytes();
+    // An empty rename encodes to an empty GroupInfoUpdate, which the original
+    // encoder dropped entirely (leaving no action set, so receivers reject
+    // it). Setting the oneof would put `12 00` on the wire instead.
+    if (info != null && info.name.isNotEmpty) pb.infoUpdate = info._toProto();
+    return pb.writeToBuffer();
   }
 
   factory GroupControl.decode(List<int> bytes) {
-    KeyRotation? rotation;
-    GroupInfoUpdate? info;
-    _Proto.forEachField(bytes, (field, value) {
-      switch (field) {
-        case 1:
-          rotation = KeyRotation.decode(value);
-          break;
-        case 2:
-          info = GroupInfoUpdate.decode(value);
-          break;
-      }
-    });
-    if (rotation != null) return GroupControl.rotation(rotation!);
-    if (info != null) return GroupControl.info(info!);
-    throw const FormatException('GroupControl: no action set');
+    final pb = _parse(bytes, client_pb.GroupControl.fromBuffer, 'GroupControl');
+    switch (pb.whichAction()) {
+      case client_pb.GroupControl_Action.keyRotation:
+        return GroupControl.rotation(KeyRotation._fromProto(pb.keyRotation));
+      case client_pb.GroupControl_Action.infoUpdate:
+        return GroupControl.info(GroupInfoUpdate(name: pb.infoUpdate.name));
+      case client_pb.GroupControl_Action.notSet:
+        throw const FormatException('GroupControl: no action set');
+    }
   }
 }
 
@@ -115,130 +74,70 @@ class KeyRotation {
     required this.groupName,
   });
 
-  Uint8List encode() {
-    final out = BytesBuilder();
-    _Proto.writeBytes(out, 1, groupSecret);
-    _Proto.writeVarintField(out, 2, keyEpoch);
-    for (final member in members) {
-      _Proto.writeBytes(out, 3, _encodeMember(member));
-    }
-    _Proto.writeString(out, 4, groupName);
-    return out.toBytes();
+  /// Encodes the bare rotation (without the GroupControl wrapper).
+  Uint8List encode() => _toProto().writeToBuffer();
+
+  client_pb.KeyRotation _toProto() {
+    final pb = client_pb.KeyRotation(members: members.map(_memberToProto));
+    if (groupSecret.isNotEmpty) pb.groupSecret = groupSecret;
+    if (keyEpoch != 0) pb.keyEpoch = keyEpoch;
+    if (groupName.isNotEmpty) pb.groupName = groupName;
+    return pb;
   }
 
-  factory KeyRotation.decode(List<int> bytes) {
-    Uint8List? secret;
-    var epoch = 0;
-    final members = <GroupMemberInfo>[];
-    var name = '';
-    _Proto.forEachField(
-      bytes,
-      (field, value) {
-        switch (field) {
-          case 1:
-            secret = value;
-            break;
-          case 3:
-            members.add(_decodeMember(value));
-            break;
-          case 4:
-            name = utf8.decode(value);
-            break;
-        }
-      },
-      onVarint: (field, value) {
-        if (field == 2) epoch = value;
-      },
-    );
-    if (secret == null || secret!.length != 32) {
+  factory KeyRotation.decode(List<int> bytes) => KeyRotation._fromProto(
+    _parse(bytes, client_pb.KeyRotation.fromBuffer, 'KeyRotation'),
+  );
+
+  factory KeyRotation._fromProto(client_pb.KeyRotation pb) {
+    if (pb.groupSecret.length != 32) {
       throw const FormatException('KeyRotation: missing or malformed secret');
     }
-    if (epoch < 1) {
+    if (pb.keyEpoch < 1) {
       throw const FormatException('KeyRotation: epoch must be >= 1');
     }
     return KeyRotation(
-      groupSecret: secret!,
-      keyEpoch: epoch,
-      members: members,
-      groupName: name,
+      groupSecret: Uint8List.fromList(pb.groupSecret),
+      keyEpoch: pb.keyEpoch,
+      members: [for (final m in pb.members) _memberFromProto(m)],
+      groupName: pb.groupName,
     );
   }
 
-  static Uint8List _encodeMember(GroupMemberInfo member) {
-    final out = BytesBuilder();
-    _Proto.writeBytes(
-      out,
-      1,
-      Uint8List.fromList(HEX.decode(member.memberIdHex)),
-    );
-    _Proto.writeString(out, 2, member.displayName);
+  static client_pb.GroupMember _memberToProto(GroupMemberInfo member) {
+    final pb = client_pb.GroupMember();
+    final memberId = HEX.decode(member.memberIdHex);
+    if (memberId.isNotEmpty) pb.memberId = memberId;
+    if (member.displayName.isNotEmpty) pb.displayName = member.displayName;
     final ohId = member.ohId;
-    if (ohId != null) {
-      _Proto.writeBytes(out, 3, Uint8List.fromList(ohId));
-    }
+    if (ohId != null && ohId.isNotEmpty) pb.ohId = ohId;
     final endpoint = member.ohEndpoint;
-    if (endpoint != null) {
-      _Proto.writeString(out, 4, endpoint);
-    }
-    _Proto.writeBytes(
-      out,
-      5,
-      Uint8List.fromList(HEX.decode(member.x25519PubHex)),
-    );
-    _Proto.writeVarintField(out, 6, member.role);
-    return out.toBytes();
+    if (endpoint != null && endpoint.isNotEmpty) pb.ohEndpoint = endpoint;
+    final x25519Pub = HEX.decode(member.x25519PubHex);
+    if (x25519Pub.isNotEmpty) pb.x25519Pub = x25519Pub;
+    // proto3: an omitted varint is 0 — and 0 is roleAdmin (master spec MS08
+    // protobuf sketch), so exactly the admin's role byte is omitted.
+    if (member.role != 0) pb.role = member.role;
+    return pb;
   }
 
-  static GroupMemberInfo _decodeMember(List<int> bytes) {
-    Uint8List? memberId;
-    var displayName = '';
-    Uint8List? ohId;
-    String? endpoint;
-    Uint8List? x25519Pub;
-    // proto3: an omitted varint is 0 — and 0 is roleAdmin (master spec MS08
-    // protobuf sketch). Our encoder omits exactly the admin's role byte.
-    var role = GroupMemberInfo.roleAdmin;
-    _Proto.forEachField(
-      bytes,
-      (field, value) {
-        switch (field) {
-          case 1:
-            memberId = value;
-            break;
-          case 2:
-            displayName = utf8.decode(value);
-            break;
-          case 3:
-            ohId = value;
-            break;
-          case 4:
-            endpoint = utf8.decode(value);
-            break;
-          case 5:
-            x25519Pub = value;
-            break;
-        }
-      },
-      onVarint: (field, value) {
-        if (field == 6) role = value;
-      },
-    );
-    if (memberId == null || memberId!.length != 32) {
+  static GroupMemberInfo _memberFromProto(client_pb.GroupMember pb) {
+    if (pb.memberId.length != 32) {
       throw const FormatException('GroupMember: malformed member_id');
     }
-    if (x25519Pub == null || x25519Pub!.length != 32) {
+    if (pb.x25519Pub.length != 32) {
       throw const FormatException('GroupMember: malformed x25519_pub');
     }
-    if (ohId != null && ohId!.length != 20) {
+    if (pb.hasOhId() && pb.ohId.length != 20) {
       throw const FormatException('GroupMember: malformed oh_id');
     }
     return GroupMemberInfo(
-      memberIdHex: HEX.encode(memberId!),
-      displayName: displayName,
-      ohId: ohId?.toList(),
-      ohEndpoint: endpoint,
-      x25519PubHex: HEX.encode(x25519Pub!),
-      role: role,
+      memberIdHex: HEX.encode(pb.memberId),
+      displayName: pb.displayName,
+      ohId: pb.hasOhId() ? List<int>.of(pb.ohId) : null,
+      ohEndpoint: pb.hasOhEndpoint() ? pb.ohEndpoint : null,
+      x25519PubHex: HEX.encode(pb.x25519Pub),
+      role: pb.role,
     );
   }
 }
@@ -249,19 +148,21 @@ class GroupInfoUpdate {
 
   const GroupInfoUpdate({required this.name});
 
-  Uint8List encode() {
-    final out = BytesBuilder();
-    _Proto.writeString(out, 1, name);
-    return out.toBytes();
+  Uint8List encode() => _toProto().writeToBuffer();
+
+  client_pb.GroupInfoUpdate _toProto() {
+    final pb = client_pb.GroupInfoUpdate();
+    if (name.isNotEmpty) pb.name = name;
+    return pb;
   }
 
-  factory GroupInfoUpdate.decode(List<int> bytes) {
-    var name = '';
-    _Proto.forEachField(bytes, (field, value) {
-      if (field == 1) name = utf8.decode(value);
-    });
-    return GroupInfoUpdate(name: name);
-  }
+  factory GroupInfoUpdate.decode(List<int> bytes) => GroupInfoUpdate(
+    name: _parse(
+      bytes,
+      client_pb.GroupInfoUpdate.fromBuffer,
+      'GroupInfoUpdate',
+    ).name,
+  );
 }
 
 /// The two-way join handshake over an existing 1:1 channel (Decision 8),
@@ -310,224 +211,88 @@ class GroupHandshake {
   bool get isProposal => proposalGroupIdHex != null;
 
   Uint8List encode() {
-    final out = BytesBuilder();
+    final pb = client_pb.GroupHandshake();
     if (isProposal) {
-      final proposal = BytesBuilder();
-      _Proto.writeBytes(
-        proposal,
-        1,
-        Uint8List.fromList(HEX.decode(proposalGroupIdHex!)),
-      );
-      _Proto.writeString(proposal, 2, proposalGroupName ?? '');
-      _Proto.writeBytes(
-        proposal,
-        3,
-        Uint8List.fromList(HEX.decode(proposalAdminMemberIdHex!)),
-      );
-      _Proto.writeBytes(out, 1, proposal.toBytes());
+      final groupId = HEX.decode(proposalGroupIdHex!);
+      final name = proposalGroupName ?? '';
+      final adminMemberId = HEX.decode(proposalAdminMemberIdHex!);
+      final proposal = client_pb.InviteProposal();
+      if (groupId.isNotEmpty) proposal.groupId = groupId;
+      if (name.isNotEmpty) proposal.groupName = name;
+      if (adminMemberId.isNotEmpty) proposal.adminMemberId = adminMemberId;
+      pb.proposal = proposal;
     } else {
-      final accept = BytesBuilder();
-      _Proto.writeBytes(
-        accept,
-        1,
-        Uint8List.fromList(HEX.decode(acceptGroupIdHex!)),
-      );
-      _Proto.writeBytes(
-        accept,
-        2,
-        Uint8List.fromList(HEX.decode(acceptMemberIdHex!)),
-      );
-      _Proto.writeBytes(
-        accept,
-        3,
-        Uint8List.fromList(HEX.decode(acceptX25519PubHex!)),
-      );
-      _Proto.writeBytes(accept, 4, Uint8List.fromList(acceptOhId!));
-      _Proto.writeString(accept, 5, acceptOhEndpoint!);
-      _Proto.writeBytes(out, 2, accept.toBytes());
+      final groupId = HEX.decode(acceptGroupIdHex!);
+      final memberId = HEX.decode(acceptMemberIdHex!);
+      final x25519Pub = HEX.decode(acceptX25519PubHex!);
+      final ohId = acceptOhId!;
+      final endpoint = acceptOhEndpoint!;
+      final accept = client_pb.JoinAccept();
+      if (groupId.isNotEmpty) accept.groupId = groupId;
+      if (memberId.isNotEmpty) accept.memberId = memberId;
+      if (x25519Pub.isNotEmpty) accept.x25519Pub = x25519Pub;
+      if (ohId.isNotEmpty) accept.ohId = ohId;
+      if (endpoint.isNotEmpty) accept.ohEndpoint = endpoint;
+      pb.accept = accept;
     }
-    return out.toBytes();
+    return pb.writeToBuffer();
   }
 
   factory GroupHandshake.decode(List<int> bytes) {
-    Uint8List? proposalBytes;
-    Uint8List? acceptBytes;
-    _Proto.forEachField(bytes, (field, value) {
-      switch (field) {
-        case 1:
-          proposalBytes = value;
-          break;
-        case 2:
-          acceptBytes = value;
-          break;
-      }
-    });
-
-    if (proposalBytes != null) {
-      Uint8List? groupId;
-      var name = '';
-      Uint8List? adminMemberId;
-      _Proto.forEachField(proposalBytes!, (field, value) {
-        if (field == 1) groupId = value;
-        if (field == 2) name = utf8.decode(value);
-        if (field == 3) adminMemberId = value;
-      });
-      if (groupId == null || groupId!.length != 32) {
-        throw const FormatException('GroupHandshake: malformed group_id');
-      }
-      if (adminMemberId == null || adminMemberId!.length != 32) {
-        throw const FormatException(
-          'GroupHandshake: malformed admin_member_id',
-        );
-      }
-      return GroupHandshake.proposal(
-        groupIdHex: HEX.encode(groupId!),
-        groupName: name,
-        adminMemberIdHex: HEX.encode(adminMemberId!),
-      );
-    }
-
-    if (acceptBytes != null) {
-      Uint8List? groupId;
-      Uint8List? memberId;
-      Uint8List? x25519Pub;
-      Uint8List? ohId;
-      var endpoint = '';
-      _Proto.forEachField(acceptBytes!, (field, value) {
-        switch (field) {
-          case 1:
-            groupId = value;
-            break;
-          case 2:
-            memberId = value;
-            break;
-          case 3:
-            x25519Pub = value;
-            break;
-          case 4:
-            ohId = value;
-            break;
-          case 5:
-            endpoint = utf8.decode(value);
-            break;
+    final pb = _parse(
+      bytes,
+      client_pb.GroupHandshake.fromBuffer,
+      'GroupHandshake',
+    );
+    switch (pb.whichKind()) {
+      case client_pb.GroupHandshake_Kind.proposal:
+        final proposal = pb.proposal;
+        if (proposal.groupId.length != 32) {
+          throw const FormatException('GroupHandshake: malformed group_id');
         }
-      });
-      if (groupId == null || groupId!.length != 32) {
-        throw const FormatException('GroupHandshake: malformed group_id');
-      }
-      if (memberId == null || memberId!.length != 32) {
-        throw const FormatException('GroupHandshake: malformed member_id');
-      }
-      if (x25519Pub == null || x25519Pub!.length != 32) {
-        throw const FormatException('GroupHandshake: malformed x25519_pub');
-      }
-      if (ohId == null || ohId!.length != 20) {
-        throw const FormatException('GroupHandshake: malformed oh_id');
-      }
-      return GroupHandshake.accept(
-        groupIdHex: HEX.encode(groupId!),
-        memberIdHex: HEX.encode(memberId!),
-        x25519PubHex: HEX.encode(x25519Pub!),
-        ohId: ohId!.toList(),
-        ohEndpoint: endpoint,
-      );
+        if (proposal.adminMemberId.length != 32) {
+          throw const FormatException(
+            'GroupHandshake: malformed admin_member_id',
+          );
+        }
+        return GroupHandshake.proposal(
+          groupIdHex: HEX.encode(proposal.groupId),
+          groupName: proposal.groupName,
+          adminMemberIdHex: HEX.encode(proposal.adminMemberId),
+        );
+      case client_pb.GroupHandshake_Kind.accept:
+        final accept = pb.accept;
+        if (accept.groupId.length != 32) {
+          throw const FormatException('GroupHandshake: malformed group_id');
+        }
+        if (accept.memberId.length != 32) {
+          throw const FormatException('GroupHandshake: malformed member_id');
+        }
+        if (accept.x25519Pub.length != 32) {
+          throw const FormatException('GroupHandshake: malformed x25519_pub');
+        }
+        if (accept.ohId.length != 20) {
+          throw const FormatException('GroupHandshake: malformed oh_id');
+        }
+        return GroupHandshake.accept(
+          groupIdHex: HEX.encode(accept.groupId),
+          memberIdHex: HEX.encode(accept.memberId),
+          x25519PubHex: HEX.encode(accept.x25519Pub),
+          ohId: List<int>.of(accept.ohId),
+          ohEndpoint: accept.ohEndpoint,
+        );
+      case client_pb.GroupHandshake_Kind.notSet:
+        throw const FormatException('GroupHandshake: no kind set');
     }
-
-    throw const FormatException('GroupHandshake: no kind set');
   }
 }
 
-/// Minimal proto3 wire helpers shared by the codecs above. Length-delimited
-/// fields are dispatched through [forEachField]; varint fields through its
-/// optional `onVarint` callback. Unknown fields are skipped.
-class _Proto {
-  _Proto._();
-
-  static void writeVarint(BytesBuilder out, int value) {
-    var v = value;
-    while (true) {
-      final byte = v & 0x7F;
-      v = v >>> 7;
-      if (v == 0) {
-        out.addByte(byte);
-        break;
-      }
-      out.addByte(byte | 0x80);
-    }
-  }
-
-  static void writeVarintField(BytesBuilder out, int field, int value) {
-    if (value == 0) return;
-    writeVarint(out, (field << 3) | 0);
-    writeVarint(out, value);
-  }
-
-  static void writeBytes(BytesBuilder out, int field, Uint8List value) {
-    if (value.isEmpty) return;
-    writeVarint(out, (field << 3) | 2);
-    writeVarint(out, value.length);
-    out.add(value);
-  }
-
-  static void writeString(BytesBuilder out, int field, String value) {
-    writeBytes(out, field, Uint8List.fromList(utf8.encode(value)));
-  }
-
-  static void forEachField(
-    List<int> bytes,
-    void Function(int field, Uint8List value) onBytes, {
-    void Function(int field, int value)? onVarint,
-  }) {
-    final data = Uint8List.fromList(bytes);
-    var offset = 0;
-
-    int readVarint() {
-      var result = 0;
-      var shift = 0;
-      while (true) {
-        if (offset >= data.length) {
-          throw const FormatException('group proto: truncated varint');
-        }
-        final b = data[offset++];
-        result |= (b & 0x7F) << shift;
-        if ((b & 0x80) == 0) break;
-        shift += 7;
-        if (shift > 63) {
-          throw const FormatException('group proto: varint too long');
-        }
-      }
-      return result;
-    }
-
-    while (offset < data.length) {
-      final tag = readVarint();
-      final field = tag >> 3;
-      final wireType = tag & 0x7;
-      switch (wireType) {
-        case 0:
-          final value = readVarint();
-          onVarint?.call(field, value);
-          break;
-        case 2:
-          final len = readVarint();
-          if (offset + len > data.length) {
-            throw const FormatException('group proto: truncated field');
-          }
-          onBytes(field, Uint8List.sublistView(data, offset, offset + len));
-          offset += len;
-          break;
-        case 1:
-          offset += 8;
-          break;
-        case 5:
-          offset += 4;
-          break;
-        default:
-          throw FormatException('group proto: unknown wire type $wireType');
-      }
-      if (offset > data.length) {
-        throw const FormatException('group proto: truncated field');
-      }
-    }
+/// Parses [bytes] with [fromBuffer], mapping protobuf errors to
+/// [FormatException] as the callers expect.
+T _parse<T>(List<int> bytes, T Function(List<int>) fromBuffer, String what) {
+  try {
+    return fromBuffer(bytes);
+  } on pb_runtime.InvalidProtocolBufferException catch (e) {
+    throw FormatException('$what: ${e.message}');
   }
 }

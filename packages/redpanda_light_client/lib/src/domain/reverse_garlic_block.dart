@@ -1,6 +1,10 @@
 import 'dart:typed_data';
 
+import 'package:fixnum/fixnum.dart';
+import 'package:protobuf/protobuf.dart' as pb_runtime;
 import 'package:redpanda_light_client/src/garlic/garlic_builder.dart';
+import 'package:redpanda_light_client/src/generated/client/reverse_garlic_block.pb.dart'
+    as client_pb;
 
 /// A Reverse Garlic Block (MS05): the reply-path descriptor Alice attaches
 /// to an outgoing message so Bob can route a reply to her OH mailbox without
@@ -13,23 +17,12 @@ import 'package:redpanda_light_client/src/garlic/garlic_builder.dart';
 /// reply as a standard MS04 onion over the hops Alice picked, with a
 /// `CMD_DELIVER_TAGGED (0x03)` innermost layer carrying the session tag.
 ///
-/// Wire format: proto3-compatible binary, hand-rolled like
-/// `crypto/channel_message.dart` (the committed generated protobuf files are
-/// hand-maintained and not regenerated). Field layout (Frontend-MS05):
-///
-/// ```
-/// ReverseGarlicBlock {
-///   uint32 version     = 1;  // 1
-///   int64  expiry_ts   = 2;  // Unix ms — Bob must not use the RGB after this
-///   bytes  session_tag = 3;  // 16 random bytes, correlates the reply
-///   bytes  oh_id       = 4;  // 20-byte KademliaId of Alice's OH mailbox
-///   repeated RgbHop hops = 5;
-/// }
-/// RgbHop {
-///   bytes kad_id  = 1;  // 20-byte KademliaId of the relay
-///   bytes enc_pub = 2;  // 32-byte X25519 encryption public key
-/// }
-/// ```
+/// Wire format: `protos/client/reverse_garlic_block.proto` (Frontend-MS05,
+/// TD098/T142); this class is a validated view over the generated
+/// `client_pb.ReverseGarlicBlock`. `version` and `expiry_ts` have explicit
+/// presence there because the original hand-written encoder always wrote
+/// them, even as 0 — the bytes must stay identical for deployed clients
+/// (`test/unit/client_protos_roundtrip_test.dart` pins them).
 ///
 /// The serialized block travels channel-encrypted inside the
 /// `ChannelMessage.reply_path` field — only the channel partner reads it.
@@ -92,213 +85,57 @@ class ReverseGarlicBlock {
   /// Lowercase hex of [sessionTag] (lookup key of the session tag store).
   String get sessionTagHex => _hexEncode(sessionTag);
 
-  /// Encodes this block to its proto3-compatible binary representation.
-  Uint8List serialize() {
-    final out = BytesBuilder();
+  /// Encodes this block to its proto3 binary representation.
+  Uint8List serialize() => client_pb.ReverseGarlicBlock(
+    version: version,
+    expiryTs: Int64(expiryTs),
+    sessionTag: sessionTag,
+    ohId: ohId,
+    hops: [
+      for (final hop in hops)
+        client_pb.RgbHop(kadId: hop.nodeId, encPub: hop.encryptionPublicKey),
+    ],
+  ).writeToBuffer();
 
-    // field 1: version (varint)
-    out.addByte(0x08); // (1 << 3) | 0
-    _writeVarint(out, version);
-
-    // field 2: expiry_ts (varint, proto3 int64; always non-negative here)
-    out.addByte(0x10); // (2 << 3) | 0
-    _writeVarint(out, expiryTs);
-
-    // field 3: session_tag (length-delimited)
-    out.addByte(0x1A); // (3 << 3) | 2
-    _writeVarint(out, sessionTag.length);
-    out.add(sessionTag);
-
-    // field 4: oh_id (length-delimited)
-    out.addByte(0x22); // (4 << 3) | 2
-    _writeVarint(out, ohId.length);
-    out.add(ohId);
-
-    // field 5: hops (repeated embedded message)
-    for (final hop in hops) {
-      final hopBytes = BytesBuilder()
-        ..addByte(0x0A) // RgbHop field 1: kad_id
-        ..addByte(hop.nodeId.length)
-        ..add(hop.nodeId)
-        ..addByte(0x12) // RgbHop field 2: enc_pub
-        ..addByte(hop.encryptionPublicKey.length)
-        ..add(hop.encryptionPublicKey);
-      out.addByte(0x2A); // (5 << 3) | 2
-      _writeVarint(out, hopBytes.length);
-      out.add(hopBytes.toBytes());
-    }
-
-    return out.toBytes();
-  }
-
-  /// Decodes a block from its proto3-compatible binary form.
+  /// Decodes a block from its proto3 binary form.
   ///
   /// Unknown fields are skipped (forward compatibility). Throws
   /// [FormatException] on truncated or malformed input, an unsupported
-  /// version or invalid field lengths.
+  /// version or invalid field lengths. A known field with the wrong wire type
+  /// is skipped like an unknown one (protobuf runtime behaviour) and then
+  /// fails the presence/length validation below.
   factory ReverseGarlicBlock.deserialize(List<int> bytes) {
-    final reader = _ProtoReader(Uint8List.fromList(bytes));
-
-    var version = 0;
-    var expiryTs = 0;
-    Uint8List? sessionTag;
-    Uint8List? ohId;
-    final hops = <GarlicHop>[];
-
-    while (!reader.isDone) {
-      final tag = reader.readVarint();
-      final fieldNumber = tag >> 3;
-      final wireType = tag & 0x7;
-      switch (fieldNumber) {
-        case 1:
-          reader.expectWireType(wireType, 0, 'version');
-          version = reader.readVarint();
-          break;
-        case 2:
-          reader.expectWireType(wireType, 0, 'expiry_ts');
-          expiryTs = reader.readVarint();
-          break;
-        case 3:
-          reader.expectWireType(wireType, 2, 'session_tag');
-          sessionTag = reader.readBytes();
-          break;
-        case 4:
-          reader.expectWireType(wireType, 2, 'oh_id');
-          ohId = reader.readBytes();
-          break;
-        case 5:
-          reader.expectWireType(wireType, 2, 'hops');
-          hops.add(_readHop(_ProtoReader(reader.readBytes())));
-          break;
-        default:
-          reader.skipField(wireType);
-          break;
-      }
+    final client_pb.ReverseGarlicBlock pb;
+    try {
+      pb = client_pb.ReverseGarlicBlock.fromBuffer(bytes);
+    } on pb_runtime.InvalidProtocolBufferException catch (e) {
+      throw FormatException('ReverseGarlicBlock: ${e.message}');
     }
-
-    if (sessionTag == null || ohId == null) {
+    if (!pb.hasSessionTag() || !pb.hasOhId()) {
       throw const FormatException(
         'ReverseGarlicBlock: missing session_tag or oh_id',
       );
     }
     return ReverseGarlicBlock(
-      version: version,
-      expiryTs: expiryTs,
-      sessionTag: sessionTag,
-      ohId: ohId,
-      hops: hops,
+      version: pb.version,
+      expiryTs: pb.expiryTs.toInt(),
+      sessionTag: pb.sessionTag,
+      ohId: pb.ohId,
+      hops: [for (final hop in pb.hops) _toHop(hop)],
     );
   }
 
-  static GarlicHop _readHop(_ProtoReader reader) {
-    Uint8List? kadId;
-    Uint8List? encPub;
-    while (!reader.isDone) {
-      final tag = reader.readVarint();
-      final fieldNumber = tag >> 3;
-      final wireType = tag & 0x7;
-      switch (fieldNumber) {
-        case 1:
-          reader.expectWireType(wireType, 2, 'hop kad_id');
-          kadId = reader.readBytes();
-          break;
-        case 2:
-          reader.expectWireType(wireType, 2, 'hop enc_pub');
-          encPub = reader.readBytes();
-          break;
-        default:
-          reader.skipField(wireType);
-          break;
-      }
-    }
-    if (kadId == null || encPub == null) {
+  static GarlicHop _toHop(client_pb.RgbHop hop) {
+    if (!hop.hasKadId() || !hop.hasEncPub()) {
       throw const FormatException('ReverseGarlicBlock: incomplete hop');
     }
     try {
-      return GarlicHop(nodeId: kadId, encryptionPublicKey: encPub);
+      return GarlicHop(nodeId: hop.kadId, encryptionPublicKey: hop.encPub);
     } on ArgumentError catch (e) {
       throw FormatException('ReverseGarlicBlock: invalid hop: ${e.message}');
     }
   }
 
-  static void _writeVarint(BytesBuilder out, int value) {
-    var v = value;
-    while (true) {
-      final byte = v & 0x7F;
-      v = v >>> 7;
-      if (v == 0) {
-        out.addByte(byte);
-        break;
-      }
-      out.addByte(byte | 0x80);
-    }
-  }
-
   static String _hexEncode(List<int> bytes) =>
       bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-}
-
-/// Minimal proto3 wire-format reader for [ReverseGarlicBlock.deserialize].
-class _ProtoReader {
-  final Uint8List _data;
-  int _offset = 0;
-
-  _ProtoReader(this._data);
-
-  bool get isDone => _offset >= _data.length;
-
-  int readVarint() {
-    var result = 0;
-    var shift = 0;
-    while (true) {
-      if (_offset >= _data.length) {
-        throw const FormatException('ReverseGarlicBlock: truncated varint');
-      }
-      final b = _data[_offset++];
-      result |= (b & 0x7F) << shift;
-      if ((b & 0x80) == 0) break;
-      shift += 7;
-      if (shift > 63) {
-        throw const FormatException('ReverseGarlicBlock: varint too long');
-      }
-    }
-    return result;
-  }
-
-  Uint8List readBytes() {
-    final len = readVarint();
-    if (_offset + len > _data.length) {
-      throw const FormatException('ReverseGarlicBlock: truncated bytes field');
-    }
-    final view = Uint8List.fromList(_data.sublist(_offset, _offset + len));
-    _offset += len;
-    return view;
-  }
-
-  void expectWireType(int actual, int expected, String field) {
-    if (actual != expected) {
-      throw FormatException('ReverseGarlicBlock: bad wire type for $field');
-    }
-  }
-
-  void skipField(int wireType) {
-    switch (wireType) {
-      case 0:
-        readVarint();
-        break;
-      case 1:
-        _offset += 8;
-        break;
-      case 2:
-        readBytes();
-        break;
-      case 5:
-        _offset += 4;
-        break;
-      default:
-        throw FormatException(
-          'ReverseGarlicBlock: unknown wire type $wireType',
-        );
-    }
-  }
 }
