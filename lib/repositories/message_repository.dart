@@ -12,7 +12,7 @@ export 'package:redpanda/domain/message_lifecycle.dart'
     show MessageStatus, MessageLifecycle;
 
 // T114: direction is a property of the message, not something the UI derives
-// from senderId/status. Re-exported here for the same reason as the status.
+// from the former sender id/status. Re-exported here for the same reason as the status.
 export 'package:redpanda/domain/message_direction.dart' show MessageDirection;
 
 /// Data access for chat messages: pending-send queries, retry bookkeeping
@@ -26,7 +26,6 @@ class MessageRepository {
   /// Returns the database row id.
   Future<int> insertOutgoing({
     required String conversationId,
-    required String senderId,
     required String content,
     String? messageId,
   }) {
@@ -35,7 +34,6 @@ class MessageRepository {
         .insert(
           MessagesCompanion.insert(
             conversationId: conversationId,
-            senderId: senderId,
             content: content,
             timestamp: DateTime.now(),
             status: MessageStatus.pending,
@@ -61,7 +59,6 @@ class MessageRepository {
   Future<bool> insertIncomingIfNew({
     required String messageId,
     required String conversationId,
-    required String senderId,
     required String content,
     required DateTime timestamp,
     String? senderMemberId,
@@ -80,7 +77,6 @@ class MessageRepository {
           .insert(
             MessagesCompanion.insert(
               conversationId: conversationId,
-              senderId: senderId,
               content: content,
               timestamp: timestamp,
               status: MessageStatus.received,
@@ -89,7 +85,8 @@ class MessageRepository {
               // Store NULL (not empty string) for empty ids so the unique
               // index never groups malformed items together.
               messageId: drift.Value(messageId.isEmpty ? null : messageId),
-              // MS08: authenticated sender attribution for group messages.
+              // MS08: authenticated sender attribution for group messages;
+              // null means the 1:1 counterpart (T143, see Messages).
               senderMemberId: drift.Value(senderMemberId),
             ),
             mode: drift.InsertMode.insertOrIgnore,

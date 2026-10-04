@@ -1198,17 +1198,6 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
       'REFERENCES channels (uuid)',
     ),
   );
-  static const VerificationMeta _senderIdMeta = const VerificationMeta(
-    'senderId',
-  );
-  @override
-  late final GeneratedColumn<String> senderId = GeneratedColumn<String>(
-    'sender_id',
-    aliasedName,
-    false,
-    type: DriftSqlType.string,
-    requiredDuringInsert: true,
-  );
   static const VerificationMeta _contentMeta = const VerificationMeta(
     'content',
   );
@@ -1310,7 +1299,6 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
   List<GeneratedColumn> get $columns => [
     id,
     conversationId,
-    senderId,
     content,
     timestamp,
     status,
@@ -1346,14 +1334,6 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
       );
     } else if (isInserting) {
       context.missing(_conversationIdMeta);
-    }
-    if (data.containsKey('sender_id')) {
-      context.handle(
-        _senderIdMeta,
-        senderId.isAcceptableOrUnknown(data['sender_id']!, _senderIdMeta),
-      );
-    } else if (isInserting) {
-      context.missing(_senderIdMeta);
     }
     if (data.containsKey('content')) {
       context.handle(
@@ -1440,10 +1420,6 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
         DriftSqlType.string,
         data['${effectivePrefix}conversation_id'],
       )!,
-      senderId: attachedDatabase.typeMapping.read(
-        DriftSqlType.string,
-        data['${effectivePrefix}sender_id'],
-      )!,
       content: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}content'],
@@ -1492,7 +1468,6 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
 class Message extends DataClass implements Insertable<Message> {
   final int id;
   final String conversationId;
-  final String senderId;
   final String content;
   final DateTime timestamp;
   final int status;
@@ -1505,7 +1480,6 @@ class Message extends DataClass implements Insertable<Message> {
   const Message({
     required this.id,
     required this.conversationId,
-    required this.senderId,
     required this.content,
     required this.timestamp,
     required this.status,
@@ -1521,7 +1495,6 @@ class Message extends DataClass implements Insertable<Message> {
     final map = <String, Expression>{};
     map['id'] = Variable<int>(id);
     map['conversation_id'] = Variable<String>(conversationId);
-    map['sender_id'] = Variable<String>(senderId);
     map['content'] = Variable<String>(content);
     map['timestamp'] = Variable<DateTime>(timestamp);
     map['status'] = Variable<int>(status);
@@ -1544,7 +1517,6 @@ class Message extends DataClass implements Insertable<Message> {
     return MessagesCompanion(
       id: Value(id),
       conversationId: Value(conversationId),
-      senderId: Value(senderId),
       content: Value(content),
       timestamp: Value(timestamp),
       status: Value(status),
@@ -1571,7 +1543,6 @@ class Message extends DataClass implements Insertable<Message> {
     return Message(
       id: serializer.fromJson<int>(json['id']),
       conversationId: serializer.fromJson<String>(json['conversationId']),
-      senderId: serializer.fromJson<String>(json['senderId']),
       content: serializer.fromJson<String>(json['content']),
       timestamp: serializer.fromJson<DateTime>(json['timestamp']),
       status: serializer.fromJson<int>(json['status']),
@@ -1589,7 +1560,6 @@ class Message extends DataClass implements Insertable<Message> {
     return <String, dynamic>{
       'id': serializer.toJson<int>(id),
       'conversationId': serializer.toJson<String>(conversationId),
-      'senderId': serializer.toJson<String>(senderId),
       'content': serializer.toJson<String>(content),
       'timestamp': serializer.toJson<DateTime>(timestamp),
       'status': serializer.toJson<int>(status),
@@ -1605,7 +1575,6 @@ class Message extends DataClass implements Insertable<Message> {
   Message copyWith({
     int? id,
     String? conversationId,
-    String? senderId,
     String? content,
     DateTime? timestamp,
     int? status,
@@ -1618,7 +1587,6 @@ class Message extends DataClass implements Insertable<Message> {
   }) => Message(
     id: id ?? this.id,
     conversationId: conversationId ?? this.conversationId,
-    senderId: senderId ?? this.senderId,
     content: content ?? this.content,
     timestamp: timestamp ?? this.timestamp,
     status: status ?? this.status,
@@ -1637,7 +1605,6 @@ class Message extends DataClass implements Insertable<Message> {
       conversationId: data.conversationId.present
           ? data.conversationId.value
           : this.conversationId,
-      senderId: data.senderId.present ? data.senderId.value : this.senderId,
       content: data.content.present ? data.content.value : this.content,
       timestamp: data.timestamp.present ? data.timestamp.value : this.timestamp,
       status: data.status.present ? data.status.value : this.status,
@@ -1661,7 +1628,6 @@ class Message extends DataClass implements Insertable<Message> {
     return (StringBuffer('Message(')
           ..write('id: $id, ')
           ..write('conversationId: $conversationId, ')
-          ..write('senderId: $senderId, ')
           ..write('content: $content, ')
           ..write('timestamp: $timestamp, ')
           ..write('status: $status, ')
@@ -1679,7 +1645,6 @@ class Message extends DataClass implements Insertable<Message> {
   int get hashCode => Object.hash(
     id,
     conversationId,
-    senderId,
     content,
     timestamp,
     status,
@@ -1696,7 +1661,6 @@ class Message extends DataClass implements Insertable<Message> {
       (other is Message &&
           other.id == this.id &&
           other.conversationId == this.conversationId &&
-          other.senderId == this.senderId &&
           other.content == this.content &&
           other.timestamp == this.timestamp &&
           other.status == this.status &&
@@ -1711,7 +1675,6 @@ class Message extends DataClass implements Insertable<Message> {
 class MessagesCompanion extends UpdateCompanion<Message> {
   final Value<int> id;
   final Value<String> conversationId;
-  final Value<String> senderId;
   final Value<String> content;
   final Value<DateTime> timestamp;
   final Value<int> status;
@@ -1724,7 +1687,6 @@ class MessagesCompanion extends UpdateCompanion<Message> {
   const MessagesCompanion({
     this.id = const Value.absent(),
     this.conversationId = const Value.absent(),
-    this.senderId = const Value.absent(),
     this.content = const Value.absent(),
     this.timestamp = const Value.absent(),
     this.status = const Value.absent(),
@@ -1738,7 +1700,6 @@ class MessagesCompanion extends UpdateCompanion<Message> {
   MessagesCompanion.insert({
     this.id = const Value.absent(),
     required String conversationId,
-    required String senderId,
     required String content,
     required DateTime timestamp,
     required int status,
@@ -1749,7 +1710,6 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     this.senderMemberId = const Value.absent(),
     this.direction = const Value.absent(),
   }) : conversationId = Value(conversationId),
-       senderId = Value(senderId),
        content = Value(content),
        timestamp = Value(timestamp),
        status = Value(status),
@@ -1757,7 +1717,6 @@ class MessagesCompanion extends UpdateCompanion<Message> {
   static Insertable<Message> custom({
     Expression<int>? id,
     Expression<String>? conversationId,
-    Expression<String>? senderId,
     Expression<String>? content,
     Expression<DateTime>? timestamp,
     Expression<int>? status,
@@ -1771,7 +1730,6 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     return RawValuesInsertable({
       if (id != null) 'id': id,
       if (conversationId != null) 'conversation_id': conversationId,
-      if (senderId != null) 'sender_id': senderId,
       if (content != null) 'content': content,
       if (timestamp != null) 'timestamp': timestamp,
       if (status != null) 'status': status,
@@ -1787,7 +1745,6 @@ class MessagesCompanion extends UpdateCompanion<Message> {
   MessagesCompanion copyWith({
     Value<int>? id,
     Value<String>? conversationId,
-    Value<String>? senderId,
     Value<String>? content,
     Value<DateTime>? timestamp,
     Value<int>? status,
@@ -1801,7 +1758,6 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     return MessagesCompanion(
       id: id ?? this.id,
       conversationId: conversationId ?? this.conversationId,
-      senderId: senderId ?? this.senderId,
       content: content ?? this.content,
       timestamp: timestamp ?? this.timestamp,
       status: status ?? this.status,
@@ -1822,9 +1778,6 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     }
     if (conversationId.present) {
       map['conversation_id'] = Variable<String>(conversationId.value);
-    }
-    if (senderId.present) {
-      map['sender_id'] = Variable<String>(senderId.value);
     }
     if (content.present) {
       map['content'] = Variable<String>(content.value);
@@ -1861,7 +1814,6 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     return (StringBuffer('MessagesCompanion(')
           ..write('id: $id, ')
           ..write('conversationId: $conversationId, ')
-          ..write('senderId: $senderId, ')
           ..write('content: $content, ')
           ..write('timestamp: $timestamp, ')
           ..write('status: $status, ')
@@ -6539,7 +6491,6 @@ typedef $$MessagesTableCreateCompanionBuilder =
     MessagesCompanion Function({
       Value<int> id,
       required String conversationId,
-      required String senderId,
       required String content,
       required DateTime timestamp,
       required int status,
@@ -6554,7 +6505,6 @@ typedef $$MessagesTableUpdateCompanionBuilder =
     MessagesCompanion Function({
       Value<int> id,
       Value<String> conversationId,
-      Value<String> senderId,
       Value<String> content,
       Value<DateTime> timestamp,
       Value<int> status,
@@ -6604,11 +6554,6 @@ class $$MessagesTableFilterComposer
   });
   ColumnFilters<int> get id => $composableBuilder(
     column: $table.id,
-    builder: (column) => ColumnFilters(column),
-  );
-
-  ColumnFilters<String> get senderId => $composableBuilder(
-    column: $table.senderId,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -6695,11 +6640,6 @@ class $$MessagesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
-  ColumnOrderings<String> get senderId => $composableBuilder(
-    column: $table.senderId,
-    builder: (column) => ColumnOrderings(column),
-  );
-
   ColumnOrderings<String> get content => $composableBuilder(
     column: $table.content,
     builder: (column) => ColumnOrderings(column),
@@ -6780,9 +6720,6 @@ class $$MessagesTableAnnotationComposer
   });
   GeneratedColumn<int> get id =>
       $composableBuilder(column: $table.id, builder: (column) => column);
-
-  GeneratedColumn<String> get senderId =>
-      $composableBuilder(column: $table.senderId, builder: (column) => column);
 
   GeneratedColumn<String> get content =>
       $composableBuilder(column: $table.content, builder: (column) => column);
@@ -6871,7 +6808,6 @@ class $$MessagesTableTableManager
               ({
                 Value<int> id = const Value.absent(),
                 Value<String> conversationId = const Value.absent(),
-                Value<String> senderId = const Value.absent(),
                 Value<String> content = const Value.absent(),
                 Value<DateTime> timestamp = const Value.absent(),
                 Value<int> status = const Value.absent(),
@@ -6884,7 +6820,6 @@ class $$MessagesTableTableManager
               }) => MessagesCompanion(
                 id: id,
                 conversationId: conversationId,
-                senderId: senderId,
                 content: content,
                 timestamp: timestamp,
                 status: status,
@@ -6899,7 +6834,6 @@ class $$MessagesTableTableManager
               ({
                 Value<int> id = const Value.absent(),
                 required String conversationId,
-                required String senderId,
                 required String content,
                 required DateTime timestamp,
                 required int status,
@@ -6912,7 +6846,6 @@ class $$MessagesTableTableManager
               }) => MessagesCompanion.insert(
                 id: id,
                 conversationId: conversationId,
-                senderId: senderId,
                 content: content,
                 timestamp: timestamp,
                 status: status,

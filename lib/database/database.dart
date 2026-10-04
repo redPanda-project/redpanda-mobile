@@ -110,7 +110,10 @@ class Messages extends Table {
   IntColumn get id => integer().autoIncrement()();
   TextColumn get conversationId =>
       text().references(Channels, #conversationId)();
-  TextColumn get senderId => text()();
+  // T143 (TD155): there is no `sender_id` any more. It used to carry three
+  // meanings (own user uuid / the conversation id standing in for "them" /
+  // a group member id) and nothing read it after T114. The author of a row is
+  // stated by two facts instead, see [senderMemberId].
   TextColumn get content => text()();
   DateTimeColumn get timestamp => dateTime()();
   IntColumn get status => integer()(); // Enum index
@@ -127,10 +130,17 @@ class Messages extends Table {
 
   // MS08: authenticated sender member id (hex) for incoming group messages;
   // null for 1:1 messages and own outgoing messages.
+  //
+  // T143 (TD155): together with [direction] this IS the author identity —
+  // one meaning per value, no lookup against the conversation needed:
+  //   direction == outgoing                       -> the local user
+  //   direction == incoming, senderMemberId null  -> the 1:1 counterpart
+  //                                                  (the conversation)
+  //   direction == incoming, senderMemberId set   -> that group member
   TextColumn get senderMemberId => text().nullable()();
 
   // T114: which way the message travelled ([MessageDirection]). Explicit
-  // instead of derived from senderId/status — see message_direction.dart.
+  // instead of derived from the former sender_id/status — see message_direction.dart.
   // The default is only for the v17 -> v18 upgrade path; both insert paths
   // in MessageRepository set it.
   IntColumn get direction =>
@@ -304,7 +314,7 @@ class AppDatabase extends _$AppDatabase {
   /// The schema every migration path has to arrive at. A constant so tests
   /// can enumerate the historic versions (`2 .. currentSchemaVersion - 1`)
   /// without an instance (T124).
-  static const int currentSchemaVersion = 18;
+  static const int currentSchemaVersion = 19;
 
   @override
   int get schemaVersion => currentSchemaVersion;
@@ -525,13 +535,42 @@ class AppDatabase extends _$AppDatabase {
           if (from >= 17) {
             await m.addColumn(messages, messages.direction);
           }
-          // Unconditional: after a recreate the table is empty, so this is a
-          // no-op there and the ONE backfill rule stays in one place.
-          await m.database.customStatement(
-            'UPDATE messages SET direction = ${MessageDirection.incoming} '
-            'WHERE status = ${MessageStatus.received} '
-            'OR sender_id = conversation_id',
-          );
+          // Only when `messages` predates the v17 re-creation: below that the
+          // table was just re-created from the CURRENT schema, is empty, and
+          // since v19 no longer has `sender_id` (T143) — the UPDATE would
+          // throw `no such column` and crash-loop every v2..v16 database.
+          if (from >= 17) {
+            await m.database.customStatement(
+              'UPDATE messages SET direction = ${MessageDirection.incoming} '
+              'WHERE status = ${MessageStatus.received} '
+              'OR sender_id = conversation_id',
+            );
+          }
+        }
+        if (from < 19 && to >= 19) {
+          // T143 (TD155): `sender_id` meant three things depending on the row
+          // and is dropped; the author is `direction` + `sender_member_id`
+          // (see the column comment). Backfill rule per conversation type:
+          //   outgoing rows (any type): sender_id was the local user's uuid
+          //     -> nothing to keep, `direction` already says "me".
+          //   incoming 1:1 rows: sender_id was the conversation id
+          //     -> nothing to keep, the conversation IS the counterpart.
+          //   incoming group rows: sender_id was the member id. MS08 has
+          //     always written the same id into sender_member_id as well;
+          //     copy it over for any row where that did not happen, so no
+          //     group author is lost with the column.
+          // Only a `messages` table that predates the v17 re-creation still
+          // has `sender_id` (below that it came from the current schema, see
+          // the v18 step) — hence `from >= 17`, like the v18 backfill.
+          if (from >= 17) {
+            await m.database.customStatement(
+              'UPDATE messages SET sender_member_id = sender_id '
+              'WHERE direction = ${MessageDirection.incoming} '
+              'AND sender_member_id IS NULL '
+              'AND conversation_id IN (SELECT group_id FROM group_channels)',
+            );
+            await m.dropColumn(messages, 'sender_id');
+          }
         }
       },
     );

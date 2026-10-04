@@ -196,11 +196,10 @@ class MessageSyncService {
     await _messages.insertIncomingIfNew(
       messageId: msg.id,
       conversationId: conversationId,
-      // MS08: group messages carry their authenticated sender; 1:1 messages
-      // keep the channel id as sender (the counterpart).
-      senderId: msg.senderMemberIdHex ?? conversationId,
       content: msg.content,
       timestamp: DateTime.fromMillisecondsSinceEpoch(msg.receivedAtMs),
+      // MS08: group messages carry their authenticated sender; null for 1:1
+      // messages, whose author is the counterpart (T143).
       senderMemberId: msg.senderMemberIdHex,
     );
   }

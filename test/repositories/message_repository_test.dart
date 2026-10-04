@@ -22,7 +22,6 @@ void main() {
     test('insertOutgoing stores a pending message', () async {
       final id = await repo.insertOutgoing(
         conversationId: 'channel-1',
-        senderId: 'me',
         content: 'Hello',
       );
 
@@ -39,7 +38,6 @@ void main() {
       () async {
         final id = await repo.insertOutgoing(
           conversationId: 'channel-1',
-          senderId: 'me',
           content: 'Hello',
         );
 
@@ -54,7 +52,6 @@ void main() {
       () async {
         final id = await repo.insertOutgoing(
           conversationId: 'channel-1',
-          senderId: 'me',
           content: 'Hello',
         );
 
@@ -70,14 +67,9 @@ void main() {
     test('watchPendingCount tracks the live pending count', () async {
       expect(await repo.watchPendingCount().first, equals(0));
 
-      await repo.insertOutgoing(
-        conversationId: 'channel-1',
-        senderId: 'me',
-        content: 'one',
-      );
+      await repo.insertOutgoing(conversationId: 'channel-1', content: 'one');
       final id2 = await repo.insertOutgoing(
         conversationId: 'channel-1',
-        senderId: 'me',
         content: 'two',
       );
       expect(await repo.watchPendingCount().first, equals(2));
@@ -91,7 +83,6 @@ void main() {
       () async {
         final id = await repo.insertOutgoing(
           conversationId: 'channel-1',
-          senderId: 'me',
           content: 'Hello',
         );
         await repo.markRetryAttempt(id, penalty: 5);
@@ -110,7 +101,6 @@ void main() {
       Future<int> insertWithStatus(String content, int status) async {
         final id = await repo.insertOutgoing(
           conversationId: 'channel-1',
-          senderId: 'me',
           content: content,
         );
         await repo.updateMessageStatus(id, status);
@@ -123,13 +113,11 @@ void main() {
       await insertWithStatus('failed', MessageStatus.failed);
       final pendingId = await repo.insertOutgoing(
         conversationId: 'channel-1',
-        senderId: 'me',
         content: 'already pending',
       );
       await repo.insertIncomingIfNew(
         messageId: 'in-1',
         conversationId: 'channel-1',
-        senderId: 'channel-1',
         content: 'incoming',
         timestamp: DateTime.now(),
       );
@@ -150,7 +138,6 @@ void main() {
         'candidate later', () async {
       final id = await repo.insertOutgoing(
         conversationId: 'channel-1',
-        senderId: 'me',
         content: 'Hello',
       );
 
@@ -171,7 +158,6 @@ void main() {
       test('re-queues a sent message stuck past the threshold', () async {
         final id = await repo.insertOutgoing(
           conversationId: 'channel-1',
-          senderId: 'me',
           content: 'stuck without an ack tag',
         );
         await repo.markSent(id);
@@ -194,7 +180,6 @@ void main() {
           'backoff tail instead of resending every 3 min forever', () async {
         final id = await repo.insertOutgoing(
           conversationId: 'channel-1',
-          senderId: 'me',
           content: 'stuck without an ack tag',
         );
         await repo.markSent(id);
@@ -232,7 +217,6 @@ void main() {
           'window)', () async {
         final id = await repo.insertOutgoing(
           conversationId: 'channel-1',
-          senderId: 'me',
           content: 'freshly sent',
         );
         await repo.markSent(id);
@@ -247,7 +231,6 @@ void main() {
         Future<int> insertWithStatus(String content, int status) async {
           final id = await repo.insertOutgoing(
             conversationId: 'channel-1',
-            senderId: 'me',
             content: content,
           );
           await (db.update(db.messages)..where((t) => t.id.equals(id))).write(
@@ -266,7 +249,6 @@ void main() {
         await insertWithStatus('failed', MessageStatus.failed);
         final pendingId = await repo.insertOutgoing(
           conversationId: 'channel-1',
-          senderId: 'me',
           content: 'already pending',
         );
 
@@ -281,7 +263,6 @@ void main() {
           '(pre-fix rows / defensive)', () async {
         final id = await repo.insertOutgoing(
           conversationId: 'channel-1',
-          senderId: 'me',
           content: 'sent without a stamp',
         );
         // Simulates a row written before this fix via the generic
@@ -297,7 +278,6 @@ void main() {
       test('respects a custom olderThan threshold', () async {
         final id = await repo.insertOutgoing(
           conversationId: 'channel-1',
-          senderId: 'me',
           content: 'sent 2 minutes ago',
         );
         await repo.markSent(id);
@@ -325,7 +305,6 @@ void main() {
       final inserted = await repo.insertIncomingIfNew(
         messageId: 'abc123',
         conversationId: 'channel-1',
-        senderId: 'channel-1',
         content: 'Hi there',
         timestamp: DateTime(2026, 6, 11),
       );
@@ -338,7 +317,6 @@ void main() {
       await repo.insertIncomingIfNew(
         messageId: 'abc123',
         conversationId: 'channel-1',
-        senderId: 'channel-1',
         content: 'Hi there',
         timestamp: DateTime(2026, 6, 11),
       );
@@ -346,7 +324,6 @@ void main() {
       final insertedAgain = await repo.insertIncomingIfNew(
         messageId: 'abc123',
         conversationId: 'channel-1',
-        senderId: 'channel-1',
         content: 'Hi there (duplicate)',
         timestamp: DateTime(2026, 6, 11),
       );
@@ -363,7 +340,6 @@ void main() {
         await repo.insertIncomingIfNew(
           messageId: 'dup',
           conversationId: 'channel-1',
-          senderId: 'channel-1',
           content: 'first',
           timestamp: DateTime(2026, 6, 11),
         );
@@ -373,7 +349,6 @@ void main() {
         await repo.insertIncomingIfNew(
           messageId: 'dup',
           conversationId: 'channel-1',
-          senderId: 'channel-1',
           content: 'second',
           timestamp: DateTime(2026, 6, 11),
         );
@@ -386,12 +361,10 @@ void main() {
     test('messages without a network id are not affected by dedup', () async {
       await repo.insertOutgoing(
         conversationId: 'channel-1',
-        senderId: 'me',
         content: 'local one',
       );
       await repo.insertOutgoing(
         conversationId: 'channel-1',
-        senderId: 'me',
         content: 'local two',
       );
 
@@ -405,14 +378,12 @@ void main() {
       final a = await repo.insertIncomingIfNew(
         messageId: 'id-aaa',
         conversationId: 'channel-1',
-        senderId: 'channel-1',
         content: 'first message',
         timestamp: DateTime(2026, 6, 11, 10),
       );
       final b = await repo.insertIncomingIfNew(
         messageId: 'id-bbb',
         conversationId: 'channel-1',
-        senderId: 'channel-1',
         content: 'second message',
         timestamp: DateTime(2026, 6, 11, 11),
       );
@@ -431,14 +402,12 @@ void main() {
       final first = await repo.insertIncomingIfNew(
         messageId: 'same-id',
         conversationId: 'channel-1',
-        senderId: 'channel-1',
         content: 'hello',
         timestamp: DateTime(2026, 6, 11),
       );
       final again = await repo.insertIncomingIfNew(
         messageId: 'same-id',
         conversationId: 'channel-1',
-        senderId: 'channel-1',
         content: 'hello',
         timestamp: DateTime(2026, 6, 11),
       );
@@ -454,14 +423,12 @@ void main() {
         final a = await repo.insertIncomingIfNew(
           messageId: 'shared-id',
           conversationId: 'channel-1',
-          senderId: 'channel-1',
           content: 'in c1',
           timestamp: DateTime(2026, 6, 11),
         );
         final b = await repo.insertIncomingIfNew(
           messageId: 'shared-id',
           conversationId: 'channel-2',
-          senderId: 'channel-2',
           content: 'in c2',
           timestamp: DateTime(2026, 6, 11),
         );
@@ -478,14 +445,12 @@ void main() {
       final a = await repo.insertIncomingIfNew(
         messageId: '',
         conversationId: 'channel-1',
-        senderId: 'channel-1',
         content: 'first malformed',
         timestamp: DateTime(2026, 6, 11, 10),
       );
       final b = await repo.insertIncomingIfNew(
         messageId: '',
         conversationId: 'channel-1',
-        senderId: 'channel-1',
         content: 'second malformed',
         timestamp: DateTime(2026, 6, 11, 11),
       );
@@ -500,14 +465,10 @@ void main() {
   });
 
   // T114: the two insert paths ARE the two directions, so each stamps its own.
-  // Nothing downstream may re-derive it from senderId or status.
+  // Nothing downstream may re-derive it from the sender or status.
   group('MessageRepository: direction', () {
     test('insertOutgoing stamps outgoing', () async {
-      await repo.insertOutgoing(
-        conversationId: 'channel-1',
-        senderId: 'me',
-        content: 'Hello',
-      );
+      await repo.insertOutgoing(conversationId: 'channel-1', content: 'Hello');
 
       final row = await db.select(db.messages).getSingle();
       expect(row.direction, equals(MessageDirection.outgoing));
@@ -517,7 +478,6 @@ void main() {
       await repo.insertIncomingIfNew(
         messageId: 'aa' * 8,
         conversationId: 'channel-1',
-        senderId: 'channel-1',
         content: 'Hi',
         timestamp: DateTime.now(),
       );
@@ -532,7 +492,6 @@ void main() {
         await repo.insertIncomingIfNew(
           messageId: 'bb' * 8,
           conversationId: 'group-1',
-          senderId: 'ee' * 32,
           content: 'from a member',
           timestamp: DateTime.now(),
           senderMemberId: 'ee' * 32,
@@ -540,7 +499,7 @@ void main() {
 
         final row = await db.select(db.messages).getSingle();
         expect(row.direction, equals(MessageDirection.incoming));
-        expect(row.senderId, isNot(equals(row.conversationId)));
+        expect(row.senderMemberId, equals('ee' * 32));
       },
     );
   });

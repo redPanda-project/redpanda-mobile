@@ -20,20 +20,14 @@ import '../helpers/test_database.dart';
 class _RecordingOutbox extends OutboxService {
   _RecordingOutbox(super.messages, super.client, super.groups);
 
-  final List<({String conversationId, String senderId, String content})>
-  enqueued = [];
+  final List<({String conversationId, String content})> enqueued = [];
 
   @override
   Future<int> enqueue({
     required String conversationId,
-    required String senderId,
     required String content,
   }) async {
-    enqueued.add((
-      conversationId: conversationId,
-      senderId: senderId,
-      content: content,
-    ));
+    enqueued.add((conversationId: conversationId, content: content));
     return enqueued.length;
   }
 }
@@ -75,7 +69,6 @@ void main() {
         .insert(
           MessagesCompanion.insert(
             conversationId: conversationUuid,
-            senderId: myUuid,
             content: content,
             timestamp: DateTime.now(),
             status: status,
@@ -176,7 +169,6 @@ void main() {
       await MessageRepository(db).insertIncomingIfNew(
         messageId: 'aa' * 8,
         conversationId: conversationUuid,
-        senderId: conversationUuid, // sent by the counterpart
         content: 'their msg',
         timestamp: DateTime.now(),
       );
@@ -193,10 +185,9 @@ void main() {
       await unmount(tester);
     });
 
-    // T114: direction is a stored fact now, not `senderId != conversationId`.
-    // This row is exactly the case the old 1:1 heuristic got wrong — an
-    // incoming message whose sender is NOT the conversation id (which is what
-    // every group message looks like) — and it must still render as theirs.
+    // T114: direction is a stored fact now, not `senderId != conversationId`
+    // (T143 dropped `senderId` altogether). Both rows below carry nothing but
+    // the stored direction, so the side can only come from there.
     testWidgets('the stored direction decides the side, not the sender id', (
       tester,
     ) async {
@@ -205,7 +196,6 @@ void main() {
           .insert(
             MessagesCompanion.insert(
               conversationId: conversationUuid,
-              senderId: 'ee' * 32, // a member id, not the conversation id
               content: 'from a member',
               timestamp: DateTime.now(),
               status: MessageStatus.received,
@@ -213,14 +203,12 @@ void main() {
               direction: const Value(MessageDirection.incoming),
             ),
           );
-      // …and the mirror image: an outgoing row whose sender id happens to be
-      // the conversation id would have rendered as theirs before.
+      // …and the mirror image.
       await db
           .into(db.messages)
           .insert(
             MessagesCompanion.insert(
               conversationId: conversationUuid,
-              senderId: conversationUuid,
               content: 'still mine',
               timestamp: DateTime.now(),
               status: MessageStatus.sent,
@@ -416,7 +404,6 @@ void main() {
 
       expect(outbox.enqueued, hasLength(1));
       expect(outbox.enqueued.single.conversationId, equals(conversationUuid));
-      expect(outbox.enqueued.single.senderId, equals(myUuid));
       expect(outbox.enqueued.single.content, equals('enqueue me'));
       expect(
         client.sentMessages,
@@ -454,11 +441,7 @@ void main() {
       );
       await container
           .read(outboxServiceProvider)
-          .enqueue(
-            conversationId: 'other-channel',
-            senderId: myUuid,
-            content: 'not mine',
-          );
+          .enqueue(conversationId: 'other-channel', content: 'not mine');
       await container.read(outboxServiceProvider).settled;
       await tester.pump();
       await tester.pump();
@@ -480,7 +463,6 @@ void main() {
           .insert(
             MessagesCompanion.insert(
               conversationId: conversationUuid,
-              senderId: myUuid,
               content: 'older pending',
               timestamp: DateTime.now(),
               status: MessageStatus.pending,

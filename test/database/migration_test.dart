@@ -20,8 +20,8 @@ void main() {
       await db.close();
     });
 
-    test('schema version is 18', () {
-      expect(db.schemaVersion, equals(18));
+    test('schema version is 19', () {
+      expect(db.schemaVersion, equals(19));
     });
 
     // T114 renamed the Dart-side names of these columns (peer* → counterpart*,
@@ -64,7 +64,6 @@ void main() {
           .insert(
             MessagesCompanion.insert(
               conversationId: 'c1',
-              senderId: 'c1',
               content: 'in c1',
               timestamp: DateTime.now(),
               status: 0,
@@ -79,7 +78,6 @@ void main() {
           .insert(
             MessagesCompanion.insert(
               conversationId: 'c2',
-              senderId: 'c2',
               content: 'in c2',
               timestamp: DateTime.now(),
               status: 0,
@@ -98,7 +96,6 @@ void main() {
           .insert(
             MessagesCompanion.insert(
               conversationId: 'c1',
-              senderId: 'me',
               content: 'x',
               timestamp: DateTime.now(),
               status: 0,
@@ -123,7 +120,6 @@ void main() {
           .insert(
             MessagesCompanion.insert(
               conversationId: 'c1',
-              senderId: 'me',
               content: 'x',
               timestamp: DateTime.now(),
               status: 0,
@@ -181,8 +177,8 @@ void main() {
         'ALTER TABLE outbound_handles DROP COLUMN last_cursor;',
       );
       await legacy.customStatement(
-        "INSERT INTO messages (conversation_id, sender_id, content, timestamp, status, type) "
-        "VALUES ('c1', 'me', 'old row', 0, 0, 0);",
+        "INSERT INTO messages (conversation_id, content, timestamp, status, type) "
+        "VALUES ('c1', 'old row', 0, 0, 0);",
       );
 
       await legacy.migration.onUpgrade(legacy.createMigrator(), 6, 7);
@@ -225,12 +221,12 @@ void main() {
 
       // The old global index is gone; same id in two channels is now allowed.
       await legacy.customStatement(
-        "INSERT INTO messages (conversation_id, sender_id, content, timestamp, status, type, message_id) "
-        "VALUES ('c1', 'c1', 'a', 0, 0, 0, 'shared');",
+        "INSERT INTO messages (conversation_id, content, timestamp, status, type, message_id) "
+        "VALUES ('c1', 'a', 0, 0, 0, 'shared');",
       );
       await legacy.customStatement(
-        "INSERT INTO messages (conversation_id, sender_id, content, timestamp, status, type, message_id) "
-        "VALUES ('c2', 'c2', 'b', 0, 0, 0, 'shared');",
+        "INSERT INTO messages (conversation_id, content, timestamp, status, type, message_id) "
+        "VALUES ('c2', 'b', 0, 0, 0, 'shared');",
       );
 
       final rows = await legacy.select(legacy.messages).get();
@@ -258,8 +254,8 @@ void main() {
         "VALUES ('old-id', 'Old Channel', '00', 'ff');",
       );
       await legacy.customStatement(
-        "INSERT INTO messages (conversation_id, sender_id, content, timestamp, status, type) "
-        "VALUES ('old-id', 'me', 'old msg', 0, 0, 0);",
+        "INSERT INTO messages (conversation_id, content, timestamp, status, type) "
+        "VALUES ('old-id', 'old msg', 0, 0, 0);",
       );
 
       await legacy.migration.onUpgrade(legacy.createMigrator(), 8, 9);
@@ -298,8 +294,8 @@ void main() {
         "VALUES ('kept-id', 'Kept Channel', '${'aa' * 32}', '${'bb' * 32}');",
       );
       await legacy.customStatement(
-        "INSERT INTO messages (conversation_id, sender_id, content, timestamp, status, type) "
-        "VALUES ('kept-id', 'me', 'kept msg', 0, 0, 0);",
+        "INSERT INTO messages (conversation_id, content, timestamp, status, type) "
+        "VALUES ('kept-id', 'kept msg', 0, 0, 0);",
       );
 
       await legacy.migration.onUpgrade(legacy.createMigrator(), 9, 10);
@@ -420,9 +416,8 @@ void main() {
         "VALUES ('kept-id', 'Kept Channel', '${'aa' * 32}', '${'bb' * 32}');",
       );
       await legacy.customStatement(
-        "INSERT INTO messages (conversation_id, sender_id, content, "
-        "timestamp, status, type) VALUES ('kept-id', 'kept-id', 'hi', 0, 4, "
-        "0);",
+        "INSERT INTO messages (conversation_id, content, "
+        "timestamp, status, type) VALUES ('kept-id', 'hi', 0, 4, 0);",
       );
 
       await legacy.migration.onUpgrade(legacy.createMigrator(), 13, 14);
@@ -464,84 +459,97 @@ void main() {
       await legacy.close();
     });
 
-    test('v17 → v18 backfills message direction from the two old heuristics '
-        '(T114)', () async {
-      // Reshape a fresh database into the v17 layout.
-      final legacy = createTestDatabase();
-      await legacy.customStatement(
-        'ALTER TABLE messages DROP COLUMN direction;',
-      );
-      await legacy.customStatement(
-        "INSERT INTO channels (uuid, label, encryption_key, auth_public_key) "
-        "VALUES ('chan', 'Chat', '${'aa' * 32}', '${'bb' * 32}');",
-      );
-      // 1:1 incoming: the channel id stands in for "them" (status received).
-      await legacy.customStatement(
-        "INSERT INTO messages (conversation_id, sender_id, content, "
-        "timestamp, status, type) VALUES ('chan', 'chan', 'theirs', 0, 4, 0);",
-      );
-      // Own outgoing 1:1 message, already delivered.
-      await legacy.customStatement(
-        "INSERT INTO messages (conversation_id, sender_id, content, "
-        "timestamp, status, type) VALUES ('chan', 'my-uuid', 'mine', 0, 3, "
-        "0);",
-      );
-      // Group incoming: sender is a member id, so only the status says it is
-      // theirs — this is the row the 1:1 heuristic would have got wrong.
-      await legacy.customStatement(
-        "INSERT INTO messages (conversation_id, sender_id, content, "
-        "timestamp, status, type, sender_member_id) VALUES ('grp', "
-        "'${'ee' * 32}', 'group theirs', 0, 4, 0, '${'ee' * 32}');",
-      );
-      // Own outgoing group message, still pending.
-      await legacy.customStatement(
-        "INSERT INTO messages (conversation_id, sender_id, content, "
-        "timestamp, status, type) VALUES ('grp', 'my-uuid', 'group mine', 0, "
-        "0, 0);",
-      );
+    // T114 + T143 against a database that really is at v17/v18
+    // (historic_schemas.dart): the current schema no longer has `sender_id`,
+    // so these fixtures cannot be reshaped from a fresh database any more.
+    // The rows cover all three meanings `sender_id` used to have — own uuid,
+    // the conversation id standing in for the 1:1 counterpart, a group
+    // member id — plus a group row whose `sender_member_id` was never set.
+    for (final from in [17, 18]) {
+      test('v$from → current: direction backfilled (T114) and every author '
+          'kept when sender_id is dropped (T143)', () async {
+        final member = 'ee' * 32;
+        final legacyMember = 'dd' * 32;
+        // v17 has no direction column; v18 has it, filled by the v18 step
+        // with exactly the values the v18 backfill computes.
+        String row(
+          String conv,
+          String sender,
+          String content,
+          int status, {
+          String? memberId,
+          int? direction,
+        }) {
+          final withDirection = from >= 18;
+          return 'INSERT INTO messages (conversation_id, sender_id, content, '
+              'timestamp, status, type, sender_member_id'
+              '${withDirection ? ', direction' : ''}) VALUES '
+              "('$conv', '$sender', '$content', 0, $status, 0, "
+              "${memberId == null ? 'NULL' : "'$memberId'"}"
+              '${withDirection ? ', ${direction!}' : ''})';
+        }
 
-      await legacy.migration.onUpgrade(legacy.createMigrator(), 17, 18);
+        const incoming = MessageDirection.incoming;
+        const outgoing = MessageDirection.outgoing;
+        final legacy = createTestDatabaseAtVersion(from, [
+          ...ddlForSchemaVersion(from),
+          "INSERT INTO channels (uuid, label, encryption_key, auth_public_key) "
+              "VALUES ('chan', 'Chat', '${'aa' * 32}', '${'bb' * 32}')",
+          'INSERT INTO group_channels (group_id, label, my_member_id, '
+              "my_sign_seed, my_x25519_priv) VALUES ('grp', 'Group', "
+              "'${'11' * 32}', '${'22' * 32}', '${'33' * 32}')",
+          // 1:1 incoming: the channel id stands in for "them".
+          row('chan', 'chan', 'theirs', 4, direction: incoming),
+          // Own outgoing 1:1 message, already delivered.
+          row('chan', 'my-uuid', 'mine', 3, direction: outgoing),
+          // Group incoming, attributed the MS08 way (both columns).
+          row(
+            'grp',
+            member,
+            'group theirs',
+            4,
+            memberId: member,
+            direction: incoming,
+          ),
+          // Group incoming whose member id lives ONLY in sender_id.
+          row('grp', legacyMember, 'group legacy', 4, direction: incoming),
+          // Own outgoing group message, still pending.
+          row('grp', 'my-uuid', 'group mine', 0, direction: outgoing),
+        ]);
+        addTearDown(legacy.close);
 
-      final byContent = {
-        for (final row in await legacy.select(legacy.messages).get())
-          row.content: row.direction,
-      };
-      expect(byContent['theirs'], equals(MessageDirection.incoming));
-      expect(byContent['mine'], equals(MessageDirection.outgoing));
-      expect(byContent['group theirs'], equals(MessageDirection.incoming));
-      expect(byContent['group mine'], equals(MessageDirection.outgoing));
+        final byContent = {
+          for (final row in await legacy.select(legacy.messages).get())
+            row.content: row,
+        };
+        expect(byContent, hasLength(5));
 
-      await legacy.close();
-    });
+        expect(byContent['theirs']!.direction, equals(incoming));
+        expect(byContent['mine']!.direction, equals(outgoing));
+        expect(byContent['group theirs']!.direction, equals(incoming));
+        expect(byContent['group legacy']!.direction, equals(incoming));
+        expect(byContent['group mine']!.direction, equals(outgoing));
 
-    // Every other test in this file calls onUpgrade with ADJACENT versions,
-    // which is not what a real device does: a phone that has not opened the
-    // app for a while runs one onUpgrade(from, 18) covering several steps.
-    // The v18 column would then be added to a `messages` table the v17 step
-    // had just re-created from the CURRENT schema — `duplicate column name:
-    // direction`, thrown from inside onUpgrade, i.e. the database never
-    // opens and `user_version` is never bumped: a crash loop on every launch.
-    test('a multi-version jump reaches v18 without adding direction twice '
-        '(T114)', () async {
-      for (final from in [16, 17]) {
-        final legacy = createTestDatabase();
-        await legacy.customStatement(
-          'ALTER TABLE messages DROP COLUMN direction;',
+        // Author = direction + senderMemberId, one meaning per value.
+        expect(byContent['theirs']!.senderMemberId, isNull); // counterpart
+        expect(byContent['mine']!.senderMemberId, isNull); // me
+        expect(byContent['group theirs']!.senderMemberId, equals(member));
+        expect(
+          byContent['group legacy']!.senderMemberId,
+          equals(legacyMember),
+          reason: 'a group author that lived only in sender_id must survive',
         );
-
-        await legacy.migration.onUpgrade(legacy.createMigrator(), from, 18);
+        expect(byContent['group mine']!.senderMemberId, isNull); // me
 
         final columns = await legacy
             .customSelect('PRAGMA table_info(messages)')
             .get();
         expect(
           columns.map((row) => row.read<String>('name')),
-          contains('direction'),
-          reason: 'onUpgrade($from, 18) must leave the column in place',
+          isNot(contains('sender_id')),
         );
-        await legacy.close();
-      }
-    });
+      });
+    }
   });
 
   // T124 (TD149). The test above covers the two versions T114 happened to
@@ -607,7 +615,7 @@ void main() {
         addTearDown(legacy.close);
 
         // The first statement opens the database, which is what runs
-        // onUpgrade(from, 18). A failing step throws right here.
+        // onUpgrade(from, current). A failing step throws right here.
         final version = await legacy
             .customSelect('PRAGMA user_version')
             .getSingle();

@@ -125,19 +125,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     if (content.isEmpty) return;
     _messageController.clear();
 
-    final db = ref.read(dbProvider);
-
-    // Get current user (assumed singleton for now)
-    final currentUser = await db.select(db.users).getSingleOrNull();
-    if (currentUser == null) return;
-
+    // T143: no sender id — an outgoing row's author is the local user by
+    // definition (Messages.direction), so the user row is not looked up.
     await ref
         .read(outboxServiceProvider)
-        .enqueue(
-          conversationId: widget.conversationId,
-          senderId: currentUser.uuid,
-          content: content,
-        );
+        .enqueue(conversationId: widget.conversationId, content: content);
   }
 
   /// Snackbar text for a failed FIRST attempt, i.e. the send the user just
@@ -484,8 +476,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     final msg = messages[index];
                     // T114: the message says which way it went. This used
                     // to be two heuristics (status for groups, `senderId !=
-                    // conversationId` for 1:1) over fields that mean three
-                    // different things depending on the row.
+                    // conversationId` for 1:1) over a field that meant three
+                    // different things depending on the row (dropped, T143).
                     final isMe = msg.direction == MessageDirection.outgoing;
 
                     final statusIcon = isMe ? _statusIcon(msg.status) : null;
