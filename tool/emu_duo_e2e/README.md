@@ -74,12 +74,15 @@ pairing foundation and always runs, even when omitted from the list.
   so the quiet streak must also span a **settling window** of
   `RP_S4_SETTLE_SEC` (default 15 s) before Alice is green-lit; an adb
   failure is "unknown", never "quiet", and restarts the streak. Across the
-  silence the TCP probe then runs every 3 s; any success fails the run and
-  names the second the blackout ended. Because a probe that adb failed to
-  deliver reads as "unreachable", the harness also tracks the longest
-  stretch of the silence without an adb-delivered answer and fails the run
-  as **inconclusive** when it exceeds `RP_S4_MAX_BLIND_SEC` (default 10 s:
-  above the ~3.5-5 s probe cadence, below the 17-18 s promotions of T119).
+  silence the same two signals are checked every 3 s; either one seeing the
+  guest online fails the run and names the second the blackout ended.
+  Because a probe that adb failed to deliver reads as "unreachable", the
+  harness also tracks the longest stretch from the last settling check to
+  the end of the silence without an adb-delivered observation (retrying
+  1 s after an adb failure) and fails the run as **inconclusive** when it
+  exceeds `RP_S4_MAX_BLIND_SEC` (default 15 s: one probe hung until its
+  10 s timeout is tolerated, two lost observations in a row are not, and
+  15 s stays below the 17-18 s promotions of T119).
   The tally lands in `counters.s4Probe`.
 
   **The silence must outlast the node's `Settings.pingTimeout` (65 s)**
@@ -193,8 +196,8 @@ triaged as "the gate flaked" or "the gate found something" without opening a
 | Field | Reads as |
 | --- | --- |
 | `node.undialableEvictions.duringS4` | 0 ⇒ S4 never exercised the reconnect-after-eviction path (harness precondition, run fails) |
-| `s4Probe.{method,checks,breaches,firstBreachSec}` | T119 cut verification. `breaches` >0 ⇒ Bob's guest could reach the host during the silence, so the blackout was not one (run fails, `firstBreachSec` says when it came back). `method: null` ⇒ no probe was usable and S4 refused to run; `checks: 0` ⇒ the run never reached the silence. The probe targets the coord port, not 59558, so it cannot inflate `undialableEvictions.duringS4` by making the node accept and evict a peer |
-| `s4Probe.{adbOk,adbErrors,maxBlindSec,maxBlindLimitSec}` | T137 adb liveness across the silence. `maxBlindSec` = longest gap (s) between two adb-delivered probes, silence start/end included; above `maxBlindLimitSec` the run is red as inconclusive, since a breach in that gap would have been read as "unreachable" |
+| `s4Probe.{method,checks,breaches,firstBreachSec}` | T119 cut verification. `breaches` >0 ⇒ Bob's guest could reach the host (TCP) or had a route to it again during the silence, so the blackout was not one (run fails, `firstBreachSec` says when it came back). `method: null` ⇒ no probe was usable and S4 refused to run; `checks: 0` ⇒ the run never reached the silence. The probe targets the coord port, not 59558, so it cannot inflate `undialableEvictions.duringS4` by making the node accept and evict a peer |
+| `s4Probe.{adbOk,adbErrors,maxBlindSec,maxBlindLimitSec}` | T137 adb liveness across the silence. `maxBlindSec` = longest gap (s) between two adb-delivered observations (both signals), from the last settling check to the silence end; above `maxBlindLimitSec` the run is red as inconclusive, since a breach in that gap would have been read as "unreachable" |
 | `s4Probe.settle.{minSec,minChecks,checks,quietChecks,adbErrors,windowSec,startedAt,endedAt}` | T137 settling window that green-lit Alice: the final quiet streak (`quietChecks` checks over `windowSec` s, UTC `startedAt`→`endedAt`) must reach `minChecks` and `minSec`; `checks`/`adbErrors` cover the whole wait-for-cut loop. `windowSec: null` ⇒ no quiet check was ever seen (the run died with the "never stayed offline" message) |
 | `node.duplicateConnections.{total,duringS4}` | the T88 signature (`duplicate parallel connection from the same identity`); >0 during S4 means peer bookkeeping went out of sync again |
 | `node.handshakes.wedged` | `parsed ACTIVATE_ENCRYPTION` − `received first encrypted command`, the T80 metric; 3–4 before redpandaj#288, 0 after — anything >0 means that class is back |

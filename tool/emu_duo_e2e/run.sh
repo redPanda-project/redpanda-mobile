@@ -77,17 +77,23 @@ S4_SILENCE_SEC="${RP_S4_SILENCE_SEC:-90}"
 # (run 33795035897: 1 of 29 silence probes reached the host 1 s in). 15 s of
 # continuous quiet covers the 2-5 s promotion onset observed after Wi-Fi drops
 # with room to spare; it is added to the cut, not taken from the silence, so
-# it only makes the node's ping timeout easier to cross.
+# it only makes the node's ping timeout easier to cross. It lowers the odds of
+# a TD154-style red, it cannot bound them (no data on how late a promotion can
+# start) — `counters.s4Probe.settle` is there to size it from real runs.
 S4_SETTLE_SEC="${RP_S4_SETTLE_SEC:-15}"
 S4_SETTLE_MIN_CHECKS=3
-# T137 (TD124): the longest stretch of the silence the harness may spend
-# without a probe that adb actually delivered. run_probe reads an adb failure
-# as "unreachable", so a blind stretch is a stretch in which a breach would go
-# unseen. The normal cadence is one probe every ~3.5-5 s (3 s sleep + 0.3-2 s
-# probe), so 10 s means "at least one probe in a row was lost" — and stays
-# below the 17-18 s promotions that broke the gate in T119, i.e. a blind spot
-# that could have swallowed one of those whole fails the run as inconclusive.
-S4_MAX_BLIND_SEC="${RP_S4_MAX_BLIND_SEC:-10}"
+# T137 (TD124): the longest stretch from "settled" to the end of the silence
+# the harness may spend without an observation adb actually delivered.
+# run_probe reads an adb failure as "unreachable", so a blind stretch is one
+# in which a breach would go unseen. Normal cadence: one observation every
+# ~3.5-5 s (3 s sleep + two probes). After an adb failure the loop retries
+# after 1 s instead of 3, so ONE probe hung until run_probe's `timeout 10`
+# costs ~3 + 10 + 1 + 0.6 ≈ 15 s and is tolerated (one adb stall on a
+# loaded runner is not a finding), while two lost observations in a row
+# exceed the limit. 15 s also stays below the 17-18 s promotions that broke
+# the gate in T119: a blind spot that could have swallowed one of those
+# whole fails the run as inconclusive.
+S4_MAX_BLIND_SEC="${RP_S4_MAX_BLIND_SEC:-15}"
 
 SEEDS="10.0.2.2:$NODE_PORT"
 START_NODE=1
@@ -600,8 +606,10 @@ for s in ${SCENARIOS//,/ }; do
 done
 has_scenario s1 || SCENARIOS="s1,$SCENARIOS"  # s1 is the pairing foundation
 [[ "$S4_SILENCE_SEC" =~ ^[0-9]+$ ]] || die "RP_S4_SILENCE_SEC must be a number of seconds"
-[[ "$S4_SETTLE_SEC" =~ ^[0-9]+$ ]] || die "RP_S4_SETTLE_SEC must be a number of seconds"
-[[ "$S4_MAX_BLIND_SEC" =~ ^[0-9]+$ ]] || die "RP_S4_MAX_BLIND_SEC must be a number of seconds"
+# No leading zeros: bash would read 08/09 as (invalid) octal and the value is
+# also printed verbatim into counters.json.
+[[ "$S4_SETTLE_SEC" =~ ^(0|[1-9][0-9]*)$ ]] || die "RP_S4_SETTLE_SEC must be a number of seconds (no leading zero)"
+[[ "$S4_MAX_BLIND_SEC" =~ ^(0|[1-9][0-9]*)$ ]] || die "RP_S4_MAX_BLIND_SEC must be a number of seconds (no leading zero)"
 [[ "$NODE_PING_TIMEOUT_SEC" =~ ^[0-9]+$ ]] \
   || die "RP_NODE_PING_TIMEOUT_SEC must be a number of seconds"
 if has_scenario s4 && [[ "$START_NODE" == 1 ]] \
@@ -837,9 +845,12 @@ if has_scenario s4; then
   # late promotion tail once, so the streak must also SPAN S4_SETTLE_SEC
   # (first to last quiet check). An adb failure is "unknown", not quiet, and
   # restarts the streak like an online reading does.
-  s4_cut_deadline=$(( $(date +%s) + 120 ))
+  # 120 s for the cut to take, plus the settling window on top so a long
+  # RP_S4_SETTLE_SEC cannot become unreachable by construction.
+  s4_cut_deadline=$(( $(date +%s) + 120 + S4_SETTLE_SEC ))
   s4_quiet=0
   s4_quiet_since=0
+  s4_quiet_last=0
   s4_settled=0
   while [[ $(date +%s) -lt $s4_cut_deadline ]]; do
     SETTLE_CHECKS=$(( SETTLE_CHECKS + 1 ))
@@ -850,6 +861,7 @@ if has_scenario s4; then
     # script with it (verified: `if true; then false; fi` exits 1).
     if [[ $s4_rc -eq 0 ]]; then
       if [[ $s4_quiet -eq 0 ]]; then s4_quiet_since=$(date +%s); fi
+      s4_quiet_last=$(date +%s)
       s4_quiet=$(( s4_quiet + 1 ))
       if [[ $s4_quiet -ge $S4_SETTLE_MIN_CHECKS && $(( $(date +%s) - s4_quiet_since )) -ge $S4_SETTLE_SEC ]]; then
         s4_settled=1
@@ -865,11 +877,13 @@ if has_scenario s4; then
   SETTLE_QUIET_CHECKS=$s4_quiet
   if [[ $s4_quiet -gt 0 ]]; then
     SETTLE_STARTED_AT="$(date -u -d "@$s4_quiet_since" +%Y-%m-%dT%H:%M:%SZ)"
-    SETTLE_ENDED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    SETTLE_WINDOW_SEC=$(( $(date +%s) - s4_quiet_since ))
+    # From the last quiet check, not "now": on the deadline path a trailing
+    # sleep would otherwise inflate the window past the one that failed.
+    SETTLE_ENDED_AT="$(date -u -d "@$s4_quiet_last" +%Y-%m-%dT%H:%M:%SZ)"
+    SETTLE_WINDOW_SEC=$(( s4_quiet_last - s4_quiet_since ))
   fi
   [[ $s4_settled -eq 1 ]] \
-    || { save_report; die "S4: Bob's guest never stayed offline for ${S4_SETTLE_SEC}s / ${S4_SETTLE_MIN_CHECKS} checks within 120s of the cut — last seen online because $PROBE_ONLINE_VIA (T119: check whether CELLULAR/eth0 got promoted to default again, \`adb -s $SERIAL_BOB shell dumpsys connectivity | head -40\`)"; }
+    || { save_report; die "S4: Bob's guest never stayed offline for ${S4_SETTLE_SEC}s / ${S4_SETTLE_MIN_CHECKS} checks within $(( 120 + S4_SETTLE_SEC ))s of the cut — last seen online because $PROBE_ONLINE_VIA (T119: check whether CELLULAR/eth0 got promoted to default again, \`adb -s $SERIAL_BOB shell dumpsys connectivity | head -40\`)"; }
   log "S4: cut verified — guest offline by both signals for $s4_quiet consecutive checks over ${SETTLE_WINDOW_SEC}s (settling window ${S4_SETTLE_SEC}s)"
   kv_put s4-net-down host
   wait_kv "sent-e2e-s4" 300
@@ -881,28 +895,37 @@ if has_scenario s4; then
   log "S4: radio silence for ${S4_SILENCE_SEC}s (node ping timeout ${NODE_PING_TIMEOUT_SEC}s), probing reachability throughout"
   s4_silence_start=$(date +%s)
   s4_silence_end=$(( s4_silence_start + S4_SILENCE_SEC ))
-  s4_last_seen=$s4_silence_start
+  # T137: the blind clock starts at the last settling check, not here — the
+  # stretch in which Alice sends (`wait_kv sent-e2e-s4`, ~2 s on the runner)
+  # is unprobed, and a long one has to show up as blind time.
+  s4_last_seen=$s4_quiet_last
   PROBE_MAX_BLIND_SEC=0
   while [[ $(date +%s) -lt $s4_silence_end ]]; do
     PROBE_CHECKS=$(( PROBE_CHECKS + 1 ))
-    if bob_can_reach_host; then
+    # T137: both signals, as in the settling window. TCP alone can fail
+    # through most of a promotion while the default route is up (run
+    # 33778527272), so a route coming back is a breach too.
+    s4_rc=0
+    guest_offline || s4_rc=$?
+    if [[ $s4_rc -eq 1 ]]; then
       PROBE_BREACHES=$(( PROBE_BREACHES + 1 ))
       if [[ -z "$PROBE_FIRST_BREACH_SEC" ]]; then
         PROBE_FIRST_BREACH_SEC=$(( $(date +%s) - s4_silence_start ))
-        log "S4 BREACH: $PROBE_HOST:$COORD_PORT reachable again ${PROBE_FIRST_BREACH_SEC}s into the silence — the cut did not hold (T119)"
+        log "S4 BREACH: ${PROBE_FIRST_BREACH_SEC}s into the silence $PROBE_ONLINE_VIA — the cut did not hold (T119)"
       fi
     fi
-    # T137 (TD124): a probe adb did not deliver saw nothing; track how long
-    # the harness went without a real observation.
-    if [[ $PROBE_ADB_FAILED -eq 1 ]]; then
+    # T137 (TD124): an observation adb did not deliver saw nothing; track how
+    # long the harness went without a real one, and retry sooner.
+    if [[ $s4_rc -eq 2 ]]; then
       PROBE_ADB_ERRORS=$(( PROBE_ADB_ERRORS + 1 ))
+      sleep 1
     else
       PROBE_ADB_OK=$(( PROBE_ADB_OK + 1 ))
       s4_now=$(date +%s)
       if [[ $(( s4_now - s4_last_seen )) -gt $PROBE_MAX_BLIND_SEC ]]; then PROBE_MAX_BLIND_SEC=$(( s4_now - s4_last_seen )); fi
       s4_last_seen=$s4_now
+      sleep 3
     fi
-    sleep 3
   done
   # The tail after the last delivered probe counts too (clamped to the
   # silence end: the last sleep may overrun it by a moment).
@@ -999,12 +1022,12 @@ if has_scenario s4; then
   # cannot: a breach at +10 s and a breach at +80 s look identical in
   # reconnectDeliveryMs, and only one of them is the transport-promotion bug.
   if [[ "$PROBE_BREACHES" -gt 0 ]]; then
-    failures+=("S4 cut did not hold (harness): Bob's guest reached $PROBE_HOST:$COORD_PORT again ${PROBE_FIRST_BREACH_SEC}s into the ${S4_SILENCE_SEC}s silence ($PROBE_BREACHES of $PROBE_CHECKS probes succeeded) — the blackout was not a blackout, see the T119 root-cause comment at bob_net()")
+    failures+=("S4 cut did not hold (harness): Bob's guest was online again (TCP to $PROBE_HOST:$COORD_PORT or a route to it) ${PROBE_FIRST_BREACH_SEC}s into the ${S4_SILENCE_SEC}s silence ($PROBE_BREACHES of $PROBE_CHECKS checks saw it online) — the blackout was not a blackout, see the T119 root-cause comment at bob_net()")
   fi
   # T137 (TD124): a silence the harness could not watch is no evidence that the
   # cut held. Inconclusive is red — see S4_MAX_BLIND_SEC for the bound.
   if [[ "$PROBE_MAX_BLIND_SEC" =~ ^[0-9]+$ && "$PROBE_MAX_BLIND_SEC" -gt "$S4_MAX_BLIND_SEC" ]]; then
-    failures+=("S4 inconclusive (harness): adb delivered no probe answer for ${PROBE_MAX_BLIND_SEC}s of the silence (limit ${S4_MAX_BLIND_SEC}s; adb ok/errors $PROBE_ADB_OK/$PROBE_ADB_ERRORS) — a breach in that stretch would have gone unseen")
+    failures+=("S4 inconclusive (harness): adb delivered no probe answer for ${PROBE_MAX_BLIND_SEC}s between settling and the end of the silence (limit ${S4_MAX_BLIND_SEC}s; adb ok/errors $PROBE_ADB_OK/$PROBE_ADB_ERRORS) — a breach in that stretch would have gone unseen")
   fi
   # T89(a): S4 exists to exercise the reconnect *after* the node has thrown the
   # stale peer away. If no undialable peer was evicted during the silence, the
