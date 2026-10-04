@@ -65,7 +65,7 @@ when the two workflow pins differ, and CI checks the same via
 `tool/pre_push_validation.sh --pins-only`), your local `~/tools/flutter`, and this
 section. Read the version out of `flutter_ci.yml` — do not trust a version
 repeated anywhere else, including here. At the time of writing it is
-**Flutter 3.47.2 (Dart 3.13.2)**; if this line and `flutter_ci.yml` disagree,
+**Flutter 3.47.6 (Dart 3.13.5)**; if this line and `flutter_ci.yml` disagree,
 `flutter_ci.yml` wins and this line is stale.
 
 Run `dart format` with that exact version. The formatter changes its output

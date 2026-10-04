@@ -82,7 +82,7 @@ jobs:
           # the rationale for the exact pin. The gate must run on the same
           # toolchain as the build CI, or a green gate proves nothing about the
           # code the build CI checked.
-          flutter-version: '3.47.2'
+          flutter-version: '3.47.6'
           channel: 'stable'
           cache: true
 
