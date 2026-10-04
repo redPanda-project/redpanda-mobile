@@ -9,7 +9,7 @@ import 'package:test/test.dart';
 
 import '../helpers/stalled_key_exchange_socket.dart';
 import '../helpers/wait_for.dart';
-import 'handshake_v23_test.dart' show connect;
+import 'handshake_v23_test.dart' show ScriptedV23Server, connect;
 
 /// T156: nothing but the handshake may be sent before transport encryption is
 /// active, and a key exchange that never completes must not hold the peer
@@ -75,6 +75,54 @@ void main() {
         // "connected" is only reported once encryption is active, so the
         // connect edge (subscribe, catch-up poll) has not fired either.
         expect(statuses, isNot(contains(ConnectionStatus.connected)));
+      },
+    );
+
+    test(
+      'client reports connected exactly once, only after encryption',
+      () async {
+        final server = await ScriptedV23Server.create();
+        server.holdActivation = Completer<void>();
+        final keys = await KeyPair.generate();
+        final statuses = <ConnectionStatus>[];
+        final client = RedPandaLightClient(
+          selfNodeId: NodeId.fromPublicKey(keys),
+          selfKeys: keys,
+          seeds: ['scripted:23'],
+          socketFactory: (h, p) async => server,
+        );
+        final sub = client.connectionStatus.listen(statuses.add);
+        addTearDown(sub.cancel);
+        addTearDown(client.disconnect);
+        await client.connect();
+
+        // The client's ACTIVATE_ENCRYPTION reached the server, whose answer
+        // is held back: verified, no codec.
+        await waitFor(
+          () => server.clientEphemeral != null,
+          description: 'client ACTIVATE_ENCRYPTION received',
+        );
+        // Asserting that nothing happens while the exchange is frozen.
+        await Future.delayed(const Duration(milliseconds: 300));
+        expect(statuses, isNot(contains(ConnectionStatus.connected)));
+        expect(client.activePeerAddresses, isEmpty);
+        expect(client.connectingPeerAddresses, contains('scripted:23'));
+
+        server.holdActivation!.complete();
+        await waitFor(
+          () => statuses.contains(ConnectionStatus.connected),
+          description: 'client connected after encryption',
+        );
+        expect(client.isEncryptionActive, isTrue);
+        expect(client.activePeerAddresses, contains('scripted:23'));
+        // The node requires the first encrypted command to be PING.
+        expect(await server.firstEncryptedCommand.future, equals(5));
+        // Asserting no second connect edge.
+        await Future.delayed(const Duration(milliseconds: 300));
+        expect(
+          statuses.where((st) => st == ConnectionStatus.connected),
+          hasLength(1),
+        );
       },
     );
 

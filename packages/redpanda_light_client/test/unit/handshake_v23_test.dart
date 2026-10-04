@@ -31,6 +31,10 @@ class ScriptedV23Server implements Socket {
   /// Server-side transport codec (set once the key exchange completed).
   GcmFramedCodec? codec;
 
+  /// When set, the server's ACTIVATE_ENCRYPTION is held back until this
+  /// completes (T156: freeze the client in the key-exchange window).
+  Completer<void>? holdActivation;
+
   bool _handshakeAnswered = false;
   bool _publicKeySent = false;
   bool _activateSent = false;
@@ -140,6 +144,7 @@ class ScriptedV23Server implements Socket {
 
   Future<void> _maybeActivate() async {
     if (clientVerifyKey == null || clientEphemeral == null) return;
+    await holdActivation?.future;
     if (!_activateSent) {
       _activateSent = true;
       _reply([3, ..._serverEphemeral.publicKey]);
