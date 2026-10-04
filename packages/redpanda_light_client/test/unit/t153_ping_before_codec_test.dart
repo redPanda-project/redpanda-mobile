@@ -126,18 +126,20 @@ void main() {
     test('ping() once encryption is active sends an encrypted PING', () async {
       final (peer, server, _) = await connect();
       await waitFor(() => peer.isEncryptionActive);
-      // Initial PING + REQUEST_PEER_LIST from the encryption finalization.
+      // Initial PING from the encryption finalization.
       await server.firstEncryptedCommand.future;
-      await waitFor(() => server.decryptedFromClient.length >= 2);
-      final before = server.decryptedFromClient.length;
+      // Count PINGs only: the client's PONG (6) to the server's initial PING
+      // may still arrive at any point.
+      int pings() => server.decryptedFromClient.where((b) => b == 5).length;
+      final before = pings();
 
       peer.ping();
 
       await waitFor(
-        () => server.decryptedFromClient.length > before,
+        () => pings() > before,
         description: 'encrypted latency PING received',
       );
-      expect(server.decryptedFromClient.sublist(before), equals([5]));
+      expect(pings(), equals(before + 1));
       peer.disconnect();
     });
   });
