@@ -76,9 +76,10 @@ changes both workflow pins, this section, and
 `.claude/skills/pre-push-validation/SKILL.md` together, and carries any
 resulting repo-wide reformat.
 
-Both manifests declare `environment.sdk: ^3.12.0` (matching `pubspec.lock`'s
-`sdks.dart: >=3.12.0 <4.0.0`), so a toolchain below Dart 3.12 cannot resolve
-this repo at all. That floor is a lower bound, not the pin.
+Both manifests declare `environment.sdk: ^3.12.0`, but the resolved
+dependencies raise `pubspec.lock`'s floor to `sdks.dart: >=3.13.0 <4.0.0`, so a
+toolchain below Dart 3.13 cannot resolve this repo at all. That floor is a
+lower bound, not the pin.
 
 ## Maintenance: Flutter pin
 
@@ -92,5 +93,6 @@ maintenance routines, TD086):
    not maintained for Flutter stable, that endpoint is years out of date).
 2. If it lags (security patch or new stable), bump deliberately in **one** PR:
    both workflow pins, the version line above,
-   `.claude/skills/pre-push-validation/SKILL.md`, the local `~/tools/flutter`,
+   `.claude/skills/pre-push-validation/SKILL.md` (check it; it intentionally
+   carries no version literal), the local `~/tools/flutter`,
    and the resulting repo-wide `dart format` / `pubspec.lock` churn.
