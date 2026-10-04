@@ -5,7 +5,7 @@
 
 ## Unterordner
 
-* 📁 **domain/** — App-Domänenregeln (`message_direction.dart`, `message_lifecycle.dart`).
+* 📁 **[domain/](domain/_index.md)** — App-Domänenregeln (Nachrichtenrichtung, Status-Lebenszyklus).
 * 📁 **[database/](database/_index.md)** — Drift-ORM-Schema (Users, Channels, Messages, Peers).
 * 📁 **[repositories/](repositories/_index.md)** — Repository-Pattern für Channels, Messages, Gruppen, eigene OHs.
 * 📁 **[screens/](screens/_index.md)** — Alle App-Screens (Home, Chat, Channels, Onboarding, Debug).

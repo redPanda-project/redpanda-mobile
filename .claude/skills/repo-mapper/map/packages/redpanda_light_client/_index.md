@@ -1,7 +1,7 @@
 # 📂 packages/redpanda_light_client/
 
 > Eigenständiges Dart-Paket: P2P-Netzwerk-Client mit Kademlia-DHT, TCP-Verbindungen,
-> ECDH/AES-Verschlüsselung und Protobuf-Protokoll.
+> X25519/Ed25519 + AES-256-GCM-Verschlüsselung und Protobuf-Protokoll.
 
 ## Unterordner
 

@@ -6,7 +6,7 @@
 
 * 📁 **[chat/](chat/_index.md)** — Chat-UI und QR-Code-Sharing.
 * 📁 **[channels/](channels/_index.md)** — Screens zum Erstellen und Beitreten von Channels.
-* 📁 **group/** — Gruppe erstellen und Gruppen-Info (MS08).
+* 📁 **[group/](group/_index.md)** — Gruppe erstellen und Gruppen-Info (MS08).
 * 📁 **[home/](home/_index.md)** — Hauptbildschirm mit Channel-Liste.
 * 📁 **[onboarding/](onboarding/_index.md)** — Ersteinrichtung / Benutzername setzen.
 

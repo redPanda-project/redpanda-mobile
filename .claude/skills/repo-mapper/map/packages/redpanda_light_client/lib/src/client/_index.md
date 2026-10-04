@@ -15,9 +15,8 @@
   Hintergrund-Isolate weiter via SendPort/ReceivePort. Verhindert UI-Jank.
 
 * 📄 **isolate_protocol.dart** — Nachrichtenprotokoll für Isolate-Kommunikation.
-  Command-Klassen: `CmdInit`, `CmdConnect`, `CmdAddPeer`, `CmdLifecyclePause`,
-  `CmdLifecycleResume`, `CmdSendMessage`.
-  Event-Klassen: `EventConnectionStatus`, `EventPeerCount`, `EventLog`.
+  `Cmd…`-Klassen (Main → Worker) und `Event…`-Klassen (Worker → Main), u. a.
+  `CmdInit`, `CmdConnect`, `EventConnectionStatus`, `EventLog`.
 
 * 📄 **pending_command_queue.dart** — `PendingCommandQueue`: puffert Commands, solange kein Worker-Isolate läuft.
 

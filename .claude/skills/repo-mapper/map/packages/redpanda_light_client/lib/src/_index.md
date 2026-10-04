@@ -5,16 +5,16 @@
 ## Unterordner
 
 * 📁 **[client/](client/_index.md)** — Client-Implementierung und Isolate-Proxy.
-* 📁 **crypto/** — Kanal-/Gruppen-Krypto (Envelopes v3/v4, Ratchet, Rendezvous, OH-Keypair).
+* 📁 **[crypto/](crypto/_index.md)** — Kanal-/Gruppen-Krypto (Envelopes v3/v4, Ratchet, Rendezvous, OH-Keypair).
 * 📁 **[domain/](domain/_index.md)** — Domain-Objekte (Channel, OH-Deskriptoren, ACKs, StateUpdate-Events).
-* 📁 **garlic/** — Garlic-Builder, Hop-Auswahl, Node-Scoring, Reverse-Garlic-Blocks, Tag-Stores.
+* 📁 **[garlic/](garlic/_index.md)** — Garlic-Builder, Hop-Auswahl, Node-Scoring, Reverse-Garlic-Blocks, Tag-Stores.
 * 📁 **[generated/](generated/_index.md)** — Generierter Protobuf-Code.
 * 📁 **[mock/](mock/_index.md)** — Mock-Client für Tests.
 * 📁 **[models/](models/_index.md)** — Datenmodelle (NodeId, Peer, KeyPair, ConnectionStatus).
-* 📁 **logging/** — `RpLog`-Logger.
+* 📁 **[logging/](logging/_index.md)** — `RpLog`-Logger.
 * 📁 **[network/](network/_index.md)** — TCP-Peer-Verbindungen und Protokoll.
 * 📁 **[security/](security/_index.md)** — Transport-Verschlüsselung (AES-256-GCM-Framing).
-* 📁 **streams/** — Stream-Hilfen (`SeededStream`).
+* 📁 **[streams/](streams/_index.md)** — Stream-Hilfen (`seededStream()`).
 
 ## Dateien
 
