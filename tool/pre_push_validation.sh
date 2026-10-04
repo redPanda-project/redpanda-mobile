@@ -100,10 +100,19 @@ CI_WORKFLOW="$REPO_ROOT/.github/workflows/flutter_ci.yml"
 PINNED_FLUTTER="$(awk '/^[[:space:]]*flutter-version:/ { v = $2; gsub(/[\047"]/, "", v); print v; exit }' "$CI_WORKFLOW")"
 [ -n "$PINNED_FLUTTER" ] \
   || fail_usage "cannot read the flutter-version pin from $CI_WORKFLOW (T98)"
+# The emulator gate pins the same toolchain a second time; nothing else
+# enforces that the two agree, so the gate could silently test a different
+# Flutter than PR CI (TD087).
+GATE_WORKFLOW="$REPO_ROOT/.github/workflows/emu_duo_e2e.yml"
+GATE_FLUTTER="$(awk '/^[[:space:]]*flutter-version:/ { v = $2; gsub(/[\047"]/, "", v); print v; exit }' "$GATE_WORKFLOW")"
+[ -n "$GATE_FLUTTER" ] \
+  || fail_usage "cannot read the flutter-version pin from $GATE_WORKFLOW (TD087)"
+[ "$GATE_FLUTTER" = "$PINNED_FLUTTER" ] \
+  || fail_usage "flutter-version pin drift: flutter_ci.yml=$PINNED_FLUTTER but emu_duo_e2e.yml=$GATE_FLUTTER. Both workflows must pin the same Flutter (TD087)."
 LOCAL_FLUTTER="$(printf '%s\n' "$FLUTTER_VER" | sed -n 's/^Flutter \([0-9][^ ]*\).*/\1/p' | tr -d '\n')"
 [ -n "$LOCAL_FLUTTER" ] \
   || fail_usage "cannot parse the local Flutter version out of 'flutter --version' (T98)"
-echo "CI pin (flutter_ci.yml): $PINNED_FLUTTER — local: $LOCAL_FLUTTER"
+echo "CI pin (flutter_ci.yml = emu_duo_e2e.yml): $PINNED_FLUTTER — local: $LOCAL_FLUTTER"
 [ "$LOCAL_FLUTTER" = "$PINNED_FLUTTER" ] \
   || fail_usage "local Flutter $LOCAL_FLUTTER != CI pin $PINNED_FLUTTER. Install the pinned version — do NOT 'flutter upgrade' (that moves you further off the pin). To move the pin, bump it in both workflows + CLAUDE.md + the pre-push-validation skill in one PR (T98)."
 
@@ -139,6 +148,11 @@ TREE_BEFORE="$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no)"
 step "cd packages/redpanda_light_client"
 cd "$PKG_DIR"
 
+# Must run before ANY analyze/format, including the root-level ones below:
+# both resolve files under this package through the package's OWN
+# .dart_tool/package_config.json, and a stale one (old languageVersion) makes
+# a healthy main look broken — "90 errors" from analyze, "33 files changed"
+# from format (TD083/TD088). A root-level `flutter pub get` does not refresh it.
 step "1. pub get (light client)"
 flutter pub get
 

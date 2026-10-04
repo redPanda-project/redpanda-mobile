@@ -21,6 +21,11 @@ differ — see *Flutter / Dart Versions* below.
 - **flutter analyze**: Treats `info` level lint issues as errors (exit code 1).
 - **Protobuf classes**: Every `GeneratedMessage` subclass needs `clone()` and
   `copyWith()` methods annotated with `@$core.Deprecated`.
+- **Stale package config**: run `flutter pub get` inside
+  `packages/redpanda_light_client` (not just at the root) after every pull —
+  a stale package-local `.dart_tool/package_config.json` makes a healthy main
+  show ~90 analyzer errors and ~33 "unformatted" files (TD083/TD088). The
+  pre-push script does this first; do it yourself before an ad-hoc analyze.
 - **build_runner**: App uses Drift ORM. Run `dart run build_runner build
   --delete-conflicting-outputs` before analyze to regenerate `database.g.dart`.
 
@@ -40,7 +45,8 @@ differ — see *Flutter / Dart Versions* below.
 
 The source of truth is `flutter-version:` in
 `.github/workflows/flutter_ci.yml`. Everything else must match it: the
-`flutter-version:` in `emu_duo_e2e.yml`, your local `~/tools/flutter`, and this
+`flutter-version:` in `emu_duo_e2e.yml` (the pre-push script refuses to run
+when the two workflow pins differ), your local `~/tools/flutter`, and this
 section. Read the version out of `flutter_ci.yml` — do not trust a version
 repeated anywhere else, including here. At the time of writing it is
 **Flutter 3.47.2 (Dart 3.13.2)**; if this line and `flutter_ci.yml` disagree,
@@ -57,3 +63,18 @@ resulting repo-wide reformat.
 Both manifests declare `environment.sdk: ^3.12.0` (matching `pubspec.lock`'s
 `sdks.dart: >=3.12.0 <4.0.0`), so a toolchain below Dart 3.12 cannot resolve
 this repo at all. That floor is a lower bound, not the pin.
+
+## Maintenance: Flutter pin
+
+The exact pin cannot go stale loudly — Dependabot bumps action refs, not the
+`flutter-version:` string — so check it periodically (part of the repo
+maintenance routines, TD086):
+
+1. Compare the pin in `flutter_ci.yml` with the latest stable:
+   `curl -s https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json | jq -r '.current_release.stable as $h | .releases[] | select(.hash==$h) | .version'`
+   (not `gh api repos/flutter/flutter/releases/latest` — Flutter does not
+   publish GitHub releases; that endpoint returns an ancient `3.19.0-0.1.pre`).
+2. If it lags (security patch or new stable), bump deliberately in **one** PR:
+   both workflow pins, the version line above,
+   `.claude/skills/pre-push-validation/SKILL.md`, the local `~/tools/flutter`,
+   and the resulting repo-wide `dart format` / `pubspec.lock` churn.
