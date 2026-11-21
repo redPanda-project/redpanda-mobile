@@ -84,24 +84,19 @@ class RedPandaLightClient implements RedPandaClient {
   /// Bootstrap nodes of the v23 test network. Tests and local setups inject
   /// their own list via the `seeds` parameter.
   ///
-  /// DNS names since T154 so a node can move to a new IP without an app
-  /// release (seed1 -> 91.98.79.117, seed2 -> 5.75.137.166). The trailing IP
-  /// literal is seed2's address as a fallback for as long as the DNS records
-  /// are missing or still propagating, and for devices whose resolver fails:
-  /// an unresolvable name only costs that one dial (it lands in backoff), and
-  /// the alias dedup in [_runConnectionCheck] keeps seed2 and its IP from
-  /// being dialled as two connections to the same node. The fallback can go
-  /// once both names resolve in production and an app build without it has
-  /// reached the devices.
+  /// Fixed IP literals (T158), so that finding the network never depends on
+  /// a DNS record. Host names remain valid in an injected `seeds` list: an
+  /// unresolvable name only costs that one dial (it lands in backoff), and
+  /// the alias dedup in [_runConnectionCheck] keeps a name and its own IP
+  /// from being dialled as two connections to the same node.
   static const List<String> defaultSeeds = [
-    'seed1.redpanda.im:59558',
-    'seed2.redpanda.im:59558',
     '5.75.137.166:59558',
+    '46.224.156.238:59558',
   ];
 
   /// Upper bound for one alias-dedup DNS lookup. A resolver that hangs (no
   /// network, captive portal) must not hold up the dials of the candidates
-  /// after it in the same connection check, e.g. the fallback IP seed.
+  /// after it in the same connection check, e.g. an IP seed.
   static const Duration lookupTimeout = Duration(seconds: 2);
 
   /// DNS resolution used by the alias dedup; injectable for tests.
@@ -138,13 +133,13 @@ class RedPandaLightClient implements RedPandaClient {
   /// endpoints. Resolving at dial time instead of on every check also keeps
   /// a connected hostname peer from costing a DNS query per 3 s tick.
   /// [_livePeerFor] uses the entries to find the connection that serves an
-  /// endpoint under its other name (OH host `5.75.137.166` reached as
-  /// `seed2.redpanda.im`). Bounded by the peer repository's address set.
+  /// endpoint under its other name (an OH host known by IP, reached under a
+  /// host name). Bounded by the peer repository's address set.
   final Map<String, Set<String>> _resolvedEndpoints = {};
 
   /// Retry delay for an address skipped as alias of a live connection: short
-  /// and fixed (no exponential growth), so the fallback IP is dialled soon
-  /// after the hostname connection it aliases is lost.
+  /// and fixed (no exponential growth), so the alias is dialled soon after
+  /// the connection it aliases is lost.
   static const Duration aliasRetryDelay = Duration(seconds: 10);
 
   Timer? _connectionTimer;
@@ -709,7 +704,7 @@ class RedPandaLightClient implements RedPandaClient {
           // (see [_resolvedEndpoints]).
           _resolvedEndpoints[address] = resolved;
           if (_isAliasOfConnected(address, resolved)) {
-            // E.g. seed2.redpanda.im next to its own fallback IP. Park it
+            // E.g. a host-name seed next to its own IP. Park it
             // (without scoring a failure) so a permanent alias does not take
             // a dial slot in every check.
             _nextRetryTime[address] = _now().add(aliasRetryDelay);
