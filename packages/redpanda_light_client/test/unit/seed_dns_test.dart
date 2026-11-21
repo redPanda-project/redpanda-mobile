@@ -100,7 +100,8 @@ class _HandshakingSocket implements Socket {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-/// T154: hostname seeds (`seedN.redpanda.im`) next to an IP fallback seed.
+/// Injected hostname seeds next to an IP seed (T154). The default list has
+/// no hostnames since T158; lookup and alias dedup stay for injected lists.
 ///
 /// The DNS lookup is injected, so these tests never touch a real resolver.
 /// None of them calls `connect()`: without its 3 s timer, the constructor's
