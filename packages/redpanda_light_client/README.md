@@ -27,7 +27,7 @@ final selfNodeId = NodeId.fromPublicKey(keys);
 final client = RedPandaLightClient(
   selfNodeId: selfNodeId,
   selfKeys: keys,
-  seeds: ['seed1.redpanda.im:59558', 'seed2.redpanda.im:59558'],
+  seeds: RedPandaLightClient.defaultSeeds,
 );
 
 await client.connect();

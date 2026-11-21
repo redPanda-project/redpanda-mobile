@@ -152,12 +152,19 @@ void main() {
     );
   }
 
-  test('defaultSeeds: DNS names plus seed2 IP as fallback', () {
+  test('defaultSeeds: fixed IP literals, no DNS lookup needed (T158)', () {
     expect(RedPandaLightClient.defaultSeeds, [
-      'seed1.redpanda.im:59558',
-      'seed2.redpanda.im:59558',
       '5.75.137.166:59558',
+      '46.224.156.238:59558',
     ]);
+    for (final seed in RedPandaLightClient.defaultSeeds) {
+      final host = seed.substring(0, seed.lastIndexOf(':'));
+      expect(
+        InternetAddress.tryParse(host),
+        isNotNull,
+        reason: 'a default seed must not depend on a DNS record: $seed',
+      );
+    }
   });
 
   test('a hostname seed and its own IP are dialled once, not twice — '
