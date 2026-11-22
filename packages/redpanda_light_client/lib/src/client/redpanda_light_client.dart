@@ -1129,6 +1129,7 @@ class RedPandaLightClient implements RedPandaClient {
     _pollingEnabled = false; // stop the self-rescheduling poll loop (T27)
     _nextPollAt = null;
     _pollFollowUpOhs.clear();
+    _missedNotifyAt.clear();
     _pollingTimer?.cancel();
     _pollingTimer = null;
     _renewalTimer?.cancel();
@@ -1266,6 +1267,11 @@ class RedPandaLightClient implements RedPandaClient {
   DateTime? _lastPollCycleEndedAt;
   bool _lastPollCycleWasBackToBack = false;
 
+  /// Whether the running cycle (if any) is a full one. A full cycle sets
+  /// [_nextPollAt] itself when it ends; a follow-up keeps it, so a pull
+  /// forward requested during a follow-up must still be applied.
+  bool _fullCycleInProgress = false;
+
   /// Serializes fire-and-forget batch acks (T27): AckFetch responses share
   /// the single per-command completer slot, so acks must not overlap.
   Future<void> _ackFetchTail = Future.value();
@@ -1346,9 +1352,11 @@ class RedPandaLightClient implements RedPandaClient {
   /// fallback for missed Notifies.
   ///
   /// T167: a Notify that lands while a cycle runs is only covered by that
-  /// cycle if the cycle has not fetched the OH yet. Otherwise the OH is
-  /// queued for a follow-up fetch that runs as soon as the cycle ends
-  /// (bounded by [_backToBackPause]) instead of waiting out the interval.
+  /// cycle if the cycle has not fetched the OH yet. Otherwise — and whenever
+  /// no cycle runs — the OH is queued for a fetch-only follow-up that runs at
+  /// once or as soon as the running cycle ends (bounded by
+  /// [_backToBackPause]) instead of waiting out the interval. (Before T167 an
+  /// idle Notify pulled the whole cycle forward, with no pause at all.)
   void _handleNotify(List<int> payload) {
     final Notify notify;
     try {
@@ -1379,16 +1387,16 @@ class RedPandaLightClient implements RedPandaClient {
       _missedNotifyAt.putIfAbsent(ohHex, DateTime.now);
     }
     if (!_pollingEnabled) return;
-    if (_pollInProgress) {
-      // The running cycle still fetches this OH: nothing to do.
-      if (timing == 'before-fetch') return;
-      // Already fetched (or in flight, or not in the cycle's snapshot): the
-      // cycle's end arms a follow-up fetch for it.
-      _pollFollowUpOhs.add(ohHex);
-      return;
-    }
-    // No cycle running: pull the next full cycle forward to right now.
-    _schedulePoll(Duration.zero);
+    // The running cycle still fetches this OH: nothing to do.
+    if (timing == 'before-fetch') return;
+    // Already fetched (or in flight, or not in the cycle's snapshot), or no
+    // cycle running: fetch this OH in a follow-up — at once when idle, right
+    // after the running cycle otherwise (that cycle's end arms the timer).
+    // The full cycle keeps its own cadence either way, so a stream of
+    // Notifies cannot drive its maintenance work (oh_update resends,
+    // republish, redundancy sweep) faster than [activePollInterval].
+    _pollFollowUpOhs.add(ohHex);
+    if (!_pollInProgress) _armPollTimer();
   }
 
   /// T167: how far the running poll cycle has got with [ohHex] — `idle` (no
@@ -5374,6 +5382,7 @@ class RedPandaLightClient implements RedPandaClient {
     if (_pollInProgress) return;
     final started = DateTime.now();
     final backToBack = _startsBackToBack(started);
+    _fullCycleInProgress = true;
     try {
       await _runPollCycle();
     } catch (e) {
@@ -5381,6 +5390,7 @@ class RedPandaLightClient implements RedPandaClient {
       // exception escaping the cycle would end polling until restart.
       RpLog.info('RedPandaLightClient: poll cycle failed: $e');
     } finally {
+      _fullCycleInProgress = false;
       final now = DateTime.now();
       final elapsed = now.difference(started);
       final interval = _pollInterval;
@@ -5493,7 +5503,7 @@ class RedPandaLightClient implements RedPandaClient {
     _lastChatActivity = DateTime.now();
     final next = _nextPollAt;
     if (_pollingEnabled &&
-        !_pollInProgress &&
+        !_fullCycleInProgress &&
         (next == null ||
             next.isAfter(DateTime.now().add(activePollInterval)))) {
       _schedulePoll(activePollInterval);

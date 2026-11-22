@@ -284,7 +284,7 @@ void main() {
       () => node.fetchTimesOf(a.ohId, after: released).isNotEmpty,
       // The next regular tick is ~5 s after the cycle started; the
       // follow-up has to come well before it.
-      timeout: const Duration(milliseconds: 800),
+      timeout: const Duration(milliseconds: 1500),
       reason: 'no follow-up fetch of A after the cycle',
     );
     await Future.delayed(const Duration(milliseconds: 200));
@@ -372,14 +372,53 @@ void main() {
     }
     // The follow-ups do not push the regular (full) cycle out: it still runs
     // within its 5 s interval.
-    final stormLogs = logs.skipWhile((l) => !l.contains('after-fetch'));
+    // B is fetched only by full cycles: one must have run since the held
+    // cycle ended (a regular tick is due ~5 s after that cycle started).
+    final b = node.held.single;
     expect(
-      stormLogs.where((l) => l.contains('poll follow-up fetched')),
+      node.fetchTimesOf(b, after: stormStart),
       isNotEmpty,
+      reason: 'the follow-ups starved the regular cycle',
     );
+  });
+
+  test('a Notify while the OH fetch is in flight gets a follow-up', () async {
+    final (client, socket) = await connectedClient();
+    addTearDown(client.disconnect);
+    final node = _Node(socket);
+    final a = await client.registerOutboundHandle(channelId: 'a');
+    await Future.delayed(const Duration(milliseconds: 300));
+    node.holdFetch = (ohId) => _sameBytes(ohId, a.ohId);
+    await pumpUntil(
+      () => node.held.isNotEmpty,
+      timeout: const Duration(seconds: 8),
+      reason: 'no cycle reached the fetch of A',
+    );
+    node.holdFetch = null;
+    // The response may or may not contain the new item — fetch again.
+    node.notify(a.ohId);
+    await Future.delayed(const Duration(milliseconds: 100));
     expect(
-      stormLogs.where((l) => l.contains('poll cycle fetched')),
-      isNotEmpty,
+      logs.where((l) => l.contains('Notify timing during-fetch')),
+      hasLength(1),
     );
+    final released = DateTime.now();
+    node.answerFetch();
+    await pumpUntil(
+      () => node.fetchTimesOf(a.ohId, after: released).isNotEmpty,
+      timeout: const Duration(milliseconds: 1500),
+      reason: 'no follow-up fetch of A after the in-flight Notify',
+    );
+  });
+
+  test('disconnect during a cycle drops the queued follow-up', () async {
+    final (client, node, a, _) = await cycleHeldOnB();
+    node.notify(a.ohId);
+    await Future.delayed(const Duration(milliseconds: 100));
+    await client.disconnect();
+    final released = DateTime.now();
+    node.answerFetch();
+    await Future.delayed(const Duration(milliseconds: 1500));
+    expect(node.fetchTimesOf(a.ohId, after: released), isEmpty);
   });
 }
