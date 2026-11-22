@@ -370,4 +370,334 @@ void main() {
       expect(m.setOwnOhs(chan, [oh]), isFalse);
     });
   });
+
+  group('T160 read-before-write / read-repair', () {
+    final now = DateTime.utc(2026, 11, 22, 12).millisecondsSinceEpoch;
+
+    test(
+      'knowsCounterpartEntry flips only once the other ROLE was read',
+      () async {
+        final a = creator();
+        final b = joiner();
+        expect(b.isCreatorOf(chan), isFalse);
+        expect(a.isCreatorOf(chan), isTrue);
+        expect(b.isCreatorOf('other'), isNull);
+        expect(b.knowsCounterpartEntry(chan), isFalse);
+
+        // Bob's own publish does not count as knowing Alice.
+        b.setOwnOhs(chan, [_oh('9.9.9.9:59558')]);
+        final ownStore = (await b.buildSignedStore(chan, now))!;
+        await b.applyResolvedRecord(
+          chan,
+          RendezvousManager.recordFromStoreBytes(ownStore),
+          now + 1,
+        );
+        expect(b.knowsCounterpartEntry(chan), isFalse);
+
+        a.setOwnOhs(chan, [_oh('1.1.1.1:59558')]);
+        final aliceStore = (await a.buildSignedStore(chan, now + 2))!;
+        await b.applyResolvedRecord(
+          chan,
+          RendezvousManager.recordFromStoreBytes(aliceStore),
+          now + 3,
+        );
+        expect(b.knowsCounterpartEntry(chan), isTrue);
+      },
+    );
+
+    test('a newer record without our entry needs a repair; the merged '
+        'republish carries both and settles it', () async {
+      final a = creator()..setOwnOhs(chan, [_oh('1.1.1.1:59558')]);
+      final b = joiner()..setOwnOhs(chan, [_oh('2.2.2.2:59558')]);
+      // Bob published first (his hold timed out) ...
+      await b.buildSignedStore(chan, now);
+      // ... then Alice, blind, replaced it with her own entry only.
+      final aliceOnly = RendezvousManager.recordFromStoreBytes(
+        (await a.buildSignedStore(chan, now + 1000))!,
+      );
+      final resolved = await b.applyResolvedRecordDetailed(
+        chan,
+        aliceOnly,
+        now + 2000,
+      );
+      expect(resolved!.needsRepair, isTrue);
+      expect(resolved.counterpartOhs, hasLength(1));
+
+      final merged = RendezvousManager.recordFromStoreBytes(
+        (await b.buildSignedStore(chan, now + 3000))!,
+      );
+      final entries = await ChannelRendezvous.decryptRecordContent(
+        sk,
+        merged.content,
+      );
+      expect(entries, hasLength(2));
+      // Reading our own merged record back is no reason to repair again.
+      final again = await b.applyResolvedRecordDetailed(
+        chan,
+        merged,
+        now + 4000,
+      );
+      expect(again!.needsRepair, isFalse);
+    });
+
+    test(
+      'an OLDER record that teaches nothing new is no reason to repair',
+      () async {
+        final a = creator()..setOwnOhs(chan, [_oh('1.1.1.1:59558')]);
+        final b = joiner()..setOwnOhs(chan, [_oh('2.2.2.2:59558')]);
+        final aliceOld = RendezvousManager.recordFromStoreBytes(
+          (await a.buildSignedStore(chan, now))!,
+        );
+        // Bob already knows Alice's entry and has written it.
+        await b.applyResolvedRecord(chan, aliceOld, now + 500);
+        await b.buildSignedStore(chan, now + 1000);
+        final resolved = await b.applyResolvedRecordDetailed(
+          chan,
+          aliceOld,
+          now + 2000,
+        );
+        expect(resolved!.needsRepair, isFalse);
+      },
+    );
+
+    test('P3: an OLDER record that teaches an entry our last write lacked '
+        'needs a republish (late answer after a timed-out hold)', () async {
+      final a = creator()..setOwnOhs(chan, [_oh('1.1.1.1:59558')]);
+      final b = joiner()..setOwnOhs(chan, [_oh('2.2.2.2:59558')]);
+      final aliceAtCreation = RendezvousManager.recordFromStoreBytes(
+        (await a.buildSignedStore(chan, now))!,
+      );
+      // Bob's hold timed out: he wrote only himself, AFTER Alice's record.
+      final bobAlone = RendezvousManager.recordFromStoreBytes(
+        (await b.buildSignedStore(chan, now + 5000))!,
+      );
+      expect(aliceAtCreation.timestampMs, lessThan(bobAlone.timestampMs));
+      final resolved = await b.applyResolvedRecordDetailed(
+        chan,
+        aliceAtCreation,
+        now + 6000,
+      );
+      expect(resolved!.needsRepair, isTrue);
+      expect(resolved.counterpartOhs, hasLength(1));
+      // The merged republish carries both and settles it.
+      final merged = RendezvousManager.recordFromStoreBytes(
+        (await b.buildSignedStore(chan, now + 7000))!,
+      );
+      expect(
+        await ChannelRendezvous.decryptRecordContent(sk, merged.content),
+        hasLength(2),
+      );
+      final again = await b.applyResolvedRecordDetailed(
+        chan,
+        aliceAtCreation,
+        now + 8000,
+      );
+      expect(again!.needsRepair, isFalse);
+    });
+
+    test(
+      'a record carrying a STALE copy of our entry needs a repair',
+      () async {
+        final a = creator()..setOwnOhs(chan, [_oh('1.1.1.1:59558')]);
+        final b = joiner()..setOwnOhs(chan, [_oh('2.2.2.2:59558')]);
+        // Alice learned Bob's first entry ...
+        final bobFirst = RendezvousManager.recordFromStoreBytes(
+          (await b.buildSignedStore(chan, now))!,
+        );
+        await a.applyResolvedRecord(chan, bobFirst, now + 1);
+        // ... Bob moves his mailbox and publishes ...
+        b.setOwnOhs(chan, [_oh('3.3.3.3:59558')]);
+        await b.buildSignedStore(chan, now + 1000);
+        // ... and Alice republishes with Bob's OLD entry.
+        final aliceStale = RendezvousManager.recordFromStoreBytes(
+          (await a.buildSignedStore(chan, now + 2000))!,
+        );
+        final resolved = await b.applyResolvedRecordDetailed(
+          chan,
+          aliceStale,
+          now + 3000,
+        );
+        expect(resolved!.needsRepair, isTrue);
+      },
+    );
+
+    test(
+      'three participants: the joiner\'s merged write keeps every entry',
+      () async {
+        final a = creator()..setOwnOhs(chan, [_oh('1.1.1.1:59558')]);
+        final b = joiner()..setOwnOhs(chan, [_oh('2.2.2.2:59558')]);
+        final carol = RendezvousEntry(
+          participantId: CryptoUtils.randomBytes(32),
+          name: 'Carol',
+          entryTs: now - 5000,
+          ohs: [_oh('4.4.4.4:59558')],
+        );
+        // Alice's record already carries a third participant's entry.
+        final signed = await ChannelRendezvous.buildSignedRecord(
+          sk,
+          ChannelRendezvous.mergeEntries(
+            [carol],
+            [
+              RendezvousEntry(
+                participantId: ChannelRendezvous.participantId(
+                  sk,
+                  isCreator: true,
+                ),
+                name: 'Alice',
+                entryTs: now,
+                ohs: [_oh('1.1.1.1:59558')],
+              ),
+            ],
+          ),
+          now,
+        );
+        expect(a.knows(chan), isTrue);
+        await b.applyResolvedRecordDetailed(chan, signed, now + 1000);
+        final bobMerged = RendezvousManager.recordFromStoreBytes(
+          (await b.buildSignedStore(chan, now + 2000))!,
+        );
+        final entries = await ChannelRendezvous.decryptRecordContent(
+          sk,
+          bobMerged.content,
+        );
+        expect(entries, hasLength(3));
+        expect(
+          entries.map((e) => e.name).toSet(),
+          equals({'Alice', 'Bob', 'Carol'}),
+        );
+      },
+    );
+  });
+
+  group('T160/P5 monotonic record timestamps', () {
+    final now = DateTime.utc(2026, 11, 22, 12).millisecondsSinceEpoch;
+    const minute = 60 * 1000;
+
+    test('a writer whose clock runs 5 min behind still writes a NEWER record '
+        'than the one it read', () async {
+      final a = creator()..setOwnOhs(chan, [_oh('1.1.1.1:59558')]);
+      final b = joiner()..setOwnOhs(chan, [_oh('2.2.2.2:59558')]);
+      final alice = RendezvousManager.recordFromStoreBytes(
+        (await a.buildSignedStore(chan, now))!,
+      );
+      final bobNow = now - 5 * minute; // Bob's clock
+      await b.applyResolvedRecordDetailed(chan, alice, bobNow);
+      final bob = RendezvousManager.recordFromStoreBytes(
+        (await b.buildSignedStore(chan, bobNow))!,
+      );
+      expect(
+        bob.timestampMs,
+        greaterThan(alice.timestampMs),
+        reason: 'the node replaces a record only by a strictly newer one',
+      );
+      // Alice reading it sees her entry in it: no repair, no loop.
+      final resolved = await a.applyResolvedRecordDetailed(chan, bob, now + 1);
+      expect(resolved!.needsRepair, isFalse);
+    });
+
+    test('a writer whose clock runs ahead keeps the other side able to '
+        'overwrite after reading', () async {
+      final a = creator()..setOwnOhs(chan, [_oh('1.1.1.1:59558')]);
+      final b = joiner()..setOwnOhs(chan, [_oh('2.2.2.2:59558')]);
+      final bobAhead = RendezvousManager.recordFromStoreBytes(
+        (await b.buildSignedStore(chan, now + 5 * minute))!,
+      );
+      await a.applyResolvedRecordDetailed(chan, bobAhead, now);
+      a.setOwnOhs(chan, [_oh('3.3.3.3:59558')]); // Alice moves
+      final alice = RendezvousManager.recordFromStoreBytes(
+        (await a.buildSignedStore(chan, now))!,
+      );
+      expect(alice.timestampMs, greaterThan(bobAhead.timestampMs));
+    });
+
+    test('Q6: a record further ahead than the node accepts (> 15 min) does '
+        'not lift the floor', () async {
+      final a = creator()..setOwnOhs(chan, [_oh('1.1.1.1:59558')]);
+      final b = joiner()..setOwnOhs(chan, [_oh('2.2.2.2:59558')]);
+      final bobFar = RendezvousManager.recordFromStoreBytes(
+        (await b.buildSignedStore(chan, now + 60 * minute))!,
+      );
+      await a.applyResolvedRecordDetailed(chan, bobFar, now);
+      final alice = RendezvousManager.recordFromStoreBytes(
+        (await a.buildSignedStore(chan, now))!,
+      );
+      expect(alice.timestampMs, now);
+    });
+
+    test('a record inside the node\'s window lifts the floor, capped at '
+        '14 min ahead', () async {
+      final a = creator()..setOwnOhs(chan, [_oh('1.1.1.1:59558')]);
+      final b = joiner()..setOwnOhs(chan, [_oh('2.2.2.2:59558')]);
+      final bobAhead = RendezvousManager.recordFromStoreBytes(
+        (await b.buildSignedStore(chan, now + 14 * minute + 30000))!,
+      );
+      await a.applyResolvedRecordDetailed(chan, bobAhead, now);
+      final alice = RendezvousManager.recordFromStoreBytes(
+        (await a.buildSignedStore(chan, now))!,
+      );
+      expect(alice.timestampMs, now + RendezvousManager.maxFutureLeadMs);
+    });
+
+    test('Q6: near UTC midnight the record timestamp never crosses into '
+        'tomorrow — the node files it under the timestamp\'s day', () async {
+      final late = DateTime.utc(2026, 11, 22, 23, 58).millisecondsSinceEpoch;
+      final endOfDay = DateTime.utc(2026, 11, 23).millisecondsSinceEpoch - 1;
+      final a = creator()..setOwnOhs(chan, [_oh('1.1.1.1:59558')]);
+      final b = joiner()..setOwnOhs(chan, [_oh('2.2.2.2:59558')]);
+      // Bob's clock is 90 s ahead: his record already says 23:59:30.
+      final bob = RendezvousManager.recordFromStoreBytes(
+        (await b.buildSignedStore(chan, late + 90000))!,
+      );
+      await a.applyResolvedRecordDetailed(chan, bob, late);
+      // Another, still later one at the very last millisecond of the day.
+      final bob2 = RendezvousManager.recordFromStoreBytes(
+        (await b.buildSignedStore(chan, endOfDay))!,
+      );
+      await a.applyResolvedRecordDetailed(chan, bob2, late);
+      final alice = RendezvousManager.recordFromStoreBytes(
+        (await a.buildSignedStore(chan, late))!,
+      );
+      expect(alice.timestampMs, endOfDay, reason: 'capped at the day end');
+      final todayKey = (await a.lookupKeys(chan, late)).first;
+      expect(
+        await ChannelRendezvous.rendezvousKademliaId(sk, alice.timestampMs),
+        todayKey,
+        reason: 'the write must stay findable under today\'s key',
+      );
+    });
+
+    test('Q6: a record of TOMORROW (other clock ahead past midnight) does '
+        'not set today\'s floor — it lives under another key', () async {
+      final late = DateTime.utc(2026, 11, 22, 23, 55).millisecondsSinceEpoch;
+      final a = creator()..setOwnOhs(chan, [_oh('1.1.1.1:59558')]);
+      final b = joiner()..setOwnOhs(chan, [_oh('2.2.2.2:59558')]);
+      final bobTomorrow = RendezvousManager.recordFromStoreBytes(
+        (await b.buildSignedStore(chan, late + 10 * minute))!,
+      );
+      await a.applyResolvedRecordDetailed(chan, bobTomorrow, late);
+      final alice = RendezvousManager.recordFromStoreBytes(
+        (await a.buildSignedStore(chan, late))!,
+      );
+      expect(alice.timestampMs, late);
+    });
+
+    test(
+      'successive own writes never go backwards, even if the clock does',
+      () async {
+        final a = creator()..setOwnOhs(chan, [_oh('1.1.1.1:59558')]);
+        final first = RendezvousManager.recordFromStoreBytes(
+          (await a.buildSignedStore(chan, now))!,
+        );
+        final second = RendezvousManager.recordFromStoreBytes(
+          (await a.buildSignedStore(chan, now - 2 * minute))!,
+        );
+        expect(second.timestampMs, greaterThan(first.timestampMs));
+        final entries = await ChannelRendezvous.decryptRecordContent(
+          sk,
+          second.content,
+        );
+        expect(entries.single.entryTs, greaterThan(now));
+      },
+    );
+  });
 }

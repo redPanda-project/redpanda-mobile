@@ -21,6 +21,18 @@ import 'package:redpanda_light_client/src/generated/commands.pb.dart';
 class RendezvousManager {
   final Map<String, _ChannelRendezvousState> _states = {};
 
+  /// How far ahead of the own clock a record timestamp may be pushed to stay
+  /// monotonic (T160/P5): the node's limit (`ChannelDht.MAX_FUTURE_SKEW_MS`,
+  /// 15 min) minus one minute for the node's own clock error.
+  static const int maxFutureLeadMs = 14 * 60 * 1000;
+
+  /// The node's limit for record timestamps ahead of its clock
+  /// (`ChannelDht.MAX_FUTURE_SKEW_MS`).
+  static const int nodeFutureSkewMs = 15 * 60 * 1000;
+
+  static const int _dayMs = 24 * 60 * 60 * 1000;
+  static int _utcDay(int ms) => ms ~/ _dayMs;
+
   /// Registers (or refreshes) a channel's rendezvous state. Idempotent — keeps
   /// the accumulated merge state across re-registrations.
   ///
@@ -61,6 +73,24 @@ class RendezvousManager {
   List<int>? channelSecretOf(String channelId) =>
       _states[channelId]?.channelSecret;
 
+  /// Whether the local side created [channelId] (null for an unknown
+  /// channel).
+  bool? isCreatorOf(String channelId) => _states[channelId]?.isCreator;
+
+  /// Whether the merge state of [channelId] holds an entry of the
+  /// counterpart role — i.e. a resolved record (or a restored snapshot) has
+  /// told us about the other side. T160: a side without one must READ the
+  /// record before it writes, or its publish erases what it never saw.
+  bool knowsCounterpartEntry(String channelId) {
+    final state = _states[channelId];
+    if (state == null) return false;
+    final counterpartId = ChannelRendezvous.participantId(
+      state.channelSecret,
+      isCreator: !state.isCreator,
+    );
+    return state.knownEntries.containsKey(_hex(counterpartId));
+  }
+
   /// The `[today, yesterday]` Kademlia record keys to look a channel's record
   /// up under (records rotate under the UTC-day key, TTL 48 h).
   Future<List<Uint8List>> lookupKeys(String channelId, int nowMs) async {
@@ -97,6 +127,17 @@ class RendezvousManager {
   /// [nowMs]: our own fresh entry (`entry_ts = nowMs`) merged with the
   /// newest-known counterpart entries, encrypted and signed with the channel record
   /// key. Returns null if the channel is unknown or we have no own OH yet.
+  ///
+  /// T160/P5: the record timestamp is MONOTONIC over every record this side
+  /// has seen or built — `max(nowMs, newest seen + 1)` — because the node
+  /// replaces a record only by a strictly newer one (`KadStoreManager.put`).
+  /// A writer whose clock runs behind the other participant's would
+  /// otherwise never get a record accepted, and its read-repair would be
+  /// rejected on every attempt. Capped at [maxFutureLeadMs] ahead of the own
+  /// clock: the node rejects records more than 15 min in its future
+  /// (`ChannelDht.MAX_FUTURE_SKEW_MS`), so past the cap the write would be
+  /// lost anyway. The own entry's `entry_ts` is monotonic the same way (it
+  /// orders our entries at the other participants' merge).
   Future<Uint8List?> buildSignedStore(String channelId, int nowMs) async {
     final state = _states[channelId];
     if (state == null || state.ownOhs.isEmpty) return null;
@@ -105,10 +146,27 @@ class RendezvousManager {
       state.channelSecret,
       isCreator: state.isCreator,
     );
+    final ownIdHex = _hex(ownId);
+    final previousOwnTs = state.knownEntries[ownIdHex]?.entryTs;
+    final cap = nowMs + maxFutureLeadMs;
+    final entryTs = previousOwnTs != null && previousOwnTs >= nowMs
+        ? (previousOwnTs + 1 > cap ? cap : previousOwnTs + 1)
+        : nowMs;
+    // Review 2/Q6: the node files a record under the UTC day of ITS
+    // timestamp (`KadContent.createKademliaId`), so the record timestamp
+    // must stay inside today's UTC day — pushed past midnight it would land
+    // under tomorrow's key, invisible to today's lookups. Only records of the
+    // same UTC day compete for that key, so the floor is taken per day.
+    final dayEnd = (_utcDay(nowMs) + 1) * _dayMs - 1;
+    final recordCap = cap < dayEnd ? cap : dayEnd;
+    final seen = state.newestSeenRecordTsByDay[_utcDay(nowMs)];
+    final recordTs = seen != null && seen >= nowMs
+        ? (seen + 1 > recordCap ? recordCap : seen + 1)
+        : nowMs;
     final ownEntry = RendezvousEntry(
       participantId: ownId,
       name: state.ownName,
-      entryTs: nowMs,
+      entryTs: entryTs,
       ohs: state.ownOhs,
     );
     // Merge our fresh entry over everything we know so the published record
@@ -121,8 +179,13 @@ class RendezvousManager {
     final signed = await ChannelRendezvous.buildSignedRecord(
       state.channelSecret,
       merged,
-      nowMs,
+      recordTs,
     );
+    state.lastBuiltRecordTs = signed.timestampMs;
+    state.noteSeenRecordTs(signed.timestampMs, nowMs);
+    state.lastBuiltEntryTs = {
+      for (final e in merged) _hex(e.participantId): e.entryTs,
+    };
     return KademliaStore(
       timestamp: Int64(signed.timestampMs),
       publicKey: signed.publicKey,
@@ -150,6 +213,24 @@ class RendezvousManager {
   /// the record is invalid/stale, undecryptable, or carries nothing newer for
   /// the counterpart.
   Future<List<OHDescriptor>?> applyResolvedRecord(
+    String channelId,
+    SignedRendezvousRecord record,
+    int nowMs,
+  ) async => (await applyResolvedRecordDetailed(
+    channelId,
+    record,
+    nowMs,
+  ))?.counterpartOhs;
+
+  /// [applyResolvedRecord] plus the read-repair verdict (T160): whether the
+  /// record is NEWER than the last one we built ourselves, carries another
+  /// participant's entry, and lacks our own current entry (missing, or with
+  /// an OH list that is not our current one). Such a record was written by
+  /// someone who had not seen our entry — the node keeps only the newest
+  /// record, so our entry is gone from the DHT until we write the merged
+  /// record back. Returns null when the record is invalid (signature, TTL,
+  /// key pin, decryption) — then nothing was merged and nothing is repaired.
+  Future<ResolvedRecord?> applyResolvedRecordDetailed(
     String channelId,
     SignedRendezvousRecord record,
     int nowMs,
@@ -183,6 +264,27 @@ class RendezvousManager {
       return null; // wrong key / tampered / malformed
     }
 
+    final ownIdHex = _hex(
+      ChannelRendezvous.participantId(
+        state.channelSecret,
+        isCreator: state.isCreator,
+      ),
+    );
+    final ownInRecord = entries
+        .where((e) => _hex(e.participantId) == ownIdHex)
+        .firstOrNull;
+    final hasForeignEntry = entries.any(
+      (e) => _hex(e.participantId) != ownIdHex,
+    );
+    final lastBuilt = state.lastBuiltRecordTs;
+    // (A) Someone wrote a newer record without our current entry.
+    final overwritten =
+        state.ownOhs.isNotEmpty &&
+        hasForeignEntry &&
+        (lastBuilt == null || record.timestampMs > lastBuilt) &&
+        (ownInRecord == null || !_sameOhList(ownInRecord.ohs, state.ownOhs));
+    state.noteSeenRecordTs(record.timestampMs, nowMs);
+
     final counterpartId = ChannelRendezvous.participantId(
       state.channelSecret,
       isCreator: !state.isCreator,
@@ -193,11 +295,34 @@ class RendezvousManager {
       ChannelRendezvous.mergeEntries(state.knownEntries.values, entries),
     );
     final after = state.knownEntries[counterpartIdHex];
-    if (after == null) return null;
-    if (before != null && after.entryTs <= before.entryTs) {
-      return null; // nothing newer for the counterpart
-    }
-    return after.ohs;
+    final advanced =
+        after != null && (before == null || after.entryTs > before.entryTs);
+    // (B) T160/P3: a record NOT newer than our own last write taught us an
+    // entry of another participant that this write did not carry (or carried
+    // older) — typically a late answer with the creator's older record after
+    // our hold had timed out and we had published only ourselves. The node
+    // most likely still holds our write, which lacks that entry, and (A)
+    // cannot see it because the answer is older. Republish the merged
+    // record. A NEWER record that carries our current entry needs nothing
+    // (the node holds everything already) — firing there would make every
+    // read a write, and two reading sides could keep re-stamping each other.
+    // Only once we have written at all: a side that has never published
+    // writes the merged record anyway.
+    final builtEntries = state.lastBuiltEntryTs;
+    final learnedUnwritten =
+        lastBuilt != null &&
+        record.timestampMs <= lastBuilt &&
+        state.ownOhs.isNotEmpty &&
+        state.knownEntries.entries.any((e) {
+          if (e.key == ownIdHex) return false;
+          final written = builtEntries[e.key];
+          return written == null || e.value.entryTs > written;
+        });
+    final needsRepair = overwritten || learnedUnwritten;
+    return ResolvedRecord(
+      counterpartOhs: advanced ? after.ohs : null,
+      needsRepair: needsRepair,
+    );
   }
 
   /// Serializes the merge state of [channelId] — the newest-known entry per
@@ -287,11 +412,55 @@ class RendezvousManager {
   }
 }
 
+/// The outcome of applying a resolved rendezvous record
+/// ([RendezvousManager.applyResolvedRecordDetailed]).
+class ResolvedRecord {
+  /// The counterpart's OH list if the record advanced it, else null.
+  final List<OHDescriptor>? counterpartOhs;
+
+  /// Whether the record overwrote our own current entry (T160 read-repair):
+  /// publish the merged record again.
+  final bool needsRepair;
+
+  const ResolvedRecord({
+    required this.counterpartOhs,
+    required this.needsRepair,
+  });
+}
+
 class _ChannelRendezvousState {
   final Uint8List channelSecret;
   final bool isCreator;
   String ownName;
   List<OHDescriptor> ownOhs = const [];
+
+  /// Timestamp of the last record this side built for publishing (null:
+  /// never, or not since a worker respawn). A resolved record that is not
+  /// newer than this one predates our own write and is no reason to repair.
+  int? lastBuiltRecordTs;
+
+  /// Participant id (hex) → `entry_ts` of every entry in the last record
+  /// this side built (T160/P3: what our write in the DHT carries).
+  Map<String, int> lastBuiltEntryTs = const {};
+
+  /// The newest record timestamp seen (resolved) or built, per UTC day
+  /// (day index = ms ~/ 86 400 000) — the floor for the next record
+  /// timestamp of that day (T160/P5, review 2/Q6).
+  final Map<int, int> newestSeenRecordTsByDay = {};
+
+  /// Notes [ts] for the timestamp floor. A timestamp further ahead than the
+  /// node accepts (`ChannelDht.MAX_FUTURE_SKEW_MS`, 15 min past [nowMs]) is
+  /// ignored: such a record was never stored, and adopting it as a floor
+  /// would push both sides to the cap (review 2/Q6). Only today and
+  /// yesterday are kept.
+  void noteSeenRecordTs(int ts, int nowMs) {
+    if (ts > nowMs + RendezvousManager.nodeFutureSkewMs) return;
+    final day = RendezvousManager._utcDay(ts);
+    final seen = newestSeenRecordTsByDay[day];
+    if (seen == null || ts > seen) newestSeenRecordTsByDay[day] = ts;
+    final today = RendezvousManager._utcDay(nowMs);
+    newestSeenRecordTsByDay.removeWhere((d, _) => d < today - 1);
+  }
 
   /// Newest-known entry per participant id (hex), the client-side merge state.
   final Map<String, RendezvousEntry> knownEntries = {};

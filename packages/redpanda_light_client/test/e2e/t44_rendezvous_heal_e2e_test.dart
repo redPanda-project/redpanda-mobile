@@ -144,12 +144,11 @@ void main() async {
           ownDisplayName: 'Bob',
           isChannelCreator: false,
         );
-        // Bob needs his own mailbox to receive the record_lookup answer.
-        await bob.registerOutboundHandle(channelId: channel.id);
-
-        // Let Alice's record_store propagate through the DHT.
-        await Future.delayed(const Duration(seconds: 8));
-
+        // Subscribe BEFORE Bob registers: since T160 the joiner looks the
+        // record up on its own from the join on (read before write, pairing
+        // lookups), so the adoption can land within the first seconds — a
+        // subscription made after the propagation delay below missed it and
+        // then waited 7 minutes for a second one.
         final counterpartOhMoves = <CounterpartOhUpdate>[];
         final sub = bob.stateUpdates.of<CounterpartOhUpdate>().listen(
           counterpartOhMoves.add,
@@ -163,10 +162,17 @@ void main() async {
           mergeStates.add,
         );
         addTearDown(mergeSub.cancel);
+        // Bob needs his own mailbox to receive the record_lookup answer.
+        await bob.registerOutboundHandle(channelId: channel.id);
 
-        // Bob's first send finds no counterpart OH and triggers a rendezvous recovery.
-        // Retry: the lookup + reverse-garlic answer + fetch cycle takes a few
-        // poll intervals, and each failed send re-arms the recovery.
+        // Let Alice's record_store propagate through the DHT.
+        await Future.delayed(const Duration(seconds: 8));
+
+        // Bob's own pairing lookups (T160) usually adopted Alice's OH by now;
+        // if not, a send that finds no counterpart OH triggers a rendezvous
+        // recovery. Retry: the lookup + reverse-garlic answer + fetch cycle
+        // takes a few poll intervals, and each failed send re-arms the
+        // recovery.
         final deadline = DateTime.now().add(const Duration(minutes: 7));
         while (counterpartOhMoves.isEmpty) {
           try {
