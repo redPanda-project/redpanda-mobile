@@ -1078,6 +1078,47 @@ class RedPandaLightClient implements RedPandaClient {
   String? _hostNodeId(String? endpoint) =>
       endpoint == null ? null : _livePeerFor(endpoint)?.discoveredNodeId;
 
+  /// T162 route diagnostics (debug level only, i.e. only in a lab/test client
+  /// log): `address/nodeId-prefix` of a garlic hop as the peer list knows it.
+  String _diagHop(List<int> nodeId) {
+    final hex = _hexEncode(nodeId);
+    for (final address in _peerRepository.knownAddresses) {
+      if (_peerRepository.getPeer(address)?.nodeId == hex) {
+        return '$address/${hex.substring(0, 8)}';
+      }
+    }
+    return '?/${hex.substring(0, 8)}';
+  }
+
+  /// T162: `a > b > c` for a hop list, see [_diagHop].
+  String _diagRoute(List<GarlicHop> hops) =>
+      hops.isEmpty ? '(none)' : hops.map((h) => _diagHop(h.nodeId)).join(' > ');
+
+  /// T162: one debug line per garlic send naming every station, the target
+  /// mailbox and the return path of the requested R-ACK. Built only when
+  /// debug logging is on (hop ids and OH ids are privacy-sensitive).
+  void _diagSend(
+    String kind, {
+    required String channelId,
+    required List<GarlicHop> hops,
+    required List<int> ohId,
+    String? messageIdHex,
+    ReturnPathBlock? returnPath,
+  }) {
+    if (RpLog.minLevel != LogLevel.debug) return;
+    final rp = returnPath == null
+        ? 'none'
+        : 'ackOh=${_hexEncode(returnPath.ackOhId).substring(0, 8)} '
+              'via ${_diagRoute(returnPath.hops)}';
+    RpLog.debug(
+      'RedPandaLightClient: T162 route $kind msg=${messageIdHex ?? '-'} '
+      'channel=${channelId.substring(0, 8)} '
+      'oh=${_hexEncode(ohId).substring(0, 8)} '
+      'hops=${_diagRoute(hops)} exit=${hops.isEmpty ? '-' : _diagHop(hops.last.nodeId)} '
+      'returnPath=$rp',
+    );
+  }
+
   /// `{ip:port}` for an IP-literal [address], null for a host name or a
   /// malformed address.
   static Set<String>? _literalEndpoint(String address) {
@@ -2611,6 +2652,13 @@ class RedPandaLightClient implements RedPandaClient {
     }
     _sessionTagStore.store(rgb.sessionTagHex, channelId);
     _emitGarlicSession(channelId);
+    if (RpLog.minLevel == LogLevel.debug) {
+      RpLog.debug(
+        'RedPandaLightClient: T162 rgb built channel=${channelId.substring(0, 8)} '
+        'ownOh=${_hexEncode(ownOh.ohId).substring(0, 8)} '
+        'host=${ownOh.serverEndpoint} hops=${_diagRoute(rgb.hops)}',
+      );
+    }
     return rgb;
   }
 
@@ -2642,6 +2690,14 @@ class RedPandaLightClient implements RedPandaClient {
       returnPath: returnPath,
     );
     submitVia.sendCommand(_cmdFlaschenpostV2, packet);
+    _diagSend(
+      'rgb-reply',
+      channelId: channelId,
+      hops: rgb.hops,
+      ohId: rgb.ohId,
+      messageIdHex: messageIdHex,
+      returnPath: returnPath,
+    );
     lastSendHopCount = rgb.hops.length;
     lastSendViaRgb = true;
     lastSendAckRequested = returnPath != null;
@@ -2787,6 +2843,14 @@ class RedPandaLightClient implements RedPandaClient {
       returnPath: returnPath,
     );
     submitVia.sendCommand(_cmdFlaschenpostV2, packet);
+    _diagSend(
+      'forward',
+      channelId: channelId,
+      hops: hops,
+      ohId: counterpartOhId,
+      messageIdHex: messageIdHex,
+      returnPath: returnPath,
+    );
     lastSendHopCount = hops.length;
     lastSendAckRequested = returnPath != null;
     RpLog.debug(
