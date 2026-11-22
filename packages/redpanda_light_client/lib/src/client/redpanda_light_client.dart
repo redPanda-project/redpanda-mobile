@@ -3410,17 +3410,27 @@ class RedPandaLightClient implements RedPandaClient {
   static const Duration prePublishHoldMax = Duration(seconds: 5);
 
   /// T160: delays between the joiner's pairing lookups after the first one
-  /// (sent with the held first publish): +2, +3, +5, +10, +20, +40, +80 s,
-  /// i.e. lookups at 0, 2, 5, 10, 20, 40, 80 and 160 s after the join —
-  /// eight lookups (two keys each), dense in the first ten seconds where
-  /// the pairing budget lives, then thinning out. The sequence stops as soon
-  /// as a counterpart mailbox is known (from the record or an in-band
+  /// (sent with the held first publish): +2.5, +1.5, +2, +4, +10, +20, +40,
+  /// +80 s, i.e. lookups at 0, 2.5, 4, 6, 10, 20, 40, 80 and 160 s after
+  /// the join — nine lookups (two keys each), dense in the first ten seconds
+  /// where the pairing budget lives, then thinning out. The sequence stops as
+  /// soon as a counterpart mailbox is known (from the record or an in-band
   /// `oh_update`); after the last one the failing-send recovery (one lookup
   /// per [_recoveryMinInterval]) and the periodic republish remain.
+  ///
+  /// Why 2.5 s for the second one: the answer comes back over a return path
+  /// whose last relay forwards it to the joiner's mailbox host, and that
+  /// relay can only find the host once the host has announced the mailbox
+  /// in the OH-DHT — which a node does a random 0–2 s after the
+  /// registration (`OhAnnounceJob.NEW_REGISTRATION_STAGGER_MS`). The joiner's
+  /// mailbox is always brand new at the join, so the lookup at 0 s often
+  /// loses its answer (lab 2026-11-22: 3 of 5 testnet runs; the one at +2 s
+  /// once more), while the first one after 2 s answers in ~50 ms.
   static const List<Duration> pairingLookupDelays = [
+    Duration(milliseconds: 2500),
+    Duration(milliseconds: 1500),
     Duration(seconds: 2),
-    Duration(seconds: 3),
-    Duration(seconds: 5),
+    Duration(seconds: 4),
     Duration(seconds: 10),
     Duration(seconds: 20),
     Duration(seconds: 40),

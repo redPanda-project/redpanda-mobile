@@ -432,13 +432,12 @@ void main() {
       );
 
       // The pairing sequence went on independently of any failing send:
-      // the +2 s lookup has fired by the end of the 5 s hold, the +3 s one
-      // follows at ~5 s.
+      // the +2.5 s and +4 s lookups have fired by the end of the 5 s hold.
       expect(client.pairingLookupAttemptsOf(chan), greaterThanOrEqualTo(1));
       await pumpUntil(
         () => client.pairingLookupAttemptsOf(chan) >= 2,
         timeout: const Duration(seconds: 3),
-        reason: 'the second pairing lookup (+3 s) never fired',
+        reason: 'the second pairing lookup (+4 s) never fired',
       );
       expect(client.pairingLookupsActive(chan), isTrue);
       await pumpUntil(
