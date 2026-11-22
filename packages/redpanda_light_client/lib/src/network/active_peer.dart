@@ -111,6 +111,18 @@ class ActivePeer {
   /// KademliaId (hex) of this peer, set once its public key was received.
   String? discoveredNodeId;
 
+  /// X25519 encryption public key (hex) from the same 64-byte public export
+  /// this connection received in its own handshake — the key that belongs
+  /// to [discoveredNodeId]. Unlike the peer repository entry for this
+  /// address, it is not overwritten by the peer lists other nodes send
+  /// (T162 review, F1), and a second export on the same connection is
+  /// ignored (G2). It is NOT authenticated: the export arrives before
+  /// encryption and nothing proves possession of the matching keys, so the
+  /// node itself or an attacker on the path to it can still present a
+  /// foreign identity — that gap belongs to the open decision on handshake
+  /// authentication.
+  String? discoveredEncryptionKey;
+
   /// Consecutive fetch timeouts on THIS connection (T33), maintained by the
   /// client: incremented per fetch timeout, reset on any fetch response. A
   /// fresh connection starts at 0 by construction — the counter must never
@@ -505,6 +517,18 @@ class ActivePeer {
   Uint8List? _pendingEphemeralFromThem;
 
   Future<void> _parsePeerPublicKey(List<int> keyBytes) async {
+    // Review G2: the identity of a connection is the one its session keys
+    // were derived from. A second export on the same connection (only the
+    // transport partner itself can send one) is ignored rather than
+    // re-binding the connection to another identity without a new key
+    // exchange; reconnecting is the way to present a new identity.
+    if (_peerPublicExport != null) {
+      RpLog.info(
+        'ActivePeer($address): ignoring a second public key on an '
+        'established connection',
+      );
+      return;
+    }
     _peerPublicExport = Uint8List.fromList(keyBytes);
     RpLog.debug('ActivePeer($address): Peer Public Key Parsed.');
 
@@ -513,6 +537,7 @@ class ActivePeer {
     // (needed for garlic hop selection, MS04).
     final nodeId = NodeId.fromPublicKeyBytes(Uint8List.fromList(keyBytes));
     discoveredNodeId = nodeId.toHex();
+    discoveredEncryptionKey = HEX.encode(keyBytes.sublist(32, 64));
     onNodeIdDiscovered?.call(
       nodeId.toHex(),
       HEX.encode(keyBytes.sublist(32, 64)),

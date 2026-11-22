@@ -218,10 +218,14 @@ void main() async {
 
         replyId = await bob.sendMessage(channel.id, reply, messageId: replyId);
         if (bob.lastSendViaRgb) {
+          // T162: Alice's RGB is her 3 relays, closed by her own mailbox
+          // host (the reply is deposited there, no DHT lookup on the way).
           expect(
             bob.lastSendHopCount,
-            3,
-            reason: 'the RGB reply must traverse the 3 hops Alice chose',
+            4,
+            reason:
+                'the RGB reply must traverse the 3 relays Alice chose plus '
+                'her mailbox host',
           );
           repliedViaRgb = true;
         }
