@@ -1261,11 +1261,15 @@ class RedPandaLightClient implements RedPandaClient {
   /// the next full cycle, whichever runs first.
   final Set<String> _pollFollowUpOhs = {};
 
-  /// T167: when the last cycle (full or follow-up) ended, and whether that
-  /// cycle itself started less than [minPollGap] after its predecessor —
-  /// see [_backToBackPause].
-  DateTime? _lastPollCycleEndedAt;
-  bool _lastPollCycleWasBackToBack = false;
+  /// T167: how many poll cycles (full or follow-up) may start back to back
+  /// before [minPollGap] applies — see [_pollStartDelay].
+  static const int pollBurst = 3;
+
+  /// T167: poll-start budget, a token bucket kept as time credit: each cycle
+  /// start costs [minPollGap], the credit grows with wall time and is capped
+  /// at [pollBurst] × [minPollGap]. Credit as of [_pollCreditAt].
+  int _pollCreditMicros = pollBurst * minPollGap.inMicroseconds;
+  DateTime? _pollCreditAt;
 
   /// Whether the running cycle (if any) is a full one. A full cycle sets
   /// [_nextPollAt] itself when it ends; a follow-up keeps it, so a pull
@@ -1355,7 +1359,7 @@ class RedPandaLightClient implements RedPandaClient {
   /// cycle if the cycle has not fetched the OH yet. Otherwise — and whenever
   /// no cycle runs — the OH is queued for a fetch-only follow-up that runs at
   /// once or as soon as the running cycle ends (bounded by
-  /// [_backToBackPause]) instead of waiting out the interval. (Before T167 an
+  /// [_pollStartDelay]) instead of waiting out the interval. (Before T167 an
   /// idle Notify pulled the whole cycle forward, with no pause at all.)
   void _handleNotify(List<int> payload) {
     final Notify notify;
@@ -5339,28 +5343,40 @@ class RedPandaLightClient implements RedPandaClient {
     _armPollTimer();
   }
 
-  /// T167: the pause the next cycle must keep after the last one ended.
-  /// Zero, unless the last cycle itself started back to back (less than
-  /// [minPollGap] after its predecessor ended): then the next one waits until
-  /// [minPollGap] has passed since that end. So two cycles may follow each
-  /// other without a pause — a Notify that arrived mid-cycle is fetched at
-  /// once — but never three: whatever drives the poll (a stream of Notifies,
-  /// a stream of follow-ups), at least every other gap is [minPollGap].
-  Duration _backToBackPause(DateTime now) {
-    final lastEnd = _lastPollCycleEndedAt;
-    if (lastEnd == null || !_lastPollCycleWasBackToBack) return Duration.zero;
-    final since = now.difference(lastEnd);
-    return since >= minPollGap ? Duration.zero : minPollGap - since;
+  /// T167: the poll-start budget at [now] (see [_pollCreditMicros]).
+  int _pollCredit(DateTime now) {
+    final at = _pollCreditAt;
+    final cap = pollBurst * minPollGap.inMicroseconds;
+    if (at == null) return cap;
+    return min(cap, _pollCreditMicros + now.difference(at).inMicroseconds);
+  }
+
+  /// T167: how long the next cycle start must wait for budget. Zero while
+  /// budget is left: up to [pollBurst] cycles can run back to back, so
+  /// Notifies that cluster (a message, its ACKs, a second message) are each
+  /// fetched at once. Once the budget is spent, at most one cycle starts per
+  /// [minPollGap]: whatever drives the poll (a stream of Notifies, a stream
+  /// of follow-ups), it cannot spin, and over any window T at most
+  /// [pollBurst] + T / [minPollGap] cycles start. The regular cadence
+  /// (cycles ≥ [minPollGap] apart) never runs short of budget.
+  Duration _pollStartDelay(DateTime now) {
+    final missing = minPollGap.inMicroseconds - _pollCredit(now);
+    return missing <= 0 ? Duration.zero : Duration(microseconds: missing);
+  }
+
+  void _spendPollStart(DateTime now) {
+    _pollCreditMicros = _pollCredit(now) - minPollGap.inMicroseconds;
+    _pollCreditAt = now;
   }
 
   /// Arms the one poll timer for whichever comes first: the regular cycle at
   /// [_nextPollAt] or, with notified OHs pending, a follow-up fetch (T167).
-  /// Both respect [_backToBackPause]. If the regular cycle is due no later
+  /// Both respect [_pollStartDelay]. If the regular cycle is due no later
   /// than the follow-up, it runs instead (it fetches every OH anyway).
   void _armPollTimer() {
     if (!_pollingEnabled) return;
     final now = DateTime.now();
-    final earliest = now.add(_backToBackPause(now));
+    final earliest = now.add(_pollStartDelay(now));
     var due = _nextPollAt ?? now;
     var followUp = false;
     if (_pollFollowUpOhs.isNotEmpty && earliest.isBefore(due)) {
@@ -5381,7 +5397,7 @@ class RedPandaLightClient implements RedPandaClient {
     // mid-cycle); its end re-arms the timer.
     if (_pollInProgress) return;
     final started = DateTime.now();
-    final backToBack = _startsBackToBack(started);
+    _spendPollStart(started);
     _fullCycleInProgress = true;
     try {
       await _runPollCycle();
@@ -5394,8 +5410,6 @@ class RedPandaLightClient implements RedPandaClient {
       final now = DateTime.now();
       final elapsed = now.difference(started);
       final interval = _pollInterval;
-      _lastPollCycleEndedAt = now;
-      _lastPollCycleWasBackToBack = backToBack;
       _schedulePoll(
         elapsed >= interval - minPollGap ? minPollGap : interval - elapsed,
       );
@@ -5405,22 +5419,14 @@ class RedPandaLightClient implements RedPandaClient {
   /// Timer body of a follow-up fetch (T167). Leaves [_nextPollAt] alone.
   Future<void> _runFollowUpTick() async {
     if (_pollInProgress) return;
-    final started = DateTime.now();
-    final backToBack = _startsBackToBack(started);
+    _spendPollStart(DateTime.now());
     try {
       await _runFollowUpFetch();
     } catch (e) {
       RpLog.info('RedPandaLightClient: poll follow-up failed: $e');
     } finally {
-      _lastPollCycleEndedAt = DateTime.now();
-      _lastPollCycleWasBackToBack = backToBack;
       _armPollTimer();
     }
-  }
-
-  bool _startsBackToBack(DateTime started) {
-    final lastEnd = _lastPollCycleEndedAt;
-    return lastEnd != null && started.difference(lastEnd) < minPollGap;
   }
 
   /// T167: fetches only the OHs whose Notify the previous cycle missed —

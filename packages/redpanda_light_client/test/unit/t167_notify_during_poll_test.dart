@@ -16,9 +16,9 @@ import 'package:redpanda_light_client/src/network/active_peer.dart';
 /// already fetched the notified mailbox, is followed by a fetch right after
 /// the cycle ends — not by the next regular tick (up to
 /// [RedPandaLightClient.activePollInterval] later). The follow-up is
-/// bounded: a stream of Notifies never yields more than two cycles without a
-/// [RedPandaLightClient.minPollGap] pause, and the full cycle keeps its own
-/// cadence. Same plaintext ScriptedSocket harness as the T38 suite.
+/// bounded by a token bucket: up to [RedPandaLightClient.pollBurst] cycles
+/// back to back, then at most one per [RedPandaLightClient.minPollGap]; and
+/// the full cycle keeps its own cadence. Same plaintext ScriptedSocket harness as the T38 suite.
 class ScriptedSocket implements Socket {
   @override
   Future<void> get done => Completer<void>().future;
@@ -334,8 +334,8 @@ void main() {
     expect(logs.where((l) => l.contains('poll follow-up fetched')), isEmpty);
   });
 
-  test('a stream of Notifies is bounded: never three cycles without a '
-      'minPollGap pause, and the full cycle keeps running', () async {
+  test('a stream of Notifies is bounded: a burst, then one cycle per '
+      'minPollGap, and the full cycle keeps running', () async {
     final (_, node, a, _) = await cycleHeldOnB();
 
     // Worst case: every answered fetch of A is immediately followed by a
@@ -354,20 +354,26 @@ void main() {
     // Faster than the regular cadence: more than the 1–2 fetches the 5 s
     // interval would give in this window ...
     expect(times.length, greaterThanOrEqualTo(5));
-    // ... but bounded: with back-to-back pairs and a minPollGap pause after
-    // each pair, at most ~2 per second (plus slack for the first pair).
+    // ... but bounded (every fetch of A here is one cycle start): at most
+    // the burst plus one per minPollGap.
+    const burst = RedPandaLightClient.pollBurst;
     expect(
       times.length,
-      lessThanOrEqualTo(2 * (window.inMilliseconds ~/ 1000) + 2),
+      lessThanOrEqualTo(
+        burst +
+            window.inMilliseconds ~/
+                RedPandaLightClient.minPollGap.inMilliseconds +
+            1,
+      ),
     );
-    // Any three consecutive fetches span at least one minPollGap pause.
-    for (var i = 0; i + 2 < times.length; i++) {
+    // Any burst + 1 consecutive starts span at least one minPollGap.
+    for (var i = 0; i + burst < times.length; i++) {
       expect(
-        times[i + 2].difference(times[i]),
+        times[i + burst].difference(times[i]),
         greaterThanOrEqualTo(
           RedPandaLightClient.minPollGap - const Duration(milliseconds: 50),
         ),
-        reason: 'fetches $i..${i + 2} ran without a pause',
+        reason: 'fetches $i..${i + burst} ran without a pause',
       );
     }
     // The follow-ups do not push the regular (full) cycle out: it still runs
@@ -420,5 +426,34 @@ void main() {
     node.answerFetch();
     await Future.delayed(const Duration(milliseconds: 1500));
     expect(node.fetchTimesOf(a.ohId, after: released), isEmpty);
+  });
+
+  test('clustered Notifies (a message and its ACKs) are each fetched at '
+      'once', () async {
+    final (client, socket) = await connectedClient();
+    addTearDown(client.disconnect);
+    final node = _Node(socket);
+    final a = await client.registerOutboundHandle(channelId: 'a');
+    // Past the start-up polls, mid-interval: the next regular tick is seconds
+    // away, the poll-start budget is full.
+    await Future.delayed(const Duration(milliseconds: 2500));
+    final start = DateTime.now();
+    // Three Notifies, each right after the previous one's fetch answered.
+    var sent = 1;
+    node.afterFetchAnswered = (ohId) {
+      if (sent < RedPandaLightClient.pollBurst) {
+        sent++;
+        node.notify(ohId);
+      }
+    };
+    node.notify(a.ohId);
+    await pumpUntil(
+      () =>
+          node.fetchTimesOf(a.ohId, after: start).length >=
+          RedPandaLightClient.pollBurst,
+      // A minPollGap pause anywhere in the cluster would take ≥ 1 s.
+      timeout: const Duration(milliseconds: 700),
+      reason: 'a clustered Notify waited for a pause',
+    );
   });
 }
