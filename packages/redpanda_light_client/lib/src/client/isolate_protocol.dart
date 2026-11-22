@@ -1,4 +1,5 @@
 import 'package:redpanda_light_client/src/domain/channel_doctor_report.dart';
+import 'package:redpanda_light_client/src/diagnostics/rp_diag.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/group_state.dart';
 import 'package:redpanda_light_client/src/domain/rendezvous_state_update.dart';
@@ -96,6 +97,18 @@ class CmdLifecyclePause extends IsolateCommand {
 class CmdLifecycleResume extends IsolateCommand {
   @override
   CommandRecovery get recovery => CommandRecovery.reestablishedOnWorkerReady;
+}
+
+/// Switches field diagnostics (T180, [RpDiag]) on or off inside the worker.
+/// Re-established from the main isolate's [RpDiag.enabled] on worker ready,
+/// so a respawned worker keeps emitting. The worker applies the network gate
+/// itself as well ([RpDiag.setEnabled]).
+class CmdSetDiagnostics extends IsolateCommand {
+  @override
+  CommandRecovery get recovery => CommandRecovery.reestablishedOnWorkerReady;
+
+  final bool enabled;
+  CmdSetDiagnostics(this.enabled);
 }
 
 class CmdSendMessage extends IsolateCommand {
@@ -377,6 +390,13 @@ class EventPeerCount extends IsolateEvent {
 class EventLog extends IsolateEvent {
   final String message;
   EventLog(this.message);
+}
+
+/// One field-diagnostics event from the worker (T180). Only sent while the
+/// worker's [RpDiag] is enabled.
+class EventDiag extends IsolateEvent {
+  final DiagEvent event;
+  EventDiag(this.event);
 }
 
 class EventPeerStatsSnapshot extends IsolateEvent {

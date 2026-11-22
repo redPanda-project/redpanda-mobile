@@ -20,6 +20,8 @@ import 'package:redpanda_light_client/src/crypto/message_crypto_v3.dart';
 import 'package:redpanda_light_client/src/crypto/message_crypto_v4.dart';
 import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
 import 'package:redpanda_light_client/src/crypto/ratchet.dart';
+import 'package:redpanda_light_client/src/diagnostics/diag_catalogue.dart';
+import 'package:redpanda_light_client/src/diagnostics/rp_diag.dart';
 import 'package:redpanda_light_client/src/logging/logger.dart';
 import 'package:redpanda_light_client/src/domain/channel_doctor_report.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
@@ -739,7 +741,8 @@ class RedPandaLightClient implements RedPandaClient {
             continue;
           }
 
-          final peer = ActivePeer(
+          late final ActivePeer peer;
+          peer = ActivePeer(
             address: address,
             selfNodeId: selfNodeId,
             selfKeys: selfKeys,
@@ -750,6 +753,7 @@ class RedPandaLightClient implements RedPandaClient {
               // mailbox host that (re)connects while other peers stay up
               // needs its own re-subscribe (T163).
               final wasConnected = _currentStatus == ConnectionStatus.connected;
+              if (status == ConnectionStatus.connected) _diagConnUp(peer);
               _updateStatus(status);
               if (status == ConnectionStatus.connected && wasConnected) {
                 _onPeerConnected(address);
@@ -763,6 +767,10 @@ class RedPandaLightClient implements RedPandaClient {
               );
             },
             onDisconnect: () {
+              _diagConnDown(
+                peer,
+                intentional: _intentionalDisconnects.contains(address),
+              );
               if (_intentionalDisconnects.contains(address)) {
                 RpLog.debug(
                   'RedPandaLightClient: Peer $address disconnected intentionally (Rotation). No failure recorded.',
@@ -821,6 +829,7 @@ class RedPandaLightClient implements RedPandaClient {
           RpLog.debug(
             'RedPandaLightClient: Failed to initiate peer $address: $e',
           );
+          _diagDialFailed(address, 'init_failed: $e', ageMs: 0, node: null);
           // Same failure bookkeeping as a dropped connection: this peer never
           // reached _peers, so its onDisconnect will never fire and only the
           // backoff armed here keeps the next check from redialling it on the
@@ -1033,7 +1042,285 @@ class RedPandaLightClient implements RedPandaClient {
     if (seconds > 30) seconds = 30;
 
     _nextRetryTime[address] = _now().add(Duration(seconds: seconds));
+    // T180: the backoff of a repeated identical dial failure is as
+    // suppressed as the failure itself (see [_diagDialFailed]).
+    _diagSyncDialFailState();
+    if (_diagSilentBackoff.remove(address)) return;
+    RpDiag.emit(DiagEvt.connBackoff, {
+      DiagKey.addr: address,
+      DiagKey.retry: count,
+      DiagKey.waitMs: seconds * 1000,
+    });
   }
+
+  // --- Field diagnostics (T180) ---------------------------------------------
+
+  /// Whether [address] hosts one of our own mailboxes (diagnostics only).
+  bool _diagIsMailboxHost(String address) =>
+      _ownMailboxHostAddresses().contains(address);
+
+  /// Address → class of the dial failure last reported for it (T180). While
+  /// an address keeps failing for the same reason, only its FIRST failure is
+  /// emitted: offline, every known address fails every ≤30 s for hours, and
+  /// that flood would evict the start of the outage from the app's buffer.
+  /// Cleared when the address connects or fails differently.
+  final Map<String, String> _diagDialFailClass = {};
+
+  /// Suppressed failed dials per address since its last reported failure;
+  /// reported on that address's next `conn.up` / differing `conn.down`.
+  final Map<String, int> _diagDialFailSuppressed = {};
+
+  /// Addresses whose next `conn.backoff` belongs to a suppressed failure.
+  final Set<String> _diagSilentBackoff = {};
+
+  /// Suppressed failed dials since the last `fetch.summary`.
+  int _diagSuppressedDials = 0;
+
+  /// [RpDiag.generation] the suppression state above belongs to.
+  int _diagDialFailGeneration = -1;
+
+  /// Drops the suppression state when the diagnostics switch changed since
+  /// it was built (see [RpDiag.generation]).
+  void _diagSyncDialFailState() {
+    if (_diagDialFailGeneration == RpDiag.generation) return;
+    _diagDialFailGeneration = RpDiag.generation;
+    _diagDialFailClass.clear();
+    _diagDialFailSuppressed.clear();
+    _diagSilentBackoff.clear();
+    _diagSuppressedDials = 0;
+  }
+
+  /// Bounded like the peer repository's address set; this only caps it.
+  static const int _diagDialFailCapacity = 256;
+
+  /// `dial_failed: SocketException: … errno = 101` → `dial_failed#101`:
+  /// the reason without the parts that differ on every attempt (local
+  /// port, message text).
+  static String _diagFailureClass(String reason) {
+    final head = reason.split(':').first.trim();
+    final errno = RegExp(r'errno\s*=\s*(\d+)').firstMatch(reason)?.group(1);
+    return errno == null ? head : '$head#$errno';
+  }
+
+  /// A dial (or a connection that never came up) failed: emits `conn.down`
+  /// unless it repeats the address's last reported failure class.
+  void _diagDialFailed(
+    String address,
+    String reason, {
+    required int ageMs,
+    required String? node,
+    bool intentional = false,
+  }) {
+    if (!RpDiag.enabled) return;
+    _diagSyncDialFailState();
+    final cls = _diagFailureClass(reason);
+    if (!intentional && _diagDialFailClass[address] == cls) {
+      _diagDialFailSuppressed.update(address, (n) => n + 1, ifAbsent: () => 1);
+      _diagSuppressedDials++;
+      _diagSilentBackoff.add(address);
+      return;
+    }
+    if (_diagDialFailClass.length >= _diagDialFailCapacity &&
+        !_diagDialFailClass.containsKey(address)) {
+      _diagDialFailClass.remove(_diagDialFailClass.keys.first);
+    }
+    if (!intentional) _diagDialFailClass[address] = cls;
+    RpDiag.emit(DiagEvt.connDown, {
+      DiagKey.addr: address,
+      DiagKey.node: node,
+      DiagKey.reason: reason,
+      DiagKey.ageMs: ageMs,
+      DiagKey.wasUp: false,
+      DiagKey.intentional: intentional,
+      DiagKey.mailboxHost: _diagIsMailboxHost(address),
+      DiagKey.peers: _sendablePeers.length,
+      DiagKey.dialFail: _diagDialFailSuppressed.remove(address),
+    });
+  }
+
+  /// Suppressed failed dials so far (tests).
+  @visibleForTesting
+  int get diagSuppressedDialsForTesting => _diagSuppressedDials;
+
+  void _diagConnUp(ActivePeer peer) {
+    if (!RpDiag.enabled) return;
+    _diagSyncDialFailState();
+    _diagDialFailClass.remove(peer.address);
+    RpDiag.emit(DiagEvt.connUp, {
+      DiagKey.dialFail: _diagDialFailSuppressed.remove(peer.address),
+      DiagKey.addr: peer.address,
+      DiagKey.node: peer.discoveredNodeId,
+      DiagKey.dialMs: DateTime.now()
+          .difference(peer.connectedSince)
+          .inMilliseconds,
+      DiagKey.mailboxHost: _diagIsMailboxHost(peer.address),
+      DiagKey.peers: _sendablePeers.length,
+    });
+  }
+
+  void _diagConnDown(ActivePeer peer, {required bool intentional}) {
+    if (!RpDiag.enabled) return;
+    final upSince = peer.upSince;
+    if (upSince == null) {
+      _diagDialFailed(
+        peer.address,
+        peer.disconnectReason ?? 'unknown',
+        ageMs: DateTime.now().difference(peer.connectedSince).inMilliseconds,
+        node: peer.discoveredNodeId,
+        intentional: intentional,
+      );
+      return;
+    }
+    RpDiag.emit(DiagEvt.connDown, {
+      DiagKey.addr: peer.address,
+      DiagKey.node: peer.discoveredNodeId,
+      DiagKey.reason: peer.disconnectReason ?? 'unknown',
+      DiagKey.ageMs: DateTime.now().difference(upSince).inMilliseconds,
+      DiagKey.wasUp: true,
+      DiagKey.intentional: intentional,
+      DiagKey.mailboxHost: _diagIsMailboxHost(peer.address),
+      DiagKey.peers: _sendablePeers.length,
+    });
+  }
+
+  /// State of the connection to the node at [endpoint] — the conditions an
+  /// `oh.unreachable` / `oh.failover` event is judged by (T168).
+  Map<String, Object?> _diagHostConditions(String? endpoint) {
+    if (endpoint == null) return const {};
+    final live = _livePeerFor(endpoint);
+    final String state;
+    if (live == null) {
+      state = 'absent';
+    } else if (live.canSendCommands) {
+      state = 'connected';
+    } else if (live.isDisconnected) {
+      state = 'disconnected';
+    } else {
+      state = 'connecting';
+    }
+    final next = _nextRetryTime[endpoint];
+    final now = _now();
+    final hostAddresses = _hostAddresses(endpoint);
+    return {
+      DiagKey.hostState: state,
+      DiagKey.hostRetry: _retryCounts[endpoint] ?? 0,
+      DiagKey.hostBackoffMs: next != null && now.isBefore(next)
+          ? next.difference(now).inMilliseconds
+          : 0,
+      DiagKey.hostDialing: _dialsInFlight.contains(endpoint),
+      DiagKey.altPeers: _sendablePeers
+          .where((p) => !hostAddresses.contains(p.address))
+          .length,
+    };
+  }
+
+  /// Comma-separated node ids of [hops] (diagnostics only).
+  static String _diagHopIds(List<GarlicHop> hops) =>
+      hops.map((h) => _hexEncode(h.nodeId)).join(',');
+
+  /// Message id → when its first send attempt left, for the latency of
+  /// `ack.delivered`. Filled only while diagnostics are on; bounded.
+  final LinkedHashMap<String, int> _diagSentAtMs = LinkedHashMap();
+  static const int _diagSentAtCapacity = 512;
+
+  void _diagNoteSent(String? messageIdHex) {
+    if (messageIdHex == null) return;
+    if (_diagSentAtMs.containsKey(messageIdHex)) return;
+    while (_diagSentAtMs.length >= _diagSentAtCapacity) {
+      _diagSentAtMs.remove(_diagSentAtMs.keys.first);
+    }
+    _diagSentAtMs[messageIdHex] = DateTime.now().millisecondsSinceEpoch;
+  }
+
+  /// One `send.attempt` per garlic packet handed to [submitVia]. Never
+  /// throws: diagnostics must not turn a completed send into an error.
+  void _diagSendAttempt({
+    required String kind,
+    required ActivePeer submitVia,
+    required List<GarlicHop> hops,
+    required List<int> targetOhId,
+    required Uint8List packet,
+    required String channelId,
+    String? messageIdHex,
+    String? targetHost,
+    int? routeIndex,
+    ReturnPathBlock? returnPath,
+    String? sessionTagHex,
+  }) {
+    if (!RpDiag.enabled) return;
+    try {
+      final submitNode = submitVia.discoveredNodeId;
+      RpDiag.emit(DiagEvt.sendAttempt, {
+        DiagKey.kind: kind,
+        DiagKey.msg: messageIdHex,
+        DiagKey.channel: channelId,
+        DiagKey.target: _hexEncode(targetOhId),
+        DiagKey.targetHost: targetHost,
+        DiagKey.route: routeIndex,
+        DiagKey.hops: _diagHopIds(hops),
+        DiagKey.submit: submitVia.address,
+        DiagKey.submitNode: submitNode,
+        DiagKey.pktHash: RpDiag.hash16(packet),
+        DiagKey.ackRequested: returnPath != null,
+        DiagKey.ackTag: returnPath == null
+            ? null
+            : _hexEncode(returnPath.ackSessionTag),
+        DiagKey.retHops: returnPath == null
+            ? null
+            : _diagHopIds(returnPath.hops),
+        DiagKey.selfHop:
+            hops.length == 1 &&
+            submitNode != null &&
+            _hexEncode(hops.single.nodeId) == submitNode,
+        DiagKey.sessionTag: sessionTagHex,
+      });
+      if (kind != 'channel-ack') _diagNoteSent(messageIdHex);
+    } catch (_) {}
+  }
+
+  /// Per-minute polling summary (`fetch.summary`): routine polls are
+  /// counted here instead of each producing an event.
+  final _DiagFetchStats _diagFetchStats = _DiagFetchStats();
+
+  /// Runs at the end of every poll cycle. Emits once a minute when
+  /// something happened (failures, items, Notifies, suppressed dials, rate
+  /// limit drops), otherwise only as a heartbeat every
+  /// [_DiagFetchStats.heartbeatMs] — an idle device must not wake the radio
+  /// for an upload every minute. Clock: [_now].
+  void _diagMaybeFlushFetchSummary() {
+    final nowMs = _now().millisecondsSinceEpoch;
+    if (!RpDiag.enabled) {
+      _diagFetchStats.reset(nowMs);
+      _diagSuppressedDials = 0;
+      return;
+    }
+    final interesting =
+        _diagFetchStats.failures > 0 ||
+        _diagFetchStats.items > 0 ||
+        _diagFetchStats.notifies > 0 ||
+        _diagSuppressedDials > 0 ||
+        RpDiag.dropped > 0;
+    if (!_diagFetchStats.due(nowMs, interesting: interesting)) return;
+    RpDiag.emit(DiagEvt.fetchSummary, {
+      DiagKey.windowMs: nowMs - _diagFetchStats.sinceMs!,
+      DiagKey.dialFail: _diagSuppressedDials,
+      DiagKey.polls: _diagFetchStats.polls,
+      DiagKey.fetchOk: _diagFetchStats.ok,
+      DiagKey.fetchFail: _diagFetchStats.failures,
+      DiagKey.items: _diagFetchStats.items,
+      DiagKey.notifies: _diagFetchStats.notifies,
+      DiagKey.mailboxes: _registeredOHs.length,
+      DiagKey.peers: _sendablePeers.length,
+      DiagKey.intervalS: _pollInterval.inSeconds,
+      DiagKey.diagDropped: RpDiag.takeDropped(),
+    });
+    _diagFetchStats.reset(nowMs);
+    _diagSuppressedDials = 0;
+  }
+
+  /// Runs the summary check as the end of a poll cycle would (tests).
+  @visibleForTesting
+  void diagFlushFetchSummaryForTesting() => _diagMaybeFlushFetchSummary();
 
   /// Tears down a suspected half-open connection and redials immediately
   /// (T33). Without this, every fetch into the dead socket costs a full
@@ -1566,6 +1853,7 @@ class RedPandaLightClient implements RedPandaClient {
       'RedPandaLightClient: Notify for OH ${_hexEncode(notify.ohId)} — '
       'pulling mailbox poll forward',
     );
+    if (RpDiag.enabled) _diagFetchStats.notifies++;
     // Keep the fast cadence going: a Notify means the conversation is live.
     _lastChatActivity = DateTime.now();
     // T167 diagnostics: where in the poll schedule did this Notify land?
@@ -1625,9 +1913,22 @@ class RedPandaLightClient implements RedPandaClient {
   /// fallback. A NOT_FOUND means the host forgot the handle, so the same
   /// recovery as a NOT_FOUND fetch is triggered.
   Future<void> _subscribe(OHRegistration oh) async {
+    var result = 'error';
+    try {
+      await _subscribeOnce(oh, (r) => result = r);
+    } finally {
+      _diagOhEvent(DiagEvt.ohSubscribe, oh, result);
+    }
+  }
+
+  Future<void> _subscribeOnce(
+    OHRegistration oh,
+    void Function(String result) diagResult,
+  ) async {
     final activePeer = _peerForHandle(oh, 'subscribe()');
     if (activePeer == null) {
       // _peerForHandle already logged/kicked off the host connection.
+      diagResult('host_not_connected');
       return;
     }
 
@@ -1670,6 +1971,7 @@ class RedPandaLightClient implements RedPandaClient {
         'RedPandaLightClient: subscribe() no response within 10s — '
         'polling remains the fallback',
       );
+      diagResult('no_response');
       return;
     }
 
@@ -1680,8 +1982,12 @@ class RedPandaLightClient implements RedPandaClient {
       RpLog.info(
         'RedPandaLightClient: dropping malformed SubscribeResponse: $e',
       );
+      diagResult('malformed');
       return;
     }
+    diagResult(
+      response.status == Status.OK ? 'ok' : 'status ${response.status}',
+    );
     if (response.status == Status.OK) {
       RpLog.debug(
         'RedPandaLightClient: subscribed OH ${_hexEncode(oh.ohId)} for Notify',
@@ -2083,6 +2389,14 @@ class RedPandaLightClient implements RedPandaClient {
   /// Reports the outcome of one fetch attempt (success AND failure — unlike
   /// [OhMailboxUpdate], which only fires on state changes).
   void _emitFetchStatus(OHRegistration oh, bool success, [String? detail]) {
+    if (RpDiag.enabled) {
+      _diagFetchStats.polls++;
+      if (success) {
+        _diagFetchStats.ok++;
+      } else {
+        _diagFetchStats.failures++;
+      }
+    }
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final channelId = oh.channelId;
     if (success && channelId != null) {
@@ -2278,6 +2592,21 @@ class RedPandaLightClient implements RedPandaClient {
     String channelId, {
     Duration timeout = loopbackTimeout,
   }) async {
+    final result = await _runLoopbackTest(channelId, timeout: timeout);
+    RpDiag.emit(DiagEvt.loopbackResult, {
+      DiagKey.channel: channelId,
+      DiagKey.ok: result.success,
+      DiagKey.rttMs: result.roundtripMs,
+      DiagKey.hopCount: result.hopCount,
+      DiagKey.error: result.error,
+    });
+    return result;
+  }
+
+  Future<LoopbackResult> _runLoopbackTest(
+    String channelId, {
+    required Duration timeout,
+  }) async {
     final ownOh = _registeredOHs
         .where((oh) => oh.channelId == channelId)
         .firstOrNull;
@@ -2359,6 +2688,10 @@ class RedPandaLightClient implements RedPandaClient {
           payload,
           channelId,
           messageIdHex: route.selfHop ? null : messageIdHex,
+          diagKind: 'loopback',
+          diagMessageIdHex: messageIdHex,
+          diagTargetHost: ownOh.serverEndpoint,
+          diagRouteIndex: attempt,
         );
       } catch (e) {
         _pendingLoopbacks.remove(messageIdHex);
@@ -2816,6 +3149,9 @@ class RedPandaLightClient implements RedPandaClient {
           payload,
           channelId,
           messageIdHex: wantAck ? messageIdHex : null,
+          diagMessageIdHex: messageIdHex,
+          diagTargetHost: target.endpoint,
+          diagRouteIndex: i,
         );
       } on DepositException catch (e) {
         // A payload that exceeds the garlic budget is permanently
@@ -3083,6 +3419,17 @@ class RedPandaLightClient implements RedPandaClient {
       returnPath: returnPath,
     );
     submitVia.sendCommand(_cmdFlaschenpostV2, packet);
+    _diagSendAttempt(
+      kind: 'rgb-reply',
+      submitVia: submitVia,
+      hops: rgb.hops,
+      targetOhId: rgb.ohId,
+      packet: packet,
+      channelId: channelId,
+      messageIdHex: messageIdHex,
+      returnPath: returnPath,
+      sessionTagHex: rgb.sessionTagHex,
+    );
     _diagSend(
       'rgb-reply',
       channelId: channelId,
@@ -3223,6 +3570,10 @@ class RedPandaLightClient implements RedPandaClient {
   /// carrying a return path — the depositing node confirms with an R-ACK.
   /// Without one the send stays fire-and-forget; a re-send is deduplicated
   /// at the receiver via the inner message_id either way.
+  ///
+  /// The `diag*` parameters only feed the T180 `send.attempt` event:
+  /// [diagMessageIdHex] names the message even when no R-ACK is requested
+  /// (redundant fan-out copies, self-hop loopbacks).
   Future<void> _sendViaGarlic(
     ActivePeer submitVia,
     List<GarlicHop> hops,
@@ -3230,6 +3581,10 @@ class RedPandaLightClient implements RedPandaClient {
     Uint8List payload,
     String channelId, {
     String? messageIdHex,
+    String diagKind = 'forward',
+    String? diagMessageIdHex,
+    String? diagTargetHost,
+    int? diagRouteIndex,
   }) async {
     if (payload.length > GarlicBuilder.maxPayloadLength(hops.length)) {
       // The fixed 2048-byte packet cannot carry this payload over the
@@ -3266,6 +3621,18 @@ class RedPandaLightClient implements RedPandaClient {
       returnPath: returnPath,
     );
     submitVia.sendCommand(_cmdFlaschenpostV2, packet);
+    _diagSendAttempt(
+      kind: diagKind,
+      submitVia: submitVia,
+      hops: hops,
+      targetOhId: counterpartOhId,
+      packet: packet,
+      channelId: channelId,
+      messageIdHex: diagMessageIdHex ?? messageIdHex,
+      targetHost: diagTargetHost,
+      routeIndex: diagRouteIndex,
+      returnPath: returnPath,
+    );
     _diagSend(
       'forward',
       channelId: channelId,
@@ -3287,6 +3654,9 @@ class RedPandaLightClient implements RedPandaClient {
   Future<OHRegistration> registerOutboundHandle({
     String? channelId,
     Set<String> excludeEndpoints = const {},
+    // T180 diagnostics only: why this mailbox is registered — `new`,
+    // `redundancy` (top-up to k mailboxes) or `failover`.
+    String diagPurpose = 'new',
   }) async {
     final keypair = await OHKeypair.generate();
     final random = Random.secure();
@@ -3309,6 +3679,8 @@ class RedPandaLightClient implements RedPandaClient {
     if (target != null) {
       _registrationsInFlight.update(target, (n) => n + 1, ifAbsent: () => 1);
     }
+    // T180 diagnostics: what came of this registration.
+    var diagResult = 'no_peer';
     try {
       var expiresAtMs = expiresAt.millisecondsSinceEpoch;
       if (activePeer != null) {
@@ -3335,6 +3707,7 @@ class RedPandaLightClient implements RedPandaClient {
           );
         } on TimeoutException {
           _registerResponses.abandon(completer);
+          diagResult = 'no_response';
           RpLog.info(
             'RedPandaLightClient: registerOutboundHandle() no response within 10s, '
             'returning unconfirmed registration',
@@ -3347,12 +3720,15 @@ class RedPandaLightClient implements RedPandaClient {
             RpLog.info(
               'RedPandaLightClient: registerOutboundHandle() rate-limited',
             );
+            diagResult = 'rate_limited';
             throw RateLimitException();
           }
           if (response.status == Status.OK) {
+            diagResult = 'ok';
             // The server may clamp the requested TTL.
             expiresAtMs = response.expiresAtMs.toInt();
           } else {
+            diagResult = 'status ${response.status}';
             RpLog.info(
               'RedPandaLightClient: registerOutboundHandle() non-OK status: '
               '${response.status}',
@@ -3393,7 +3769,17 @@ class RedPandaLightClient implements RedPandaClient {
       _enqueueSubscribe(registration);
 
       return registration;
+    } catch (e) {
+      if (diagResult != 'rate_limited') diagResult = 'error: $e';
+      rethrow;
     } finally {
+      RpDiag.emit(DiagEvt.ohRegister, {
+        DiagKey.result: diagResult,
+        DiagKey.host: target,
+        DiagKey.mailbox: RpDiag.enabled ? _hexEncode(ohId) : null,
+        DiagKey.channel: channelId,
+        DiagKey.purpose: diagPurpose,
+      });
       if (target != null) {
         final left = (_registrationsInFlight[target] ?? 1) - 1;
         if (left <= 0) {
@@ -3529,7 +3915,9 @@ class RedPandaLightClient implements RedPandaClient {
   /// host is only provably dead when the rest of the network is reachable —
   /// otherwise this is a local outage (airplane mode, no WiFi) and moving
   /// the mailbox would not help anyone.
-  void _noteHostUnreachable(OHRegistration oh) {
+  ///
+  /// [reason] (why the fetch failed) is diagnostics only (T180).
+  void _noteHostUnreachable(OHRegistration oh, String reason) {
     final hostAddresses = _hostAddresses(oh.serverEndpoint);
     final hasAlternative = _sendablePeers.any(
       (p) => !hostAddresses.contains(p.address),
@@ -3538,6 +3926,17 @@ class RedPandaLightClient implements RedPandaClient {
     final key = _hexEncode(oh.ohId);
     final count = (_fetchFailureCounts[key] ?? 0) + 1;
     _fetchFailureCounts[key] = count;
+    if (RpDiag.enabled) {
+      RpDiag.emit(DiagEvt.ohUnreachable, {
+        DiagKey.mailbox: key,
+        DiagKey.channel: oh.channelId,
+        DiagKey.host: oh.serverEndpoint,
+        DiagKey.reason: reason,
+        DiagKey.failCount: count,
+        DiagKey.threshold: failoverFetchFailureThreshold,
+        ..._diagHostConditions(oh.serverEndpoint),
+      });
+    }
     if (count < failoverFetchFailureThreshold) return;
 
     final channelId = oh.channelId;
@@ -3557,7 +3956,11 @@ class RedPandaLightClient implements RedPandaClient {
     if (_ratchetSessions[channelId] == null) return;
 
     unawaited(
-      _failoverOwnHandle(oh).catchError((Object e) {
+      _failoverOwnHandle(
+        oh,
+        diagReason: reason,
+        diagFailCount: count,
+      ).catchError((Object e) {
         RpLog.info(
           'RedPandaLightClient: OH failover for channel $channelId failed: $e',
         );
@@ -3573,31 +3976,60 @@ class RedPandaLightClient implements RedPandaClient {
   /// Messages already deposited in the dead mailbox are not lost silently:
   /// the partner's unacknowledged sends re-queue on R-ACK timeout and are
   /// re-sent — to the new mailbox once the announce arrived.
-  Future<void> _failoverOwnHandle(OHRegistration oldOh) async {
+  ///
+  /// [diagReason] / [diagFailCount] only feed the T180 `oh.failover start`
+  /// event, emitted here after the re-entry guard so that every `start` is
+  /// followed by exactly one `done`.
+  Future<void> _failoverOwnHandle(
+    OHRegistration oldOh, {
+    String? diagReason,
+    int? diagFailCount,
+  }) async {
     final channelId = oldOh.channelId;
     if (channelId == null) return;
     if (!_failoversInProgress.add(channelId)) return;
+    if (RpDiag.enabled) {
+      RpDiag.emit(DiagEvt.ohFailover, {
+        DiagKey.phase: 'start',
+        DiagKey.mailbox: _hexEncode(oldOh.ohId),
+        DiagKey.channel: channelId,
+        DiagKey.from: oldOh.serverEndpoint,
+        DiagKey.reason: diagReason,
+        DiagKey.failCount: diagFailCount,
+        DiagKey.threshold: failoverFetchFailureThreshold,
+        DiagKey.peers: _sendablePeers.length,
+        ..._diagHostConditions(oldOh.serverEndpoint),
+      });
+    }
+    // T180 diagnostics: how the failover ended.
+    var diagResult = 'error';
+    OHRegistration? diagReplacement;
     try {
       final OHRegistration replacement;
       try {
         replacement = await registerOutboundHandle(
           channelId: channelId,
           excludeEndpoints: _hostAddresses(oldOh.serverEndpoint),
+          diagPurpose: 'failover',
         );
       } on RateLimitException {
         RpLog.info(
           'RedPandaLightClient: OH failover for channel $channelId '
           'rate-limited — retrying on a later cycle',
         );
+        diagResult = 'rate_limited';
         return;
       }
       if (replacement.serverEndpoint == null) {
         // Never reached a node — roll back; the failure counter stays at
         // the threshold, so the next failing fetch retries the failover.
         _registeredOHs.remove(replacement);
+        diagResult = 'no_node';
         return;
       }
 
+      diagResult = 'moved';
+      diagReplacement = replacement;
       _registeredOHs.remove(oldOh);
       _fetchFailureCounts.remove(_hexEncode(oldOh.ohId));
       RpLog.info(
@@ -3612,6 +4044,19 @@ class RedPandaLightClient implements RedPandaClient {
       await _sendPendingOhUpdate(channelId);
     } finally {
       _failoversInProgress.remove(channelId);
+      if (RpDiag.enabled) {
+        RpDiag.emit(DiagEvt.ohFailover, {
+          DiagKey.phase: 'done',
+          DiagKey.mailbox: _hexEncode(oldOh.ohId),
+          DiagKey.channel: channelId,
+          DiagKey.from: oldOh.serverEndpoint,
+          DiagKey.to: diagReplacement?.serverEndpoint,
+          DiagKey.toMailbox: diagReplacement == null
+              ? null
+              : _hexEncode(diagReplacement.ohId),
+          DiagKey.result: diagResult,
+        });
+      }
     }
   }
 
@@ -4376,6 +4821,7 @@ class RedPandaLightClient implements RedPandaClient {
         extra = await registerOutboundHandle(
           channelId: channelId,
           excludeEndpoints: usedEndpoints,
+          diagPurpose: 'redundancy',
         );
       } on RateLimitException {
         break; // retried on a later cycle
@@ -4528,7 +4974,13 @@ class RedPandaLightClient implements RedPandaClient {
   /// mailbox. Authenticity is the ratchet decryption that already happened —
   /// only the partner holds the message keys. Duplicates (the announce is
   /// sent multiple times) are ignored.
-  void _handleCounterpartOhUpdate(String channelId, Uint8List ohUpdateBytes) {
+  ///
+  /// Returns why the update was dropped, or null when it was applied (or a
+  /// duplicate) — diagnostics only (T180).
+  String? _handleCounterpartOhUpdate(
+    String channelId,
+    Uint8List ohUpdateBytes,
+  ) {
     // T42: the payload is a JSON ARRAY of OHDescriptor maps (breaking change,
     // no pre-T42 compatibility) — the partner's full current mailbox set.
     final List<OHDescriptor> descriptors;
@@ -4546,11 +4998,11 @@ class RedPandaLightClient implements RedPandaClient {
         'RedPandaLightClient: dropping unreadable oh_update for channel '
         '$channelId: $e',
       );
-      return;
+      return 'unreadable_oh_update';
     }
-    if (descriptors.isEmpty) return;
+    if (descriptors.isEmpty) return 'empty_oh_update';
     final changed = _replaceCounterpartOhSet(channelId, descriptors);
-    if (!changed) return; // duplicate announce
+    if (!changed) return null; // duplicate announce
     RpLog.info(
       'RedPandaLightClient: channel $channelId counterpart mailbox set updated to '
       '${descriptors.length} OH(s) (in-band oh_update)',
@@ -4577,6 +5029,7 @@ class RedPandaLightClient implements RedPandaClient {
         !_rendezvous.knowsCounterpartEntry(channelId)) {
       unawaited(_sendRendezvousLookup(channelId));
     }
+    return null;
   }
 
   /// Publishes a counterpart-OH-set change to the app layer (persists the new
@@ -4597,9 +5050,34 @@ class RedPandaLightClient implements RedPandaClient {
   /// [OhMailboxUpdate] so the app layer can persist the new expiry.
   /// Returns true if the Full Node confirmed the renewal.
   Future<bool> renewOutboundHandle(OHRegistration oh) async {
+    var result = 'error';
+    try {
+      final ok = await _renewOutboundHandle(oh, (r) => result = r);
+      return ok;
+    } finally {
+      _diagOhEvent(DiagEvt.ohRenew, oh, result);
+    }
+  }
+
+  /// `oh.renew` / `oh.subscribe` with the handle's identifiers.
+  void _diagOhEvent(String name, OHRegistration oh, String result) {
+    if (!RpDiag.enabled) return;
+    RpDiag.emit(name, {
+      DiagKey.result: result,
+      DiagKey.host: oh.serverEndpoint,
+      DiagKey.mailbox: _hexEncode(oh.ohId),
+      DiagKey.channel: oh.channelId,
+    });
+  }
+
+  Future<bool> _renewOutboundHandle(
+    OHRegistration oh,
+    void Function(String result) diagResult,
+  ) async {
     final activePeer = _peerForHandle(oh, 'renewOutboundHandle()');
     if (activePeer == null) {
       // _peerForHandle already logged the disconnected-host case.
+      diagResult('host_not_connected');
       return false;
     }
 
@@ -4629,6 +5107,7 @@ class RedPandaLightClient implements RedPandaClient {
     } on TimeoutException {
       _registerResponses.abandon(completer);
       RpLog.info('RedPandaLightClient: renewOutboundHandle() timed out');
+      diagResult('no_response');
       return false;
     }
 
@@ -4637,14 +5116,17 @@ class RedPandaLightClient implements RedPandaClient {
       // MS02b: max 5 registrations/min per connection. The renewal timer
       // fires every 5 minutes, so simply failing this cycle is backoff enough.
       RpLog.info('RedPandaLightClient: renewOutboundHandle() rate-limited');
+      diagResult('rate_limited');
       return false;
     }
     if (response.status != Status.OK) {
       RpLog.info(
         'RedPandaLightClient: renewOutboundHandle() non-OK status: ${response.status}',
       );
+      diagResult('status ${response.status}');
       return false;
     }
+    diagResult('ok');
 
     oh.expiresAtMs = response.expiresAtMs.toInt();
     _emitState(
@@ -4742,7 +5224,7 @@ class RedPandaLightClient implements RedPandaClient {
             : 'host node not connected',
       );
       if (oh.serverEndpoint != null) {
-        _noteHostUnreachable(oh);
+        _noteHostUnreachable(oh, 'host node not connected');
       }
       return [];
     }
@@ -4769,7 +5251,7 @@ class RedPandaLightClient implements RedPandaClient {
       );
       _emitFetchStatus(oh, false, 'timeout');
       if (oh.serverEndpoint != null) {
-        _noteHostUnreachable(oh);
+        _noteHostUnreachable(oh, 'timeout');
       }
       activePeer.consecutiveFetchTimeouts++;
       if (activePeer.consecutiveFetchTimeouts >=
@@ -4830,6 +5312,9 @@ class RedPandaLightClient implements RedPandaClient {
       RpLog.info(
         'RedPandaLightClient: fetchMessages() no encryption key for channelId=${oh.channelId}',
       );
+      for (final item in response.items) {
+        _diagFetchItem(oh, item, _DiagItem()..drop('no_key'));
+      }
       return [];
     }
 
@@ -4847,140 +5332,200 @@ class RedPandaLightClient implements RedPandaClient {
     RatchetSession? session;
     var ratchetAdvanced = false;
     var garlicStateChanged = false;
+    if (RpDiag.enabled) _diagFetchStats.items += response.items.length;
     for (final item in response.items) {
-      // MS05: a non-empty session tag marks a reverse-garlic reply. It must
-      // match an outstanding tag of THIS channel; unknown, already consumed
-      // or foreign tags are dropped unread (single-use discipline, master
-      // spec MS05, Decision 5 — the server-side dedup only covers 5-minute
-      // replays).
-      final viaSessionTag = item.sessionTag.isNotEmpty;
-      final String? tagHex;
-      if (viaSessionTag) {
-        tagHex = _hexEncode(item.sessionTag);
-        // T44: an outstanding record-lookup ack tag marks this item as a
-        // rendezvous `record_lookup` answer (`[1 status][KademliaStore]`),
-        // delivered via reverse garlic into our own OH mailbox — never
-        // channel-encrypted. Checked ahead of the R-ACK/channel-reply tags.
-        final recordLookupChannel = _recordLookupTags.remove(tagHex);
-        if (recordLookupChannel != null) {
-          _recordLookupTagCreatedAt.remove(tagHex);
-          await _handleRecordLookupAnswer(
-            recordLookupChannel,
-            item.payload,
-            tagHex: tagHex,
-          );
-          continue;
-        }
-        // MS06: an outstanding ack tag marks this item as an R-ACK for one
-        // of our sends — a plaintext RoutingAck, never channel-encrypted
-        // (master spec MS06, Decision 3: correlation via ack_session_tag).
-        final ackEntry = _ackTagStore.consume(tagHex);
-        if (ackEntry != null) {
-          _handleRoutingAck(ackEntry, item.payload);
-          continue;
+      // T180: exactly one `fetch.item` per item, emitted once its handler
+      // returned (or threw) — see [_DiagItem].
+      final diag = _DiagItem();
+      try {
+        // MS05: a non-empty session tag marks a reverse-garlic reply. It must
+        // match an outstanding tag of THIS channel; unknown, already consumed
+        // or foreign tags are dropped unread (single-use discipline, master
+        // spec MS05, Decision 5 — the server-side dedup only covers 5-minute
+        // replays).
+        final viaSessionTag = item.sessionTag.isNotEmpty;
+        final String? tagHex;
+        if (viaSessionTag) {
+          tagHex = _hexEncode(item.sessionTag);
+          // T44: an outstanding record-lookup ack tag marks this item as a
+          // rendezvous `record_lookup` answer (`[1 status][KademliaStore]`),
+          // delivered via reverse garlic into our own OH mailbox — never
+          // channel-encrypted. Checked ahead of the R-ACK/channel-reply tags.
+          final recordLookupChannel = _recordLookupTags.remove(tagHex);
+          if (recordLookupChannel != null) {
+            _recordLookupTagCreatedAt.remove(tagHex);
+            diag.kind = 'lookup-answer';
+            await _handleRecordLookupAnswer(
+              recordLookupChannel,
+              item.payload,
+              tagHex: tagHex,
+            );
+            diag.accept();
+            continue;
+          }
+          // MS06: an outstanding ack tag marks this item as an R-ACK for one
+          // of our sends — a plaintext RoutingAck, never channel-encrypted
+          // (master spec MS06, Decision 3: correlation via ack_session_tag).
+          final ackEntry = _ackTagStore.consume(tagHex);
+          if (ackEntry != null) {
+            diag
+              ..kind = 'r-ack'
+              ..msg = ackEntry.messageIdHex;
+            diag.finish(
+              _handleRoutingAck(ackEntry, item.payload, tagHex: tagHex),
+            );
+            continue;
+          }
+          if (group != null) {
+            // Groups issue no reply session tags (MS08, Decision 7) — a
+            // tagged item that is not an outstanding R-ACK is foreign.
+            RpLog.info(
+              'RedPandaLightClient: dropping tagged mail item on group OH — '
+              'not an outstanding R-ACK',
+            );
+            diag.drop('tag_not_outstanding_group');
+            continue;
+          }
+          final tagChannel = _sessionTagStore.lookup(tagHex);
+          if (tagChannel == null || tagChannel != oh.channelId) {
+            RpLog.info(
+              'RedPandaLightClient: dropping tagged mail item — session tag '
+              '${tagChannel == null ? 'unknown or already consumed' : 'belongs to another channel'}',
+            );
+            diag.drop(
+              tagChannel == null
+                  ? 'session_tag_unknown_or_consumed'
+                  : 'session_tag_other_channel',
+            );
+            continue;
+          }
+        } else {
+          tagHex = null;
         }
         if (group != null) {
-          // Groups issue no reply session tags (MS08, Decision 7) — a
-          // tagged item that is not an outstanding R-ACK is foreign.
-          RpLog.info(
-            'RedPandaLightClient: dropping tagged mail item on group OH — '
-            'not an outstanding R-ACK',
+          diag.kind = 'group';
+          await _handleGroupItem(group, item, messages, ackedGroupMessageIds);
+          diag.accept();
+          continue;
+        }
+        try {
+          final ChannelMessage channelMessage;
+          if (item.payload.isNotEmpty &&
+              item.payload[0] == MessageCryptoV4.version) {
+            session ??= await _ratchetSessions[oh.channelId]!;
+            channelMessage = await session.decrypt(item.payload, oh.channelId!);
+            ratchetAdvanced = true;
+          } else {
+            channelMessage = await MessageCryptoV3.decrypt(
+              item.payload,
+              // Non-null here: group == null implies encKey != null (checked
+              // right after the fetch above).
+              encKey!,
+              oh.channelId!,
+            );
+          }
+          // Consume the tag only for an accepted reply: a transiently
+          // undecryptable item is re-delivered on the next fetch and must
+          // still find its tag, while a replayed ciphertext fails decryption
+          // and can never resurrect an already consumed tag.
+          if (tagHex != null) {
+            _sessionTagStore.consume(tagHex);
+            garlicStateChanged = true;
+          }
+          // T20: a loopback self-test message coming back — complete the
+          // pending test and swallow the item: it never surfaces as a chat
+          // message and is never channel-ACKed. Test messages without a
+          // pending entry (app restart, eviction, or old deposits replayed
+          // by a T40 cursor heal) are swallowed as well.
+          final loopback = _pendingLoopbacks.remove(
+            _hexEncode(channelMessage.messageId),
           );
-          continue;
-        }
-        final tagChannel = _sessionTagStore.lookup(tagHex);
-        if (tagChannel == null || tagChannel != oh.channelId) {
-          RpLog.info(
-            'RedPandaLightClient: dropping tagged mail item — session tag '
-            '${tagChannel == null ? 'unknown or already consumed' : 'belongs to another channel'}',
-          );
-          continue;
-        }
-      } else {
-        tagHex = null;
-      }
-      if (group != null) {
-        await _handleGroupItem(group, item, messages, ackedGroupMessageIds);
-        continue;
-      }
-      try {
-        final ChannelMessage channelMessage;
-        if (item.payload.isNotEmpty &&
-            item.payload[0] == MessageCryptoV4.version) {
-          session ??= await _ratchetSessions[oh.channelId]!;
-          channelMessage = await session.decrypt(item.payload, oh.channelId!);
-          ratchetAdvanced = true;
-        } else {
-          channelMessage = await MessageCryptoV3.decrypt(
-            item.payload,
-            // Non-null here: group == null implies encKey != null (checked
-            // right after the fetch above).
-            encKey!,
-            oh.channelId!,
-          );
-        }
-        // Consume the tag only for an accepted reply: a transiently
-        // undecryptable item is re-delivered on the next fetch and must
-        // still find its tag, while a replayed ciphertext fails decryption
-        // and can never resurrect an already consumed tag.
-        if (tagHex != null) {
-          _sessionTagStore.consume(tagHex);
-          garlicStateChanged = true;
-        }
-        // T20: a loopback self-test message coming back — complete the
-        // pending test and swallow the item: it never surfaces as a chat
-        // message and is never channel-ACKed. Test messages without a
-        // pending entry (app restart, eviction, or old deposits replayed
-        // by a T40 cursor heal) are swallowed as well.
-        final loopback = _pendingLoopbacks.remove(
-          _hexEncode(channelMessage.messageId),
-        );
-        if (loopback != null || channelMessage.content == _loopbackContent) {
-          if (loopback != null && !loopback.isCompleted) loopback.complete();
-          continue;
-        }
-        // T21: an in-band mailbox failover announcement — apply the new
-        // counterpart OH and swallow the item (never a chat message).
-        if (channelMessage.isOhUpdate) {
-          _handleCounterpartOhUpdate(oh.channelId!, channelMessage.ohUpdate!);
-          continue;
-        }
-        // MS08: a group handshake rides the 1:1 channel — surface it as an
-        // event, never as a chat message.
-        if (channelMessage.isGroupHandshake) {
-          _emitGroupHandshake(oh.channelId!, channelMessage.groupHandshake!);
-          continue;
-        }
-        // MS06: a Channel-ACK confirms the partner received our message —
-        // surface it as a status update, never as a chat message.
-        if (channelMessage.isChannelAck) {
-          _emitState(
-            ChannelAckUpdate(
-              channelId: oh.channelId!,
-              messageIdHex: _hexEncode(channelMessage.ackMessageId!),
-              timestampMs: channelMessage.timestampMs,
+          if (loopback != null || channelMessage.content == _loopbackContent) {
+            diag
+              ..kind = 'loopback'
+              ..msg = _hexEncode(channelMessage.messageId);
+            if (loopback != null && !loopback.isCompleted) loopback.complete();
+            diag.finish(loopback == null ? 'no_pending_loopback' : null);
+            continue;
+          }
+          // T21: an in-band mailbox failover announcement — apply the new
+          // counterpart OH and swallow the item (never a chat message).
+          if (channelMessage.isOhUpdate) {
+            diag
+              ..kind = 'oh-update'
+              ..msg = _hexEncode(channelMessage.messageId);
+            diag.finish(
+              _handleCounterpartOhUpdate(
+                oh.channelId!,
+                channelMessage.ohUpdate!,
+              ),
+            );
+            continue;
+          }
+          // MS08: a group handshake rides the 1:1 channel — surface it as an
+          // event, never as a chat message.
+          if (channelMessage.isGroupHandshake) {
+            diag
+              ..kind = 'group-handshake'
+              ..msg = _hexEncode(channelMessage.messageId);
+            _emitGroupHandshake(oh.channelId!, channelMessage.groupHandshake!);
+            diag.accept();
+            continue;
+          }
+          // MS06: a Channel-ACK confirms the partner received our message —
+          // surface it as a status update, never as a chat message.
+          if (channelMessage.isChannelAck) {
+            diag
+              ..kind = 'channel-ack'
+              ..msg = _hexEncode(channelMessage.ackMessageId!);
+            if (RpDiag.enabled) {
+              final ackedHex = _hexEncode(channelMessage.ackMessageId!);
+              final sentAt = _diagSentAtMs[ackedHex];
+              RpDiag.emit(DiagEvt.ackDelivered, {
+                DiagKey.msg: ackedHex,
+                DiagKey.channel: oh.channelId,
+                DiagKey.latencyMs: sentAt == null
+                    ? null
+                    : DateTime.now().millisecondsSinceEpoch - sentAt,
+                DiagKey.mailbox: _hexEncode(oh.ohId),
+              });
+            }
+            _emitState(
+              ChannelAckUpdate(
+                channelId: oh.channelId!,
+                messageIdHex: _hexEncode(channelMessage.ackMessageId!),
+                timestampMs: channelMessage.timestampMs,
+              ),
+            );
+            diag.accept();
+            continue;
+          }
+          diag
+            ..kind = 'message'
+            ..msg = _hexEncode(channelMessage.messageId);
+          if (_storeReplyPath(oh.channelId!, channelMessage.replyPath)) {
+            garlicStateChanged = true;
+          }
+          messages.add(
+            DecryptedMessage(
+              id: _hexEncode(channelMessage.messageId),
+              content: channelMessage.content,
+              receivedAtMs: item.receivedAtMs.toInt(),
+              senderTimestampMs: channelMessage.timestampMs,
+              channelId: oh.channelId,
+              viaSessionTag: viaSessionTag,
             ),
           );
-          continue;
+          // MS06 (OQ 1): acknowledge on receipt — a Channel-ACK is queued for
+          // every accepted regular message and sent after the loop.
+          ackedMessageIds.add(Uint8List.fromList(channelMessage.messageId));
+          diag.accept();
+        } catch (e) {
+          RpLog.info('RedPandaLightClient: failed to decrypt mail item: $e');
+          diag.drop('processing_failed: $e');
         }
-        if (_storeReplyPath(oh.channelId!, channelMessage.replyPath)) {
-          garlicStateChanged = true;
-        }
-        messages.add(
-          DecryptedMessage(
-            id: _hexEncode(channelMessage.messageId),
-            content: channelMessage.content,
-            receivedAtMs: item.receivedAtMs.toInt(),
-            senderTimestampMs: channelMessage.timestampMs,
-            channelId: oh.channelId,
-            viaSessionTag: viaSessionTag,
-          ),
-        );
-        // MS06 (OQ 1): acknowledge on receipt — a Channel-ACK is queued for
-        // every accepted regular message and sent after the loop.
-        ackedMessageIds.add(Uint8List.fromList(channelMessage.messageId));
-      } catch (e) {
-        RpLog.info('RedPandaLightClient: failed to decrypt mail item: $e');
+      } finally {
+        _diagFetchItem(oh, item, diag);
       }
     }
     if (ratchetAdvanced && session != null) {
@@ -5065,6 +5610,25 @@ class RedPandaLightClient implements RedPandaClient {
     return messages;
   }
 
+  /// Emits the `fetch.item` of one mail item (T180). An item whose handler
+  /// threw before reaching a verdict counts as dropped.
+  void _diagFetchItem(OHRegistration oh, MailItem item, _DiagItem diag) {
+    if (!RpDiag.enabled) return;
+    RpDiag.emit(DiagEvt.fetchItem, {
+      DiagKey.mailbox: _hexEncode(oh.ohId),
+      DiagKey.channel: oh.channelId,
+      DiagKey.itemHash: RpDiag.hash16(item.payload),
+      DiagKey.kind: diag.kind,
+      DiagKey.outcome: diag.outcome ?? 'dropped',
+      DiagKey.reason: diag.outcome == null ? 'error' : diag.reason,
+      DiagKey.sessionTag: item.sessionTag.isEmpty
+          ? null
+          : _hexEncode(item.sessionTag),
+      DiagKey.recvMs: item.receivedAtMs.toInt(),
+      DiagKey.msg: diag.msg,
+    });
+  }
+
   /// Parses and keeps an incoming reply path (MS05): the freshest unexpired
   /// RGB per channel replaces any older pending one (each message carries a
   /// fresh RGB, so the newest has the longest remaining lifetime). Returns
@@ -5096,16 +5660,30 @@ class RedPandaLightClient implements RedPandaClient {
   /// proves the forward and return path both worked, so the hops are
   /// credited regardless of the deposit status — the status describes the
   /// recipient's mailbox, not the route.
-  void _handleRoutingAck(AckTagEntry entry, List<int> payload) {
+  ///
+  /// Returns why the R-ACK was dropped, or null when it was processed
+  /// (diagnostics only, T180).
+  String? _handleRoutingAck(
+    AckTagEntry entry,
+    List<int> payload, {
+    String? tagHex,
+  }) {
     final RoutingAck ack;
     try {
       ack = RoutingAck.decode(payload);
     } on FormatException catch (e) {
       RpLog.info('RedPandaLightClient: dropping malformed R-ACK: $e');
-      return;
+      return 'malformed_r_ack';
     }
     final latencyMs = (DateTime.now().millisecondsSinceEpoch - entry.sentAtMs)
         .clamp(0, 1 << 31);
+    RpDiag.emit(DiagEvt.ackRouted, {
+      DiagKey.msg: entry.messageIdHex,
+      DiagKey.channel: entry.channelId,
+      DiagKey.status: ack.status,
+      DiagKey.latencyMs: latencyMs,
+      DiagKey.ackTag: tagHex,
+    });
     _nodeScorer.recordSuccess(entry.hopNodeIdsHex, latencyMs);
     _emitNodeScores();
     // MS08: the R-ACK of a sealed rotation box confirms its deposit — clear
@@ -5124,7 +5702,7 @@ class RedPandaLightClient implements RedPandaClient {
           'delivered (${latencyMs}ms)',
         );
       }
-      return;
+      return null;
     }
     _emitState(
       RoutingAckUpdate.ack(
@@ -5139,6 +5717,7 @@ class RedPandaLightClient implements RedPandaClient {
       'RedPandaLightClient: R-ACK for message ${entry.messageIdHex} '
       '(status ${ack.status}, ${latencyMs}ms)',
     );
+    return null;
   }
 
   /// Sends a Channel-ACK (MS06) for a received message: an empty
@@ -5210,6 +5789,18 @@ class RedPandaLightClient implements RedPandaClient {
       payload: payload,
     );
     activePeer.sendCommand(_cmdFlaschenpostV2, packet);
+    // `msg` is the ACKED message: the Channel-ACK's own id is never seen
+    // anywhere else.
+    _diagSendAttempt(
+      kind: 'channel-ack',
+      submitVia: activePeer,
+      hops: route.hops,
+      targetOhId: counterpartOhId,
+      packet: packet,
+      channelId: channelId,
+      messageIdHex: _hexEncode(ackedId),
+      targetHost: _channelCounterpartOhEndpoints[channelId],
+    );
   }
 
   // =========================================================================
@@ -6474,27 +7065,7 @@ class RedPandaLightClient implements RedPandaClient {
       }
       // MS06: sends whose R-ACK never arrived — score the involved hops
       // down and tell the app layer so it can re-send over fresh hops.
-      final expired = _ackTagStore.takeExpired(ackTimeout);
-      for (final entry in expired) {
-        _nodeScorer.recordFailure(entry.hopNodeIdsHex);
-        // MS08: an unconfirmed rotation box simply stays pending — the
-        // periodic retry re-sends it; no message status to update.
-        if (entry.isRotation) continue;
-        _emitState(
-          RoutingAckUpdate.timeout(
-            channelId: entry.channelId,
-            messageIdHex: entry.messageIdHex,
-            memberIdHex: entry.memberIdHex,
-          ),
-        );
-        RpLog.info(
-          'RedPandaLightClient: no R-ACK for message '
-          '${entry.messageIdHex} within ${ackTimeout.inSeconds}s',
-        );
-      }
-      if (expired.isNotEmpty) {
-        _emitNodeScores();
-      }
+      _reapExpiredAcks();
     } finally {
       _pollInProgress = false;
       _cycleFetchPhase.clear();
@@ -6506,8 +7077,48 @@ class RedPandaLightClient implements RedPandaClient {
         '${DateTime.now().difference(started).inMilliseconds}ms '
         '(interval ${_pollInterval.inSeconds}s)',
       );
+      _diagMaybeFlushFetchSummary();
     }
   }
+
+  /// MS06: sends whose R-ACK never arrived within [ackTimeout] — score the
+  /// involved hops down and tell the app layer so it can re-send over fresh
+  /// hops. Runs once per poll cycle; [nowMs] only for tests.
+  void _reapExpiredAcks([int? nowMs]) {
+    final expired = _ackTagStore.takeExpired(ackTimeout, nowMs: nowMs);
+    for (final entry in expired) {
+      _nodeScorer.recordFailure(entry.hopNodeIdsHex);
+      RpDiag.emit(DiagEvt.ackTimeout, {
+        DiagKey.msg: entry.messageIdHex,
+        DiagKey.channel: entry.channelId,
+        DiagKey.waitedMs:
+            (nowMs ?? DateTime.now().millisecondsSinceEpoch) - entry.sentAtMs,
+        DiagKey.hops: entry.hopNodeIdsHex,
+      });
+      // MS08: an unconfirmed rotation box simply stays pending — the
+      // periodic retry re-sends it; no message status to update.
+      if (entry.isRotation) continue;
+      _emitState(
+        RoutingAckUpdate.timeout(
+          channelId: entry.channelId,
+          messageIdHex: entry.messageIdHex,
+          memberIdHex: entry.memberIdHex,
+        ),
+      );
+      RpLog.info(
+        'RedPandaLightClient: no R-ACK for message '
+        '${entry.messageIdHex} within ${ackTimeout.inSeconds}s',
+      );
+    }
+    if (expired.isNotEmpty) {
+      _emitNodeScores();
+    }
+  }
+
+  /// Runs the R-ACK expiry as of [nowMs] (tests only — the poll cycle runs
+  /// it with the real clock).
+  @visibleForTesting
+  void reapExpiredAcksForTesting(int nowMs) => _reapExpiredAcks(nowMs);
 
   /// Converts an int to 8-byte big-endian representation.
   static Uint8List _int64Bytes(int value) {
@@ -6711,3 +7322,57 @@ enum _RouteKind { viaRgb, forward, none }
 
 /// T167: where a poll cycle stands with one OH (see `_cycleFetchPhase`).
 enum _CycleFetchPhase { pending, inFlight, done }
+
+/// Counters behind the per-minute `fetch.summary` diagnostics event (T180).
+class _DiagFetchStats {
+  static const int windowMs = 60000;
+  static const int heartbeatMs = 15 * 60000;
+
+  /// Start of the current window; null until the first check.
+  int? sinceMs;
+  int polls = 0;
+  int ok = 0;
+  int failures = 0;
+  int items = 0;
+  int notifies = 0;
+
+  /// Whether a summary is due: at least a minute since the last one and
+  /// something [interesting] happened, or the heartbeat period passed.
+  bool due(int nowMs, {required bool interesting}) {
+    final since = sinceMs;
+    if (since == null || nowMs < since) {
+      reset(nowMs);
+      return false;
+    }
+    final age = nowMs - since;
+    return age >= heartbeatMs || (interesting && age >= windowMs);
+  }
+
+  void reset(int nowMs) {
+    sinceMs = nowMs;
+    polls = 0;
+    ok = 0;
+    failures = 0;
+    items = 0;
+    notifies = 0;
+  }
+}
+
+/// The verdict on one fetched mail item, for its `fetch.item` event (T180).
+class _DiagItem {
+  String kind = 'unknown';
+  String? msg;
+  String? outcome;
+  String? reason;
+
+  void accept() => outcome = 'accepted';
+
+  void drop(String why) {
+    outcome = 'dropped';
+    reason = why;
+  }
+
+  /// [dropReason] null = accepted.
+  void finish(String? dropReason) =>
+      dropReason == null ? accept() : drop(dropReason);
+}

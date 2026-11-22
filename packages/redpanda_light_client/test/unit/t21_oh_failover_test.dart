@@ -10,6 +10,8 @@ import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/crypto/channel_message.dart';
 import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
 import 'package:redpanda_light_client/src/crypto/ratchet.dart';
+import 'package:redpanda_light_client/src/diagnostics/diag_catalogue.dart';
+import 'package:redpanda_light_client/src/diagnostics/rp_diag.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/oh_descriptor.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
@@ -661,6 +663,190 @@ void main() {
       expect(messages, isEmpty);
       await Future.delayed(const Duration(milliseconds: 200));
       expect(updates, isEmpty);
+    });
+  });
+
+  group('T180 diagnostics: the failover tells why it happened', () {
+    final events = <DiagEvent>[];
+    setUp(() {
+      RpDiag.resetForTesting();
+      events.clear();
+      RpDiag.sink = events.add;
+      RpDiag.setEnabled(true);
+    });
+    tearDown(RpDiag.resetForTesting);
+
+    List<DiagEvent> named(String name) =>
+        events.where((e) => e.name == name).toList();
+
+    test(
+      'oh.unreachable per counted failure, oh.failover start with the '
+      'counters and conditions, oh.failover done with the new mailbox',
+      () async {
+        final (client, socket, _) = await connectedClient();
+        addTearDown(client.disconnect);
+        socket.onCommandFrame = (command, payload) {
+          if (command == 150) {
+            socket.replyCommand(
+              151,
+              (RegisterOhResponse()
+                    ..status = Status.OK
+                    ..expiresAtMs = fixnum.Int64(
+                      DateTime.now()
+                          .add(const Duration(days: 7))
+                          .millisecondsSinceEpoch,
+                    ))
+                  .writeToBuffer(),
+            );
+          } else if (command == 159) {
+            socket.replyCommand(
+              160,
+              (SubscribeResponse()..status = Status.OK).writeToBuffer(),
+            );
+          }
+        };
+        client.addChannelKeys(
+          'chan',
+          channelKey,
+          counterpartOhId: counterpartOhId,
+          counterpartOhEndpoint: 'peerhost:9',
+          isChannelCreator: true,
+        );
+        final oldOh = await deadHostRegistration();
+        await client.restoreOutboundHandle(oldOh);
+        final oldHex = HEX.encode(oldOh.ohId);
+
+        for (var i = 0; i < 3; i++) {
+          await client.fetchMessages(oldOh);
+        }
+        await pumpUntil(
+          () => named(DiagEvt.ohFailover).length == 2,
+          reason: 'no oh.failover start + done',
+        );
+
+        final unreachable = named(DiagEvt.ohUnreachable);
+        expect(unreachable.map((e) => e.attrs[DiagKey.failCount]), [1, 2, 3]);
+        for (final e in unreachable) {
+          expect(e.attrs[DiagKey.mailbox], oldHex);
+          expect(e.attrs[DiagKey.host], deadEndpoint);
+          expect(e.attrs[DiagKey.reason], 'host node not connected');
+          expect(e.attrs[DiagKey.altPeers], 1);
+        }
+
+        final start = named(DiagEvt.ohFailover).first.attrs;
+        expect(start[DiagKey.phase], 'start');
+        expect(start[DiagKey.mailbox], oldHex);
+        expect(start[DiagKey.channel], 'chan');
+        expect(start[DiagKey.from], deadEndpoint);
+        expect(start[DiagKey.reason], 'host node not connected');
+        expect(start[DiagKey.failCount], 3);
+        expect(
+          start[DiagKey.threshold],
+          RedPandaLightClient.failoverFetchFailureThreshold,
+        );
+        expect(start[DiagKey.altPeers], 1);
+        expect(start[DiagKey.peers], 1);
+        // The dead host was asked for (addPeer) and failed: never connected.
+        expect(start[DiagKey.hostState], isNot('connected'));
+        expect(
+          start.keys,
+          containsAll([DiagKey.hostRetry, DiagKey.hostDialing]),
+        );
+
+        final done = named(DiagEvt.ohFailover).last.attrs;
+        final replacement = client.registeredOutboundHandles.single;
+        expect(done[DiagKey.phase], 'done');
+        expect(done[DiagKey.result], 'moved');
+        expect(done[DiagKey.from], deadEndpoint);
+        expect(done[DiagKey.to], liveEndpoint);
+        expect(done[DiagKey.toMailbox], HEX.encode(replacement.ohId));
+
+        final register = named(DiagEvt.ohRegister).single.attrs;
+        expect(register[DiagKey.purpose], 'failover');
+        expect(register[DiagKey.result], 'ok');
+        expect(register[DiagKey.host], liveEndpoint);
+        expect(register[DiagKey.mailbox], HEX.encode(replacement.ohId));
+
+        for (final e in events) {
+          expect(
+            DiagCatalogue.events[e.name],
+            containsAll(e.attrs.keys),
+            reason: '${e.name} carries a key outside the catalogue',
+          );
+        }
+      },
+    );
+
+    test('oh.register names its purpose: new vs redundancy', () async {
+      final (client, socket, _) = await connectedClient();
+      addTearDown(client.disconnect);
+      socket.onCommandFrame = (command, payload) {
+        if (command == 150) {
+          socket.replyCommand(
+            151,
+            (RegisterOhResponse()
+                  ..status = Status.OK
+                  ..expiresAtMs = fixnum.Int64(
+                    DateTime.now()
+                        .add(const Duration(days: 7))
+                        .millisecondsSinceEpoch,
+                  ))
+                .writeToBuffer(),
+          );
+        } else if (command == 159) {
+          socket.replyCommand(
+            160,
+            (SubscribeResponse()..status = Status.OK).writeToBuffer(),
+          );
+        }
+      };
+      client.addChannelKeys(
+        'chan',
+        channelKey,
+        counterpartOhId: counterpartOhId,
+        isChannelCreator: true,
+      );
+      // A top-up excludes the endpoints already in use, like a failover —
+      // but it is not one.
+      // The top-up needs the node's identity: let it send its public export.
+      socket.reply([2, ...List<int>.generate(64, (i) => i + 1)]);
+      final deadline = DateTime.now().add(const Duration(seconds: 10));
+      while (named(DiagEvt.ohRegister).isEmpty) {
+        if (DateTime.now().isAfter(deadline)) {
+          fail('no redundancy registration');
+        }
+        await client.ensureOhRedundancy('chan');
+        await Future.delayed(const Duration(milliseconds: 20));
+      }
+      expect(
+        named(DiagEvt.ohRegister).first.attrs[DiagKey.purpose],
+        'redundancy',
+      );
+
+      await client.registerOutboundHandle(
+        channelId: 'chan',
+        excludeEndpoints: {'elsewhere:1'},
+      );
+      expect(named(DiagEvt.ohRegister).last.attrs[DiagKey.purpose], 'new');
+    });
+
+    test('diagnostics off: the same failover emits nothing', () async {
+      RpDiag.setEnabled(false);
+      final (client, socket, _) = await connectedClient();
+      addTearDown(client.disconnect);
+      client.addChannelKeys(
+        'chan',
+        channelKey,
+        counterpartOhId: counterpartOhId,
+        isChannelCreator: true,
+      );
+      final oldOh = await deadHostRegistration();
+      await client.restoreOutboundHandle(oldOh);
+      for (var i = 0; i < 3; i++) {
+        await client.fetchMessages(oldOh);
+      }
+      await Future.delayed(const Duration(milliseconds: 300));
+      expect(events, isEmpty);
     });
   });
 }

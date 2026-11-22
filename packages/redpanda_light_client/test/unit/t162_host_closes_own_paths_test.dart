@@ -19,6 +19,8 @@ import 'package:redpanda_light_client/src/crypto/crypto_utils.dart';
 import 'package:redpanda_light_client/src/crypto/message_crypto_v4.dart';
 import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
 import 'package:redpanda_light_client/src/crypto/ratchet.dart';
+import 'package:redpanda_light_client/src/diagnostics/diag_catalogue.dart';
+import 'package:redpanda_light_client/src/diagnostics/rp_diag.dart';
 import 'package:redpanda_light_client/src/domain/channel.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/domain/reverse_garlic_block.dart';
@@ -956,6 +958,268 @@ void main() {
         throwsA(isA<StateError>()),
       );
       expect(client.lastOwnRgbShape, OwnReplyPathShape.none);
+    });
+  });
+
+  group('T180 diagnostics: send.attempt and ack.*', () {
+    final events = <DiagEvent>[];
+    setUp(() {
+      RpDiag.resetForTesting();
+      events.clear();
+      RpDiag.sink = events.add;
+      RpDiag.setEnabled(true);
+    });
+    tearDown(RpDiag.resetForTesting);
+
+    List<DiagEvent> named(String name) =>
+        events.where((e) => e.name == name).toList();
+
+    /// Answers the next fetch (152) with [items] and every batch ack (156).
+    void serveMailbox(ScriptedSocket socket, List<MailItem> items) {
+      socket.onCommandFrame = (cmd, payload) {
+        if (cmd == 152) {
+          final response = FetchResponse()
+            ..status = Status.OK
+            ..nextCursor = fixnum.Int64(items.length);
+          response.items.addAll(items);
+          socket.replyCommand(153, response.writeToBuffer());
+        } else if (cmd == 156) {
+          socket.replyCommand(
+            157,
+            (AckFetchResponse()..status = Status.OK).writeToBuffer(),
+          );
+        }
+      };
+    }
+
+    test(
+      'a forward send names every station, the packet hash, the ack tag '
+      'and the return path; R-ACK, Channel-ACK and timeout follow it',
+      () async {
+        final (host, export) = await makeHost();
+        final (client, socket, relays) = await setupClient(hostExport: export);
+        addTearDown(client.disconnect);
+        final frames = <Uint8List>[];
+        socket.onCommandFrame = (cmd, payload) {
+          if (cmd == 142) frames.add(payload);
+        };
+        late OHRegistration oh;
+        final channel = await channelWithOwnOh(client, onOh: (o) => oh = o);
+
+        final messageId = await client.sendMessage(channel.id, 'trace me');
+        await waitFor(() => frames.isNotEmpty, description: 'garlic frame');
+        final peeled = await peelAny(frames.single, [...relays, host]);
+        final (path, _, _) = await peel(frames.single, relays);
+
+        final attempt = named(DiagEvt.sendAttempt).single.attrs;
+        expect(attempt[DiagKey.kind], 'forward');
+        expect(attempt[DiagKey.msg], messageId);
+        expect(attempt[DiagKey.channel], channel.id);
+        expect(attempt[DiagKey.target], HEX.encode(counterpartOhId));
+        expect(attempt[DiagKey.route], 0);
+        expect(
+          attempt[DiagKey.hops],
+          path.map((h) => HEX.encode(h.nodeId)).join(','),
+        );
+        expect(attempt[DiagKey.submit], 'scripted:1');
+        expect(attempt[DiagKey.submitNode], HEX.encode(host.nodeId));
+        expect(attempt[DiagKey.pktHash], RpDiag.hash16(frames.single));
+        expect(attempt[DiagKey.ackRequested], isTrue);
+        expect(attempt[DiagKey.ackTag], HEX.encode(peeled.ackTag!));
+        expect(attempt[DiagKey.retHops], peeled.returnHops!.join(','));
+        expect(attempt[DiagKey.selfHop], isFalse);
+
+        // The R-ACK lands in our mailbox.
+        final rAck = RoutingAck(
+          timestampMs: DateTime.now().millisecondsSinceEpoch,
+          status: RoutingAck.statusStored,
+        ).encode();
+        serveMailbox(socket, [
+          MailItem(
+            receivedAtMs: fixnum.Int64(DateTime.now().millisecondsSinceEpoch),
+            payload: rAck,
+            sequenceId: fixnum.Int64(1),
+            sessionTag: peeled.ackTag,
+          ),
+        ]);
+        await client.fetchMessages(oh);
+        final routed = named(DiagEvt.ackRouted).single.attrs;
+        expect(routed[DiagKey.msg], messageId);
+        expect(routed[DiagKey.ackTag], HEX.encode(peeled.ackTag!));
+        expect(routed[DiagKey.status], RoutingAck.statusStored);
+        expect(routed[DiagKey.latencyMs], isA<int>());
+        final rAckItem = named(DiagEvt.fetchItem).single.attrs;
+        expect(rAckItem[DiagKey.kind], 'r-ack');
+        expect(rAckItem[DiagKey.outcome], 'accepted');
+        expect(rAckItem[DiagKey.mailbox], HEX.encode(ownOhId));
+        expect(rAckItem[DiagKey.itemHash], RpDiag.hash16(rAck));
+        expect(rAckItem[DiagKey.sessionTag], HEX.encode(peeled.ackTag!));
+
+        // The partner confirms with a Channel-ACK.
+        final partner = await RatchetSession.create(
+          channelKey: channel.encryptionKey,
+          isChannelCreator: false,
+        );
+        final channelAck = await partner.encrypt(
+          ChannelMessage(
+            messageId: Uint8List(16),
+            timestampMs: DateTime.now().millisecondsSinceEpoch,
+            content: '',
+            ackMessageId: Uint8List.fromList(HEX.decode(messageId)),
+          ),
+          channel.id,
+        );
+        serveMailbox(socket, [
+          MailItem(
+            receivedAtMs: fixnum.Int64(DateTime.now().millisecondsSinceEpoch),
+            payload: channelAck,
+            sequenceId: fixnum.Int64(2),
+          ),
+        ]);
+        await client.fetchMessages(oh);
+        final delivered = named(DiagEvt.ackDelivered).single.attrs;
+        expect(delivered[DiagKey.msg], messageId);
+        expect(delivered[DiagKey.mailbox], HEX.encode(ownOhId));
+        expect(delivered[DiagKey.latencyMs], isA<int>());
+        expect(
+          named(DiagEvt.fetchItem).last.attrs[DiagKey.kind],
+          'channel-ack',
+        );
+
+        // A second message whose R-ACK never comes.
+        frames.clear();
+        socket.onCommandFrame = (cmd, payload) {
+          if (cmd == 142) frames.add(payload);
+        };
+        final lost = await client.sendMessage(channel.id, 'lost');
+        client.reapExpiredAcksForTesting(
+          DateTime.now()
+              .add(RedPandaLightClient.ackTimeout)
+              .add(const Duration(seconds: 1))
+              .millisecondsSinceEpoch,
+        );
+        final timeout = named(DiagEvt.ackTimeout).single.attrs;
+        expect(timeout[DiagKey.msg], lost);
+        expect(timeout[DiagKey.channel], channel.id);
+        expect(
+          timeout[DiagKey.waitedMs] as int,
+          greaterThan(RedPandaLightClient.ackTimeout.inMilliseconds),
+        );
+
+        for (final e in events) {
+          expect(
+            DiagCatalogue.events[e.name],
+            containsAll(e.attrs.keys),
+            reason: '${e.name} carries a key outside the catalogue',
+          );
+        }
+      },
+    );
+
+    test('exactly one fetch.item per item: a malformed R-ACK and an '
+        'undecryptable item are reported once each, as dropped', () async {
+      final (host, export) = await makeHost();
+      final (client, socket, relays) = await setupClient(hostExport: export);
+      addTearDown(client.disconnect);
+      final frames = <Uint8List>[];
+      socket.onCommandFrame = (cmd, payload) {
+        if (cmd == 142) frames.add(payload);
+      };
+      late OHRegistration oh;
+      final channel = await channelWithOwnOh(client, onOh: (o) => oh = o);
+      await client.sendMessage(channel.id, 'needs an ack tag');
+      await waitFor(() => frames.isNotEmpty, description: 'garlic frame');
+      final peeled = await peelAny(frames.single, [...relays, host]);
+      events.clear();
+
+      final badAck = Uint8List.fromList([0xff, 0xff, 0xff]);
+      final garbage = Uint8List.fromList(List<int>.filled(64, 3));
+      serveMailbox(socket, [
+        MailItem(
+          receivedAtMs: fixnum.Int64(DateTime.now().millisecondsSinceEpoch),
+          payload: badAck,
+          sequenceId: fixnum.Int64(1),
+          sessionTag: peeled.ackTag,
+        ),
+        MailItem(
+          receivedAtMs: fixnum.Int64(DateTime.now().millisecondsSinceEpoch),
+          payload: garbage,
+          sequenceId: fixnum.Int64(2),
+        ),
+      ]);
+      await client.fetchMessages(oh);
+      final items = named(DiagEvt.fetchItem);
+      expect(items, hasLength(2));
+      final ack = items.singleWhere(
+        (e) => e.attrs[DiagKey.itemHash] == RpDiag.hash16(badAck),
+      );
+      expect(ack.attrs[DiagKey.kind], 'r-ack');
+      expect(ack.attrs[DiagKey.outcome], 'dropped');
+      expect(ack.attrs[DiagKey.reason], 'malformed_r_ack');
+      final bad = items.singleWhere(
+        (e) => e.attrs[DiagKey.itemHash] == RpDiag.hash16(garbage),
+      );
+      expect(bad.attrs[DiagKey.outcome], 'dropped');
+      expect(bad.attrs[DiagKey.reason], startsWith('processing_failed'));
+      expect(named(DiagEvt.ackRouted), isEmpty);
+    });
+
+    test(
+      'a mailbox without channel keys reports every item as no_key',
+      () async {
+        final (_, export) = await makeHost();
+        final (client, socket, _) = await setupClient(hostExport: export);
+        addTearDown(client.disconnect);
+        final oh = OHRegistration(
+          ohId: ownOhId,
+          keypair: await OHKeypair.generate(),
+          expiresAtMs: DateTime.now()
+              .add(const Duration(days: 7))
+              .millisecondsSinceEpoch,
+          channelId: 'unknown-channel',
+          serverEndpoint: 'scripted:1',
+        );
+        await client.restoreOutboundHandle(oh);
+        serveMailbox(socket, [
+          for (var i = 0; i < 2; i++)
+            MailItem(
+              receivedAtMs: fixnum.Int64(DateTime.now().millisecondsSinceEpoch),
+              payload: List<int>.filled(30, i),
+              sequenceId: fixnum.Int64(i + 1),
+            ),
+        ]);
+        await client.fetchMessages(oh);
+        final items = named(DiagEvt.fetchItem);
+        expect(items, hasLength(2));
+        for (final e in items) {
+          expect(e.attrs[DiagKey.outcome], 'dropped');
+          expect(e.attrs[DiagKey.reason], 'no_key');
+        }
+      },
+    );
+
+    test('a tagged item with an unknown session tag is reported as dropped '
+        'with its reason', () async {
+      final (_, export) = await makeHost();
+      final (client, socket, _) = await setupClient(hostExport: export);
+      addTearDown(client.disconnect);
+      late OHRegistration oh;
+      await channelWithOwnOh(client, onOh: (o) => oh = o);
+      final payload = Uint8List.fromList(List<int>.filled(40, 9));
+      serveMailbox(socket, [
+        MailItem(
+          receivedAtMs: fixnum.Int64(DateTime.now().millisecondsSinceEpoch),
+          payload: payload,
+          sequenceId: fixnum.Int64(1),
+          sessionTag: List<int>.filled(16, 0xab),
+        ),
+      ]);
+      await client.fetchMessages(oh);
+      final item = named(DiagEvt.fetchItem).single.attrs;
+      expect(item[DiagKey.outcome], 'dropped');
+      expect(item[DiagKey.reason], 'session_tag_unknown_or_consumed');
+      expect(item[DiagKey.itemHash], RpDiag.hash16(payload));
+      expect(item[DiagKey.sessionTag], 'ab' * 16);
     });
   });
 }

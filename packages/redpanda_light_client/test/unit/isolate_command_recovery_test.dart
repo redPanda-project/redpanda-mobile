@@ -38,6 +38,7 @@ void main() {
     'CmdAddPeer': CmdAddPeer('10.0.0.1:59558'),
     'CmdLifecyclePause': CmdLifecyclePause(),
     'CmdLifecycleResume': CmdLifecycleResume(),
+    'CmdSetDiagnostics': CmdSetDiagnostics(true),
     'CmdSendMessage': CmdSendMessage(1, 'chan', 'hi'),
     'CmdRunLoopbackTest': CmdRunLoopbackTest(2, 'chan'),
     'CmdRunChannelDoctor': CmdRunChannelDoctor(3, 'chan'),
