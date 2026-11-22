@@ -1206,6 +1206,15 @@ class RedPandaLightClient implements RedPandaClient {
   bool _pollInProgress = false;
   bool _renewalInProgress = false;
 
+  /// T167: per-OH fetch progress of the running poll cycle (OH hex → phase).
+  /// Filled when a cycle starts, cleared when it ends; tells [_handleNotify]
+  /// whether the running cycle will still pick up the notified mail.
+  final Map<String, _CycleFetchPhase> _cycleFetchPhase = {};
+
+  /// T167 diagnostics: OH hex → when a Notify arrived that the running cycle
+  /// had already fetched past; the next fetch of that OH logs the wait.
+  final Map<String, DateTime> _missedNotifyAt = {};
+
   /// Mailbox poll cadence while no conversation is active. Kept at 30 s so
   /// idle traffic/metadata stays as before (T27).
   static const Duration idlePollInterval = Duration(seconds: 30);
@@ -1343,10 +1352,37 @@ class RedPandaLightClient implements RedPandaClient {
     );
     // Keep the fast cadence going: a Notify means the conversation is live.
     _lastChatActivity = DateTime.now();
+    // T167 diagnostics: where in the poll schedule did this Notify land?
+    final ohHex = _hexEncode(notify.ohId);
+    final timing = _notifyTimingLabel(ohHex);
+    RpLog.debug('RedPandaLightClient: Notify timing $timing');
+    if (timing != 'idle' && timing != 'before-fetch') {
+      _missedNotifyAt.putIfAbsent(ohHex, DateTime.now);
+    }
     // A cycle currently in flight will fetch this OH (it iterates all OHs);
     // otherwise pull the next cycle forward to right now.
     if (_pollingEnabled && !_pollInProgress) {
       _schedulePoll(Duration.zero);
+    }
+  }
+
+  /// T167: how far the running poll cycle has got with [ohHex] — `idle` (no
+  /// cycle running), `before-fetch` (this cycle still fetches it),
+  /// `during-fetch` (request out, response pending — the new item may or may
+  /// not be in it), `after-fetch` (already fetched: this cycle will not see
+  /// the new item), `not-in-cycle` (registered after the cycle took its
+  /// snapshot).
+  String _notifyTimingLabel(String ohHex) {
+    if (!_pollInProgress) return 'idle';
+    switch (_cycleFetchPhase[ohHex]) {
+      case null:
+        return 'not-in-cycle';
+      case _CycleFetchPhase.pending:
+        return 'before-fetch';
+      case _CycleFetchPhase.inFlight:
+        return 'during-fetch';
+      case _CycleFetchPhase.done:
+        return 'after-fetch';
     }
   }
 
@@ -5307,10 +5343,29 @@ class RedPandaLightClient implements RedPandaClient {
     _pollInProgress = true;
     final started = DateTime.now();
     var fetched = 0;
+    final snapshot = List.of(_registeredOHs);
+    _cycleFetchPhase
+      ..clear()
+      ..addEntries(
+        snapshot.map(
+          (oh) => MapEntry(_hexEncode(oh.ohId), _CycleFetchPhase.pending),
+        ),
+      );
     try {
-      for (final oh in List.of(_registeredOHs)) {
+      for (final oh in snapshot) {
+        final ohHex = _hexEncode(oh.ohId);
+        _cycleFetchPhase[ohHex] = _CycleFetchPhase.inFlight;
         try {
+          final missedAt = _missedNotifyAt.remove(ohHex);
           final messages = await fetchMessages(oh);
+          if (missedAt != null) {
+            RpLog.debug(
+              'RedPandaLightClient: Notify wait: fetched '
+              '${messages.length} item(s) '
+              '${DateTime.now().difference(missedAt).inMilliseconds}ms after '
+              'a Notify that arrived mid-cycle',
+            );
+          }
           if (messages.isNotEmpty) {
             // The partner is active — keep the fast cadence going (T27).
             _lastChatActivity = DateTime.now();
@@ -5322,6 +5377,8 @@ class RedPandaLightClient implements RedPandaClient {
         } catch (e) {
           RpLog.info('RedPandaLightClient: Polling error: $e');
           _emitFetchStatus(oh, false, 'error: $e');
+        } finally {
+          _cycleFetchPhase[ohHex] = _CycleFetchPhase.done;
         }
       }
       // T44: (re)publish rendezvous records that are due or that never got a
@@ -5384,6 +5441,7 @@ class RedPandaLightClient implements RedPandaClient {
       }
     } finally {
       _pollInProgress = false;
+      _cycleFetchPhase.clear();
       // Cadence telemetry (T27): counts and durations only — no handle or
       // channel identifiers, safe for field logging.
       RpLog.info(
@@ -5530,3 +5588,6 @@ class _ResponseQueue {
     _abandoned = 0;
   }
 }
+
+/// T167: where a poll cycle stands with one OH (see `_cycleFetchPhase`).
+enum _CycleFetchPhase { pending, inFlight, done }
