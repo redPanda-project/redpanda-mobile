@@ -112,6 +112,13 @@ class MessageRepository {
     return row != null;
   }
 
+  /// The row with `Messages.id` [id], or null.
+  Future<Message?> getMessage(int id) {
+    return (_db.select(
+      _db.messages,
+    )..where((t) => t.id.equals(id))).getSingleOrNull();
+  }
+
   /// All messages still waiting to be sent (status pending).
   Future<List<Message>> getPendingMessages() {
     return (_db.select(

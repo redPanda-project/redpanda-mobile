@@ -117,7 +117,7 @@ void main() {
       expect(client.sentMessages.map((m) => m.messageId), [messageIdHex]);
       expect(msg.status, MessageStatus.sent);
       expect(msg.retryCount, 1);
-      expect(msg.lastRetryAt, isNotNull);
+      // (No lastRetryAt check: markSent of the re-send stamps it anyway.)
     });
 
     test(

@@ -176,10 +176,13 @@ class OutboxService {
   /// attempts regardless of their backoff window (negative R-ACK / timeout).
   final Set<(String, String)> _flushMessages = {};
 
-  /// T164: immediate re-sends already granted per (conversation id, network
-  /// message id) in this process — the [maxImmediateAckRetries] budget.
-  /// Dropped once the message is confirmed (stored R-ACK or Channel-ACK).
-  final Map<(String, String), int> _immediateAckRetries = {};
+  /// T164: per (conversation id, network message id) of a message in
+  /// flight: the immediate re-sends granted so far (the
+  /// [maxImmediateAckRetries] budget) and when the latest attempt started
+  /// (stale R-ACK detection). In memory, per process. Dropped once the
+  /// message is done: `routed`/`delivered` for the WHOLE message (for a
+  /// group: all members, not the first one) or `failed`.
+  final Map<(String, String), _AckBookkeeping> _ackStates = {};
   ConnectionStatus? _lastSeenStatus;
 
   /// Set by the first [start]: the next pass begins with
@@ -192,7 +195,23 @@ class OutboxService {
   bool _disposed = false;
   final _attemptController = StreamController<DeliveryAttempt>.broadcast();
 
-  OutboxService(this._messages, this._client, this._groups);
+  /// Wall clock for the per-attempt bookkeeping (T164 review: stale R-ACK
+  /// detection). Injectable so a test can let an R-ACK timeout be 90 s old
+  /// without waiting 90 s; the backoff schedule itself keeps using the
+  /// repository's timestamps.
+  final DateTime Function() _clock;
+
+  OutboxService(
+    this._messages,
+    this._client,
+    this._groups, {
+    DateTime Function()? clock,
+  }) : _clock = clock ?? DateTime.now;
+
+  /// Number of messages this outbox keeps immediate-retry bookkeeping for
+  /// (T164 review L2: must not grow with every message ever sent).
+  @visibleForTesting
+  int get trackedAckStates => _ackStates.length;
 
   /// Every attempt this outbox makes, in order. Broadcast and lossy by
   /// design — a listener that subscribes late has missed nothing that is
@@ -419,12 +438,15 @@ class OutboxService {
     // T164: take the targeted requests BEFORE reading the pending set — the
     // re-queue that asked for them has already been written, so this pass
     // sees the row. Requests that arrive later stay for the rerun.
+    // Removed from the queue only once the pending set was read: a failing
+    // read must not swallow a request whose budget is already spent (T164
+    // review L1).
     final flushConversations = Set.of(_flushConversations);
     final flushMessages = Set.of(_flushMessages);
-    _flushConversations.clear();
-    _flushMessages.clear();
     await _messages.requeueStaleSent(olderThan: staleSentThreshold);
     final pending = await _messages.getPendingMessages();
+    _flushConversations.removeAll(flushConversations);
+    _flushMessages.removeAll(flushMessages);
     final now = DateTime.now();
 
     for (final msg in pending) {
@@ -432,6 +454,7 @@ class OutboxService {
       // The cap holds for every trigger, targeted or not.
       if (msg.retryCount >= maxRetries) {
         await _messages.markFailed(msg.id);
+        _forget(msg.conversationId, msg.messageId);
         continue;
       }
       final forced =
@@ -440,8 +463,56 @@ class OutboxService {
           (msg.messageId != null &&
               flushMessages.contains((msg.conversationId, msg.messageId!)));
       if (!forced && !isDue(msg, now)) continue;
-      await _attempt(msg);
+      // T164 review L3: the snapshot above may be seconds old by now (an
+      // earlier attempt of this pass blocked on the network) — an ACK that
+      // confirmed the row meanwhile means there is nothing left to send.
+      final current = await _messages.getMessage(msg.id);
+      if (current == null || current.status != MessageStatus.pending) {
+        continue;
+      }
+      await _attempt(current);
     }
+  }
+
+  /// Drops the T164 bookkeeping of a message that is done.
+  void _forget(String conversationId, String? messageIdHex) {
+    if (messageIdHex == null || messageIdHex.isEmpty) return;
+    _ackStates.remove((conversationId, messageIdHex));
+  }
+
+  /// Records that an attempt of [messageIdHex] started at [startedAt].
+  void _recordAttempt(
+    String conversationId,
+    String? messageIdHex,
+    DateTime startedAt,
+  ) {
+    if (messageIdHex == null || messageIdHex.isEmpty) return;
+    _ackStates.putIfAbsent((
+      conversationId,
+      messageIdHex,
+    ), _AckBookkeeping.new).attemptStartedAt = startedAt;
+  }
+
+  /// True when negative feedback [update] belongs to an EARLIER attempt
+  /// than the latest one (T164 review M1). A group fan-out gets one R-ACK
+  /// per member; once the first negative one triggered a re-send, the
+  /// others still describe the old attempt and must not re-queue the new
+  /// one.
+  ///
+  /// The R-ACK carries no attempt id, but its timing gives it away: the
+  /// client stamps a send no earlier than [_attempt] starts it, so the
+  /// current attempt's R-ACK has `latencyMs <= now - attemptStartedAt`, and
+  /// its timeout fires no earlier than [RedPandaLightClient.ackTimeout]
+  /// after it. Anything else is older. Unknown start (first attempt after a
+  /// restart, or never recorded): not stale — the pre-review behaviour.
+  bool _isStale(RoutingAckUpdate update) {
+    final startedAt =
+        _ackStates[(update.channelId, update.messageIdHex)]?.attemptStartedAt;
+    if (startedAt == null) return false;
+    final sinceAttempt = _clock().difference(startedAt);
+    if (update.timedOut) return sinceAttempt < RedPandaLightClient.ackTimeout;
+    final latencyMs = update.latencyMs;
+    return latencyMs != null && latencyMs > sinceAttempt.inMilliseconds;
   }
 
   /// Kicks a pass that attempts the targeted rows regardless of their
@@ -478,26 +549,34 @@ class OutboxService {
   /// Re-queues a sent message after negative routing feedback and — while
   /// its [maxImmediateAckRetries] budget lasts and [immediate] is set —
   /// attempts it right away over fresh hops (T164). Without budget the
-  /// normal backoff from now applies, as before T164.
+  /// normal backoff from now applies, as before T164. Feedback for an
+  /// earlier attempt is dropped ([_isStale]).
   Future<void> _requeueAfterNegativeAck(
     RoutingAckUpdate update, {
     required bool immediate,
   }) async {
+    if (_isStale(update)) {
+      debugPrint(
+        'OutboxService: ignoring negative feedback for an earlier attempt '
+        'of ${update.messageIdHex}',
+      );
+      return;
+    }
     final requeued = await _messages.requeueSentByNetworkId(
       update.channelId,
       update.messageIdHex,
     );
     if (!requeued || !immediate) return;
     final key = (update.channelId, update.messageIdHex);
-    final granted = _immediateAckRetries[key] ?? 0;
-    if (granted >= maxImmediateAckRetries) {
+    final state = _ackStates.putIfAbsent(key, _AckBookkeeping.new);
+    if (state.immediateGranted >= maxImmediateAckRetries) {
       debugPrint(
         'OutboxService: immediate re-send budget used up for '
         '${update.messageIdHex} — normal backoff',
       );
       return;
     }
-    _immediateAckRetries[key] = granted + 1;
+    state.immediateGranted++;
     _kickTargetedPass(message: key);
   }
 
@@ -508,6 +587,7 @@ class OutboxService {
     final attemptNo = msg.retryCount + 1;
     DeliveryFailure? failure;
     var unreached = 0;
+    final startedAt = _clock();
     try {
       // Reuse the stable network message id across attempts so re-sends
       // deduplicate at the receiver. On the very first attempt the row has
@@ -528,6 +608,7 @@ class OutboxService {
       if (msg.messageId == null || msg.messageId!.isEmpty) {
         await _messages.setNetworkMessageId(msg.id, usedId);
       }
+      _recordAttempt(msg.conversationId, usedId, startedAt);
       await _messages.markSent(msg.id);
     } on GroupSendException catch (e) {
       // MS08: some members were not reached — normal backoff. Persist the
@@ -537,6 +618,12 @@ class OutboxService {
           e.messageIdHex != null) {
         await _messages.setNetworkMessageId(msg.id, e.messageIdHex!);
       }
+      // The members it did reach R-ACK this attempt.
+      _recordAttempt(
+        msg.conversationId,
+        msg.messageId ?? e.messageIdHex,
+        startedAt,
+      );
       await _messages.markRetryAttempt(msg.id);
       failure = DeliveryFailure.groupPartial;
       unreached = e.failedMemberIds.length;
@@ -556,6 +643,7 @@ class OutboxService {
         // Item exceeds the per-item size limit (64 KiB) — re-sending the
         // same payload can never succeed.
         await _messages.markFailed(msg.id);
+        _forget(msg.conversationId, msg.messageId);
         failure = DeliveryFailure.tooLarge;
       } else if (e.isQuotaExceeded) {
         // Recipient mailbox full (reject-new): back off harder than for
@@ -621,6 +709,7 @@ class OutboxService {
         delivered: false,
       );
       if (complete) {
+        _forget(update.channelId, update.messageIdHex);
         await _messages.markRoutedByNetworkId(
           update.channelId,
           update.messageIdHex,
@@ -644,7 +733,7 @@ class OutboxService {
     }
     switch (update.status) {
       case RoutingAck.statusStored:
-        _immediateAckRetries.remove((update.channelId, update.messageIdHex));
+        _forget(update.channelId, update.messageIdHex);
         await _messages.markRoutedByNetworkId(
           update.channelId,
           update.messageIdHex,
@@ -674,7 +763,6 @@ class OutboxService {
 
   /// Applies an application-layer delivery confirmation (Channel-ACK, MS06).
   Future<void> onChannelAck(ChannelAckUpdate update) async {
-    _immediateAckRetries.remove((update.channelId, update.messageIdHex));
     // MS08 (Decision 13): group acks aggregate per member — `delivered`
     // only once ALL other members confirmed. Acks are broadcast, so this
     // also fires for messages we merely received; those rows are excluded
@@ -698,11 +786,21 @@ class OutboxService {
       );
       if (!complete) return;
     }
+    // T164 review H1: only now — for a group, ONE member's Channel-ACK
+    // (e.g. for a duplicate) must not refill the immediate-retry budget
+    // another member's failing mailbox is draining.
+    _forget(update.channelId, update.messageIdHex);
     await _messages.markDeliveredByNetworkId(
       update.channelId,
       update.messageIdHex,
     );
   }
+}
+
+/// T164 per-message bookkeeping, see [OutboxService._ackStates].
+class _AckBookkeeping {
+  int immediateGranted = 0;
+  DateTime? attemptStartedAt;
 }
 
 final outboxServiceProvider = Provider<OutboxService>((ref) {

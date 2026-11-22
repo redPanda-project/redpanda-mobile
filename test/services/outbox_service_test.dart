@@ -14,6 +14,7 @@ import 'package:redpanda_light_client/redpanda_light_client.dart'
         ConnectionStatus,
         DepositException,
         DepositStatus,
+        RedPandaLightClient,
         RoutingAck,
         RoutingAckUpdate,
         UnknownCounterpartException;
@@ -26,12 +27,15 @@ void main() {
   late MessageRepository repo;
   late FakeRedPandaClient client;
   late OutboxService outbox;
+  // The outbox's clock for stale R-ACK detection (T164 review M1).
+  late DateTime now;
 
   setUp(() {
+    now = DateTime(2026, 11, 22, 12);
     db = createTestDatabase();
     repo = MessageRepository(db);
     client = FakeRedPandaClient();
-    outbox = OutboxService(repo, client, GroupRepository(db));
+    outbox = OutboxService(repo, client, GroupRepository(db), clock: () => now);
   });
 
   tearDown(() async {
@@ -552,6 +556,9 @@ void main() {
       final id = await insertPending(messageId: 'net-1');
       await outbox.runPass();
 
+      // The client reports a timeout no earlier than ackTimeout after the
+      // send; a younger one would be stale (T164 review M1).
+      now = now.add(RedPandaLightClient.ackTimeout);
       await outbox.onRoutingAck(
         const RoutingAckUpdate.timeout(
           channelId: 'channel-1',
