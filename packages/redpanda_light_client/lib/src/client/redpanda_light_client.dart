@@ -1044,6 +1044,7 @@ class RedPandaLightClient implements RedPandaClient {
     _nextRetryTime[address] = _now().add(Duration(seconds: seconds));
     // T180: the backoff of a repeated identical dial failure is as
     // suppressed as the failure itself (see [_diagDialFailed]).
+    _diagSyncDialFailState();
     if (_diagSilentBackoff.remove(address)) return;
     RpDiag.emit(DiagEvt.connBackoff, {
       DiagKey.addr: address,
@@ -1075,6 +1076,20 @@ class RedPandaLightClient implements RedPandaClient {
   /// Suppressed failed dials since the last `fetch.summary`.
   int _diagSuppressedDials = 0;
 
+  /// [RpDiag.generation] the suppression state above belongs to.
+  int _diagDialFailGeneration = -1;
+
+  /// Drops the suppression state when the diagnostics switch changed since
+  /// it was built (see [RpDiag.generation]).
+  void _diagSyncDialFailState() {
+    if (_diagDialFailGeneration == RpDiag.generation) return;
+    _diagDialFailGeneration = RpDiag.generation;
+    _diagDialFailClass.clear();
+    _diagDialFailSuppressed.clear();
+    _diagSilentBackoff.clear();
+    _diagSuppressedDials = 0;
+  }
+
   /// Bounded like the peer repository's address set; this only caps it.
   static const int _diagDialFailCapacity = 256;
 
@@ -1097,6 +1112,7 @@ class RedPandaLightClient implements RedPandaClient {
     bool intentional = false,
   }) {
     if (!RpDiag.enabled) return;
+    _diagSyncDialFailState();
     final cls = _diagFailureClass(reason);
     if (!intentional && _diagDialFailClass[address] == cls) {
       _diagDialFailSuppressed.update(address, (n) => n + 1, ifAbsent: () => 1);
@@ -1128,6 +1144,7 @@ class RedPandaLightClient implements RedPandaClient {
 
   void _diagConnUp(ActivePeer peer) {
     if (!RpDiag.enabled) return;
+    _diagSyncDialFailState();
     _diagDialFailClass.remove(peer.address);
     RpDiag.emit(DiagEvt.connUp, {
       DiagKey.dialFail: _diagDialFailSuppressed.remove(peer.address),

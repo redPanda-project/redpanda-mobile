@@ -270,25 +270,94 @@ void main() {
       expect(buffer.length, 2);
     });
 
-    test('an unreadable file is moved aside, never overwritten', () async {
+    test('a torn multi-byte character costs only its line', () async {
       final file = File('${dir.path}/b.jsonl')
-        ..writeAsBytesSync([0xff, 0xfe, 0x00, 0x80, 0x0a]);
+        ..writeAsBytesSync([
+          ...utf8.encode('${line(0)}\n${line(1)}\n'),
+          ...utf8.encode('{"d": "Mi 10 '),
+          0xc3, // first byte of "ä", the second one never made it
+        ]);
       final buffer = DiagRingBuffer(file);
       await buffer.load();
-      expect(buffer.length, 0);
-      buffer.add(line(1));
-      buffer.removeFirst(1); // would rewrite the file
-      buffer.add(line(2));
-      await buffer.flush();
-      final aside = dir
-          .listSync()
-          .whereType<File>()
-          .where((f) => f.path.contains(DiagRingBuffer.asideMarker))
-          .toList();
-      expect(aside, hasLength(1));
-      expect(aside.single.readAsBytesSync(), [0xff, 0xfe, 0x00, 0x80, 0x0a]);
-      await buffer.deleteAsideFiles();
-      expect(aside.single.existsSync(), isFalse);
+      expect(buffer.length, 2);
+      expect(
+        dir.listSync().where(
+          (f) => f.path.contains(DiagRingBuffer.asideMarker),
+        ),
+        isEmpty,
+      );
+    });
+
+    test(
+      'a file that cannot be read is moved aside, never overwritten',
+      () async {
+        final file = File('${dir.path}/b.jsonl')
+          ..writeAsBytesSync([0xff, 0xfe, 0x00, 0x80, 0x0a]);
+        final buffer = DiagRingBuffer(
+          file,
+          readBytes: (_) async => throw const FileSystemException('EIO'),
+        );
+        await buffer.load();
+        expect(buffer.length, 0);
+        buffer.add(line(1));
+        buffer.removeFirst(1); // would rewrite the file
+        buffer.add(line(2));
+        await buffer.flush();
+        final aside = dir
+            .listSync()
+            .whereType<File>()
+            .where((f) => f.path.contains(DiagRingBuffer.asideMarker))
+            .toList();
+        expect(aside, hasLength(1));
+        expect(aside.single.readAsBytesSync(), [0xff, 0xfe, 0x00, 0x80, 0x0a]);
+        await buffer.deleteAsideFiles();
+        expect(aside.single.existsSync(), isFalse);
+      },
+    );
+
+    DiagRingBuffer appendOnlyBuffer(File file, {int capacity = 100000}) =>
+        DiagRingBuffer(
+          file,
+          capacityBytes: capacity,
+          readBytes: (_) async => throw const FileSystemException('EIO'),
+          renameFile: (_, _) async => throw const FileSystemException('EPERM'),
+        );
+
+    test(
+      'append-only (unreadable, not movable): clear deletes the file',
+      () async {
+        final file = File('${dir.path}/b.jsonl')..writeAsStringSync('secret\n');
+        final buffer = appendOnlyBuffer(file);
+        await buffer.load();
+        expect(buffer.appendOnly, isTrue);
+        buffer.add(line(1));
+        buffer.removeFirst(1);
+        buffer.add(line(2));
+        await buffer.flush();
+        expect(
+          file.readAsStringSync(),
+          startsWith('secret\n'),
+          reason: 'never rewritten',
+        );
+        buffer.add(line(3)); // pending, must not be appended after clear
+        await buffer.clear();
+        await buffer.flush();
+        expect(file.existsSync(), isFalse);
+      },
+    );
+
+    test('append-only: the cap still holds (delete and recreate)', () async {
+      final file = File('${dir.path}/b.jsonl')
+        ..writeAsStringSync('${'Z' * 1500}\n');
+      final buffer = appendOnlyBuffer(file, capacity: 2000);
+      await buffer.load();
+      for (var i = 0; i < 10; i++) {
+        buffer.add(line(i));
+        await buffer.flush();
+      }
+      expect(file.lengthSync(), lessThanOrEqualTo(2000));
+      expect(file.readAsStringSync(), isNot(contains('ZZZZ')));
+      expect(buffer.appendOnly, isFalse);
     });
 
     test('an oversized file is trimmed on load', () async {
@@ -457,6 +526,19 @@ void main() {
       expect(service.buffered, 0);
     });
 
+    test('switching off deletes the buffer file', () async {
+      final service = newService();
+      await service.setEnabled(true);
+      RpDiag.emit(DiagEvt.connUp, {DiagKey.addr: 'a:1'});
+      await service.onPause();
+      final file = File(
+        '${dir.path}/${FieldDiagnosticsService.bufferFileName}',
+      );
+      expect(file.existsSync(), isTrue);
+      await service.setEnabled(false);
+      expect(file.existsSync(), isFalse);
+    });
+
     test('off→on→off→on: the last request wins, one buffer', () async {
       final service = newService();
       final calls = [
@@ -473,23 +555,28 @@ void main() {
       expect(identical(service.buffer, buffer), isTrue);
     });
 
-    test(
-      'boot counter: +1 per process start, (boot, seq) on every event',
-      () async {
-        final first = newService();
-        await first.init();
-        final second = newService();
-        await second.init();
-        expect(first.boot, 1);
-        expect(second.boot, 2);
-        await second.setEnabled(true);
-        RpDiag.emit(DiagEvt.connUp, {DiagKey.addr: 'a:1'});
-        await second.uploadNow();
-        final up = uploader.sent.firstWhere((s) => s.$1 == DiagEvt.connUp).$2;
-        expect(up['rp.boot']!.value, 2);
-        expect(up['rp.boot_id']!.value, second.bootId);
-      },
-    );
+    test('boot counter: +1 per process that starts diagnostics, (boot, seq) '
+        'on every event', () async {
+      final idle = newService();
+      await idle.init(); // diagnostics off: no prefs write at all
+      expect(idle.boot, 0);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getInt(FieldDiagnosticsService.bootCounterPrefsKey), isNull);
+
+      final first = newService();
+      await first.setEnabled(true);
+      await first.setEnabled(false);
+      await first.setEnabled(true); // same process: no second bump
+      final second = newService();
+      await second.setEnabled(true);
+      expect(first.boot, 1);
+      expect(second.boot, 2);
+      RpDiag.emit(DiagEvt.connUp, {DiagKey.addr: 'a:1'});
+      await second.uploadNow();
+      final up = uploader.sent.firstWhere((s) => s.$1 == DiagEvt.connUp).$2;
+      expect(up['rp.boot']!.value, 2);
+      expect(up['rp.boot_id']!.value, second.bootId);
+    });
 
     test('drops are reported as diag.state', () async {
       // The trim leaves 10 % headroom, so the report itself fits.

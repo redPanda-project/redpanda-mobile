@@ -11,8 +11,12 @@ class FieldDiagnosticsIndicator extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final state = ref.watch(fieldDiagnosticsProvider);
-    if (!state.available || !state.enabled) return const SizedBox.shrink();
+    // Only the on/off edge: the provider also changes with every upload
+    // count, and the home app bar must not rebuild for those.
+    final on = ref.watch(
+      fieldDiagnosticsProvider.select((s) => s.available && s.enabled),
+    );
+    if (!on) return const SizedBox.shrink();
     final scheme = Theme.of(context).colorScheme;
     return Tooltip(
       message: 'Diagnostics to Sentry are on',

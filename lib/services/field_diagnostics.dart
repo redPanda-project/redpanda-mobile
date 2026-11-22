@@ -89,8 +89,8 @@ class FieldDiagnosticsService {
   Future<void> _toggleTail = Future.value();
   bool? _wanted;
 
-  /// Process counter, persisted and incremented by every [init] (0 when
-  /// [init] never ran). `rp.t_ms` is the primary order key of the events;
+  /// Process counter, persisted and incremented once per process when
+  /// diagnostics actually start (0 before, or when the prefs write failed). `rp.t_ms` is the primary order key of the events;
   /// (`rp.boot`, `rp.seq`) identifies an event uniquely, so a batch that is
   /// uploaded again after the process was killed mid-upload can be
   /// de-duplicated.
@@ -139,8 +139,6 @@ class FieldDiagnosticsService {
       await _deleteBufferFiles();
       return;
     }
-    boot = (prefs.getInt(bootCounterPrefsKey) ?? 0) + 1;
-    await prefs.setInt(bootCounterPrefsKey, boot);
     if (prefs.getBool(enabledPrefsKey) ?? false) {
       await _enqueue(true, persist: false);
     }
@@ -167,16 +165,36 @@ class FieldDiagnosticsService {
   Future<void> _apply({required bool persist}) async {
     final want = _wanted;
     if (want == null) return;
-    if (persist) {
+    try {
+      if (want) {
+        if (persist) await _persistEnabled(true);
+        await _start();
+      } else {
+        // Stop first: a failing prefs write must not leave it running.
+        await _stop();
+        if (persist) await _persistEnabled(false);
+      }
+    } finally {
+      _notify();
+    }
+  }
+
+  Future<void> _persistEnabled(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(enabledPrefsKey, value);
+  }
+
+  /// Bumps the persisted [boot] counter once per process, when diagnostics
+  /// actually start. A failing prefs write is not fatal: [boot] then stays
+  /// 0 and [bootId] still tells the process apart.
+  Future<void> _bumpBoot() async {
+    if (boot != 0) return;
+    try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool(enabledPrefsKey, want);
-    }
-    if (want) {
-      await _start();
-    } else {
-      await _stop();
-    }
-    _notify();
+      final next = (prefs.getInt(bootCounterPrefsKey) ?? 0) + 1;
+      await prefs.setInt(bootCounterPrefsKey, next);
+      boot = next;
+    } catch (_) {}
   }
 
   /// Deletes every buffer file of both build modes, including files moved
@@ -274,6 +292,8 @@ class FieldDiagnosticsService {
     await buffer.load();
     // A later request (off) is queued behind this one and undoes it; no
     // need to start in between.
+    if (_wanted == false) return;
+    await _bumpBoot();
     if (_wanted == false) return;
     _enabled = true;
     RpDiag.sink = _record;
@@ -542,7 +562,17 @@ class SentryDiagUploader implements DiagUploader {
 /// appending new lines, or rewriting the file (via a temp file and rename)
 /// after lines were removed. Disk writes are serialized.
 class DiagRingBuffer {
-  DiagRingBuffer(this.file, {this.capacityBytes = defaultCapacityBytes});
+  DiagRingBuffer(
+    this.file, {
+    this.capacityBytes = defaultCapacityBytes,
+    @visibleForTesting Future<List<int>> Function(File file)? readBytes,
+    @visibleForTesting
+    Future<void> Function(File file, String newPath)? renameFile,
+  }) : _readBytes = readBytes ?? ((f) => f.readAsBytes()),
+       _renameFile = renameFile ?? ((f, path) => f.rename(path));
+
+  final Future<List<int>> Function(File file) _readBytes;
+  final Future<void> Function(File file, String newPath) _renameFile;
 
   static const int defaultCapacityBytes = 2 * 1024 * 1024;
 
@@ -564,14 +594,17 @@ class DiagRingBuffer {
 
   static int _size(String line) => utf8.encode(line).length + 1;
 
-  /// Reads the file once (unreadable lines, e.g. a torn last line, are
-  /// skipped).
+  /// Reads the file once. Decoding is lenient — a kill mid-append can tear a
+  /// multi-byte character — and lines that are not valid JSON (the torn
+  /// last line) are skipped, so one bad byte never costs the buffer.
   Future<void> load() async {
     if (_loaded) return;
     _loaded = true;
     try {
       if (!await file.exists()) return;
-      final content = await file.readAsLines();
+      final content = utf8
+          .decode(await _readBytes(file), allowMalformed: true)
+          .split('\n');
       var skipped = false;
       for (final line in content) {
         if (line.isEmpty) continue;
@@ -586,19 +619,21 @@ class DiagRingBuffer {
       }
       if (_trim() || skipped) _rewrite = true;
     } catch (_) {
-      // Unreadable (I/O error, invalid UTF-8): never let the next flush
-      // overwrite it with the empty in-memory state. Move it aside and
-      // start a fresh file; the aside file is deleted with the buffer.
+      // An I/O error: never let the next flush overwrite the file with the
+      // empty in-memory state. Move it aside and start a fresh file; the
+      // aside file is deleted with the buffer.
       _lines.clear();
       _bytes = 0;
       _rewrite = false;
       try {
-        await file.rename(
+        await _renameFile(
+          file,
           '${file.path}$asideMarker${DateTime.now().millisecondsSinceEpoch}',
         );
       } catch (_) {
-        // Could not move it: keep appending to it, never rewrite it in
-        // this process.
+        // Could not move it: keep appending to it and never rewrite it in
+        // this process; only [clear] or the capacity (see [_persist])
+        // delete it.
         _appendOnly = true;
       }
     }
@@ -608,8 +643,13 @@ class DiagRingBuffer {
   static const String asideMarker = '.unreadable-';
 
   /// Set when an unreadable file could not be moved aside: removals then
-  /// stay in memory and the file is only ever appended to.
+  /// stay in memory and the file is only ever appended to — until it
+  /// outgrows [capacityBytes] or the buffer is cleared, which delete it.
   bool _appendOnly = false;
+
+  /// Whether the buffer is in that append-only state (tests).
+  @visibleForTesting
+  bool get appendOnly => _appendOnly;
 
   /// Deletes files [load] moved aside.
   Future<void> deleteAsideFiles() async {
@@ -627,11 +667,10 @@ class DiagRingBuffer {
   void add(String line) {
     _lines.add(line);
     _bytes += _size(line);
-    if (_trim()) {
-      _rewrite = true;
-    } else {
-      _pendingAppend.add(line);
-    }
+    final trimmed = _trim();
+    if (trimmed) _rewrite = true;
+    // Append-only never rewrites, so every line must be appended.
+    if (!trimmed || _appendOnly) _pendingAppend.add(line);
   }
 
   /// Drops the oldest lines down to 90 % of the capacity once it is
@@ -655,11 +694,21 @@ class DiagRingBuffer {
     if (count > 0) _rewrite = true;
   }
 
+  /// Empties the buffer and deletes its file — unconditionally, also in
+  /// append-only mode.
   Future<void> clear() {
     _lines.clear();
     _bytes = 0;
-    _rewrite = true;
-    return flush();
+    _pendingAppend.clear();
+    _rewrite = false;
+    final next = _ioTail
+        .then((_) async {
+          if (await file.exists()) await file.delete();
+          _appendOnly = false;
+        })
+        .catchError((Object _) {});
+    _ioTail = next;
+    return next;
   }
 
   Future<void> flush() {
@@ -669,7 +718,20 @@ class DiagRingBuffer {
   }
 
   Future<void> _persist() async {
-    if (_rewrite && _appendOnly) _rewrite = false;
+    if (_appendOnly) {
+      if (_pendingAppend.isNotEmpty) {
+        final chunk = '${_pendingAppend.join('\n')}\n';
+        _pendingAppend.clear();
+        await file.writeAsString(chunk, mode: FileMode.append, flush: true);
+      }
+      _rewrite = false;
+      // The cap still holds: an oversized unreadable file is deleted and
+      // recreated from the in-memory lines.
+      if (await file.length() <= capacityBytes) return;
+      await file.delete();
+      _appendOnly = false;
+      _rewrite = true;
+    }
     if (_rewrite) {
       _rewrite = false;
       _pendingAppend.clear();

@@ -352,6 +352,46 @@ void main() {
       expect(client.diagSuppressedDialsForTesting, 0);
     });
 
+    test('off→on starts a fresh session: the same failure is reported '
+        'again', () async {
+      RpDiag.setEnabled(true);
+      var now = DateTime.utc(2026, 11, 22, 15, 55);
+      var dials = 0;
+      final keys = await KeyPair.generate();
+      final client = RedPandaLightClient(
+        selfNodeId: NodeId.fromPublicKey(keys),
+        selfKeys: keys,
+        seeds: const [seedA],
+        peerRepository: InMemoryPeerRepository(),
+        now: () => now,
+        socketFactory: (h, p) async {
+          dials++;
+          throw const SocketException('unreachable, errno = 101');
+        },
+      );
+      addTearDown(client.disconnect);
+      await client.connect();
+      await waitFor(() => dials >= 1, description: 'first dial');
+      List<DiagEvent> downs() =>
+          events.where((e) => e.name == DiagEvt.connDown).toList();
+      expect(downs(), hasLength(1));
+
+      // Same failure again: suppressed.
+      now = now.add(const Duration(seconds: 31));
+      await client.addPeer(seedA);
+      await waitFor(() => dials >= 2, description: 'second dial');
+      expect(downs(), hasLength(1));
+
+      // Off and on again (the app deleted its buffer in between).
+      RpDiag.setEnabled(false);
+      RpDiag.setEnabled(true);
+      now = now.add(const Duration(seconds: 31));
+      await client.addPeer(seedA);
+      await waitFor(() => dials >= 3, description: 'third dial');
+      expect(downs(), hasLength(2), reason: 'new session, first failure');
+      expect(events.where((e) => e.name == DiagEvt.connBackoff), hasLength(2));
+    });
+
     test('fetch.summary: silent while idle, a heartbeat every 15 min, at '
         'once after a failure', () async {
       RpDiag.setEnabled(true);

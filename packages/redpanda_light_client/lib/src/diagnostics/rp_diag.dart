@@ -79,10 +79,19 @@ class RpDiag {
 
   /// Switches emission on or off. Switching on is refused (stays off) when
   /// the network gate is closed. Listeners are told about every change.
+  /// Bumped on every change of [enabled]. State derived from earlier
+  /// events (e.g. which failure was already reported) is only valid within
+  /// one generation: switching off deletes the app's buffer, so after
+  /// off→on nothing may be suppressed on the strength of an event that is
+  /// gone.
+  static int get generation => _generation;
+  static int _generation = 0;
+
   static void setEnabled(bool value) {
     final next = value && available;
     if (next == _enabled) return;
     _enabled = next;
+    _generation++;
     for (final listener in List.of(_listeners)) {
       try {
         listener(next);
