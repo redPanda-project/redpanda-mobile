@@ -48,9 +48,11 @@ void main() {
 
   /// The node behind the scripted socket, i.e. the host of our own OH:
   /// identity from a 64-byte public export, X25519 key for its garlic layer.
-  Future<(TestHop, Uint8List)> makeHost() async {
+  Future<(TestHop, Uint8List)> makeHost({int seed = 7}) async {
     final keys = await CryptoUtils.generateEncryptionKeypair();
-    final verifyKey = Uint8List.fromList(List<int>.generate(32, (i) => i + 7));
+    final verifyKey = Uint8List.fromList(
+      List<int>.generate(32, (i) => i + seed),
+    );
     final export = Uint8List.fromList([...verifyKey, ...keys.publicKey]);
     final nodeId = NodeId.fromPublicKeyBytes(export);
     return (
@@ -819,6 +821,141 @@ void main() {
         ).build(ohId: ownOhId, closingHop: host.asGarlicHop),
         isNull,
       );
+    });
+  });
+
+  group('T162 review round 3', () {
+    test('G1: over a pending partner RGB the R-ACK no longer fits, on the '
+        'forward path it does → forward path with R-ACK; the RGB stays '
+        'pending for the next, shorter message', () async {
+      final pool = await hopPool();
+      // partner RGB with 4 stations (host-closed on the partner side)
+      final rgbAcked = GarlicBuilder.maxAckedPayloadLength(
+        4,
+        tagged: true,
+        returnHopCount: 3,
+      );
+      final forwardAcked = GarlicBuilder.maxAckedPayloadLength(
+        3,
+        tagged: false,
+        returnHopCount: 3,
+      );
+      expect(rgbAcked, 1469);
+      expect(forwardAcked, 1570);
+      final n = smallestContent((n) => payloadLength(n, 4, pool) > rgbAcked);
+      expect(payloadLength(n, 4, pool), lessThanOrEqualTo(forwardAcked));
+
+      final (host, export) = await makeHost();
+      final (client, socket, relays) = await setupClient(hostExport: export);
+      addTearDown(client.disconnect);
+      final frames = <Uint8List>[];
+      socket.onCommandFrame = (cmd, payload) {
+        if (cmd == 142) frames.add(payload);
+      };
+      final partnerHost = await TestHop.generate(0x77);
+      final partnerRgb = ReverseGarlicBlock(
+        expiryTs: DateTime.now()
+            .add(const Duration(hours: 1))
+            .millisecondsSinceEpoch,
+        sessionTag: Uint8List(16),
+        ohId: counterpartOhId,
+        hops: [for (final h in relays) h.asGarlicHop, partnerHost.asGarlicHop],
+      );
+      final channel = await channelWithOwnOh(
+        client,
+        pendingRgbHex: HEX.encode(partnerRgb.serialize()),
+      );
+
+      await client.sendMessage(channel.id, 'x' * n);
+      await waitFor(() => frames.isNotEmpty, description: 'garlic frame');
+      expect(client.lastSendViaRgb, isFalse, reason: 'forward path');
+      expect(client.lastSendAckRequested, isTrue, reason: 'R-ACK kept');
+      final peeled = await peelAny(frames.first, [...relays, host]);
+      expect(peeled.cmd, GarlicBuilder.cmdDeliverAcked);
+      expect(peeled.payload.length, greaterThan(rgbAcked));
+
+      // the unused partner RGB is still pending: a short message takes it
+      final before = frames.length;
+      await client.sendMessage(channel.id, 'short');
+      await waitFor(
+        () => frames.length > before,
+        description: 'second garlic frame',
+      );
+      expect(client.lastSendViaRgb, isTrue);
+      expect(client.lastSendAckRequested, isTrue);
+    });
+
+    test(
+      'G2: a second public key on an established connection is ignored',
+      () async {
+        final (host, export) = await makeHost();
+        final (impostor, impostorExport) = await makeHost(seed: 0x55);
+        final (client, socket, relays) = await setupClient(hostExport: export);
+        addTearDown(client.disconnect);
+        socket.reply([2, ...impostorExport]); // node -> client again
+        // let the frame be processed (short: the plaintext test connection
+        // dies a while after the handshake it cannot complete)
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        final frames = <Uint8List>[];
+        socket.onCommandFrame = (cmd, payload) {
+          if (cmd == 142) frames.add(payload);
+        };
+        final channel = await channelWithOwnOh(client);
+
+        await client.sendMessage(channel.id, 'who closes?');
+        await waitFor(() => frames.isNotEmpty, description: 'garlic frame');
+        final peeled = await peelAny(frames.single, [...relays, host]);
+        final rgb = (await rgbIn(peeled.payload, channel))!;
+        expect(HEX.encode(rgb.hops.last.nodeId), HEX.encode(host.nodeId));
+        expect(
+          HEX.encode(rgb.hops.last.encryptionPublicKey),
+          HEX.encode(host.keys.publicKey),
+        );
+        expect(
+          HEX.encode(rgb.hops.last.nodeId),
+          isNot(HEX.encode(impostor.nodeId)),
+        );
+      },
+    );
+
+    test('self-hop route (no relays) uses the handshake key even with an '
+        'overwritten peer-list entry', () async {
+      final (host, export) = await makeHost();
+      final foreign = await TestHop.generate(0x66);
+      final (client, socket, _) = await setupClient(
+        hostExport: export,
+        relayCount: 0,
+        poisonHostEntry: foreign,
+      );
+      addTearDown(client.disconnect);
+      final frames = <Uint8List>[];
+      socket.onCommandFrame = (cmd, payload) {
+        if (cmd == 142) frames.add(payload);
+      };
+      final channel = await channelWithOwnOh(client);
+
+      await client.sendMessage(channel.id, 'single node');
+      await waitFor(() => frames.isNotEmpty, description: 'garlic frame');
+      // peeling with the host's real private key only works if the layer
+      // was encrypted to the handshake key, not to the overwritten one
+      final peeled = await peelAny(frames.single, [host]);
+      expect(peeled.cmd, GarlicBuilder.cmdDeliverAcked);
+      expect(peeled.returnHops, isEmpty);
+    });
+
+    test('G4: a send that stops early resets lastOwnRgbShape', () async {
+      final (_, export) = await makeHost();
+      final (client, socket, _) = await setupClient(hostExport: export);
+      addTearDown(client.disconnect);
+      socket.onCommandFrame = (cmd, payload) {};
+      final channel = await channelWithOwnOh(client);
+      await client.sendMessage(channel.id, 'first');
+      expect(client.lastOwnRgbShape, OwnReplyPathShape.hostClosed);
+      await expectLater(
+        client.sendMessage('unknown-channel', 'no keys'),
+        throwsA(isA<StateError>()),
+      );
+      expect(client.lastOwnRgbShape, OwnReplyPathShape.none);
     });
   });
 }
