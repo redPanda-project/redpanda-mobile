@@ -25,6 +25,7 @@ import 'package:redpanda_light_client/src/garlic/return_path.dart';
 import 'package:redpanda_light_client/src/generated/outbound.pb.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
+import 'package:redpanda_light_client/src/models/peer_stats.dart';
 import 'package:redpanda_light_client/src/network/active_peer.dart';
 import 'package:redpanda_light_client/src/peer_repository.dart';
 
@@ -186,6 +187,7 @@ RendezvousTiming testTiming() => RendezvousTiming(
 Future<(RedPandaLightClient, ScriptedNode, List<TestHop>)> connectedClient({
   int hopCount = 6,
   RendezvousTiming? timing,
+  bool Function(PeerStats peer)? hopFilter,
 }) async {
   final node = ScriptedNode();
   final repo = InMemoryPeerRepository();
@@ -206,6 +208,7 @@ Future<(RedPandaLightClient, ScriptedNode, List<TestHop>)> connectedClient({
     seeds: [nodeEndpoint],
     peerRepository: repo,
     rendezvousTiming: timing ?? testTiming(),
+    hopCandidateFilter: hopFilter,
     socketFactory: (h, p) async {
       if (h == 'scripted') return node;
       throw const SocketException('test: unreachable');
@@ -591,13 +594,18 @@ void main() {
       },
     );
 
-    test('the hold is correlated by tag: an answer to an earlier lookup '
-        'neither ends nor shortens it', () async {
+    test('only a record FOUND under TODAY\'s key releases the hold — not '
+        '"no record" (blacklist false negative), not a stray tag, not '
+        'yesterday\'s record; today\'s key is asked once more (Q3)', () async {
       final (client, node, relays) = await connectedClient(
         timing: RendezvousTiming(
           prePublishHoldMax: const Duration(seconds: 20),
-          pairingLookupDelays: const [Duration(seconds: 30)],
+          pairingLookupDelays: const [
+            Duration(milliseconds: 600),
+            Duration(seconds: 30),
+          ],
           jitter: 0,
+          firstRetryFloor: Duration.zero,
           yesterdayOffsetMin: const Duration(milliseconds: 40),
           yesterdayOffsetMax: const Duration(milliseconds: 40),
           random: Random(3),
@@ -621,8 +629,9 @@ void main() {
       final today = sent.firstWhere((s) => s.lookupKeyHex == keys[0]);
       final yesterday = sent.firstWhere((s) => s.lookupKeyHex == keys[1]);
 
-      // A stray answer (unknown tag) and "no record" for YESTERDAY's key do
-      // not decide the hold: today's record is the one the write replaces.
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final oldOh = creatorOh(1); // the creator's mailbox in yesterday's record
+      final newOh = creatorOh(2); // and in today's, newer record
       await deliver(
         client,
         node,
@@ -633,23 +642,186 @@ void main() {
         client,
         node,
         ownOh,
-        answerItem(yesterday.lookupAckTag, noRecordAnswer),
+        answerItem(today.lookupAckTag, noRecordAnswer),
       );
-      await Future.delayed(const Duration(milliseconds: 300));
-      sent = await peelAll(node, relays);
-      expect(sent.where((s) => s.isStore), isEmpty);
-
-      // "No record" for today's key decides it.
       await deliver(
         client,
         node,
         ownOh,
-        answerItem(today.lookupAckTag, noRecordAnswer),
+        answerItem(
+          yesterday.lookupAckTag,
+          await creatorAnswer([oldOh], atMs: now - 3600 * 1000),
+        ),
+      );
+      await Future.delayed(const Duration(milliseconds: 200));
+      sent = await peelAll(node, relays);
+      expect(
+        sent.where((s) => s.isStore),
+        isEmpty,
+        reason: 'neither "no record" nor yesterday\'s record may release',
+      );
+
+      // Yesterday's record was adopted and ended the pairing sequence; the
+      // client asks today's key once more, and that answer finds today's
+      // record.
+      await pumpUntil(
+        () async =>
+            (await peelAll(
+              node,
+              relays,
+            )).where((s) => s.isLookup && s.lookupKeyHex == keys[0]).length >=
+            2,
+        reason: 'today\'s key was not asked again',
+      );
+      final pairingLookup = (await peelAll(
+        node,
+        relays,
+      )).where((s) => s.isLookup && s.lookupKeyHex == keys[0]).elementAt(1);
+      await deliver(
+        client,
+        node,
+        ownOh,
+        answerItem(pairingLookup.lookupAckTag, await creatorAnswer([newOh])),
       );
       await pumpUntil(
         () async => (await peelAll(node, relays)).any((s) => s.isStore),
         timeout: const Duration(seconds: 3),
-        reason: 'today\'s "no record" must end the hold',
+        reason: 'today\'s found record must release the hold',
+      );
+      final entries = await (await peelAll(
+        node,
+        relays,
+      )).firstWhere((s) => s.isStore).storedEntries();
+      final creatorEntry = entries.firstWhere(
+        (e) => HEX.encode(e.participantId) == participantHex(creator: true),
+      );
+      expect(
+        sameBytes(creatorEntry.ohs.single.handleId, newOh.handleId),
+        isTrue,
+        reason: 'the write carries today\'s creator entry, not yesterday\'s',
+      );
+    });
+    test('Q4: the first answer lost — a pairing lookup\'s found answer '
+        'releases the hold long before it would run out', () async {
+      final (client, node, relays) = await connectedClient(
+        timing: RendezvousTiming(
+          prePublishHoldMax: const Duration(seconds: 20),
+          pairingLookupDelays: const [
+            Duration(milliseconds: 500),
+            Duration(seconds: 30),
+          ],
+          jitter: 0,
+          firstRetryFloor: Duration.zero,
+          yesterdayOffsetMin: const Duration(milliseconds: 40),
+          yesterdayOffsetMax: const Duration(milliseconds: 40),
+          random: Random(5),
+        ),
+      );
+      addTearDown(client.disconnect);
+      final keys = await recordKeysHex();
+      client.addChannelKeys(
+        chan,
+        channelKey,
+        channelSecret: channelSecret,
+        isChannelCreator: false,
+      );
+      final ownOh = await client.registerOutboundHandle(channelId: chan);
+      // Nobody answers the first round; the pairing step at +500 ms asks
+      // today's key again.
+      await pumpUntil(
+        () async =>
+            (await peelAll(
+              node,
+              relays,
+            )).where((s) => s.isLookup && s.lookupKeyHex == keys[0]).length >=
+            2,
+        reason: 'the pairing lookup never went out',
+      );
+      final step = (await peelAll(
+        node,
+        relays,
+      )).where((s) => s.isLookup && s.lookupKeyHex == keys[0]).elementAt(1);
+      await deliver(
+        client,
+        node,
+        ownOh,
+        answerItem(step.lookupAckTag, await creatorAnswer([creatorOh(3)])),
+      );
+      await pumpUntil(
+        () async => (await peelAll(node, relays)).any((s) => s.isStore),
+        timeout: const Duration(seconds: 3),
+        reason: 'the pairing lookup\'s answer did not release the hold',
+      );
+      expect(
+        await (await peelAll(
+          node,
+          relays,
+        )).firstWhere((s) => s.isStore).storedParticipants(),
+        {participantHex(creator: true), participantHex(creator: false)},
+      );
+    });
+
+    test('Q1: when no route avoids today\'s executing node, yesterday\'s '
+        'lookup still goes out on an ordinary route', () async {
+      // Only one relay may serve as a hop: today's lookup exits there, and
+      // avoiding it leaves nothing.
+      final (client, node, relays) = await connectedClient(
+        hopFilter: (p) => p.address == '10.3.0.0:5000',
+      );
+      addTearDown(client.disconnect);
+      final keys = await recordKeysHex();
+      client.addChannelKeys(
+        chan,
+        channelKey,
+        channelSecret: channelSecret,
+        isChannelCreator: false,
+      );
+      await client.registerOutboundHandle(channelId: chan);
+      await pumpUntil(
+        () async => (await peelAll(
+          node,
+          relays,
+        )).any((s) => s.isLookup && s.lookupKeyHex == keys[1]),
+        timeout: const Duration(seconds: 3),
+        reason: 'yesterday\'s lookup was dropped in the small network',
+      );
+    });
+
+    test('Q5: a first read that could not be sent starts no pairing '
+        'sequence; the next read that goes out starts it with yesterday\'s '
+        'lookup', () async {
+      var hopsAllowed = false;
+      final (client, node, relays) = await connectedClient(
+        hopFilter: (_) => hopsAllowed,
+      );
+      addTearDown(client.disconnect);
+      final keys = await recordKeysHex();
+      client.addChannelKeys(
+        chan,
+        channelKey,
+        channelSecret: channelSecret,
+        isChannelCreator: false,
+      );
+      await client.registerOutboundHandle(channelId: chan);
+      await Future.delayed(const Duration(milliseconds: 300));
+      expect(await peelAll(node, relays), isEmpty);
+      expect(client.pairingLookupsActive(chan), isFalse);
+      expect(client.pairingLookupAttemptsOf(chan), 0);
+
+      hopsAllowed = true;
+      await client.registerOutboundHandle(channelId: chan);
+      await pumpUntil(
+        () async => (await peelAll(
+          node,
+          relays,
+        )).any((s) => s.isLookup && s.lookupKeyHex == keys[1]),
+        timeout: const Duration(seconds: 3),
+        reason: 'the first round that went out must ask yesterday\'s key',
+      );
+      await pumpUntil(
+        () => client.pairingLookupAttemptsOf(chan) >= 1,
+        timeout: const Duration(seconds: 3),
+        reason: 'the pairing sequence did not start',
       );
     });
 
@@ -767,6 +939,40 @@ void main() {
       final sent = await peelAll(node, relays);
       expect(sent.where((s) => s.isLookup), isEmpty);
       expect(client.pairingLookupsActive(chan), isFalse);
+    });
+
+    test('Q2: the creation exemption is used up by a FAILED first attempt '
+        '— the retry reads first', () async {
+      var hopsAllowed = false;
+      final (client, node, relays) = await connectedClient(
+        hopFilter: (_) => hopsAllowed,
+      );
+      addTearDown(client.disconnect);
+      client.addChannelKeys(
+        chan,
+        channelKey,
+        channelSecret: channelSecret,
+        isChannelCreator: true,
+      );
+      // First publish at creation: no hops, nothing can go out.
+      await client.registerOutboundHandle(channelId: chan);
+      await Future.delayed(const Duration(milliseconds: 200));
+      expect(await peelAll(node, relays), isEmpty);
+
+      // Later (the joiner may have written meanwhile) hops are there; the
+      // next publish must read first.
+      hopsAllowed = true;
+      await client.registerOutboundHandle(channelId: chan);
+      await pumpUntil(
+        () async => (await peelAll(node, relays)).isNotEmpty,
+        reason: 'nothing went out once hops existed',
+      );
+      final first = (await peelAll(node, relays)).first;
+      expect(
+        first.isLookup,
+        isTrue,
+        reason: 'a retry of the creator\'s first publish must not be blind',
+      );
     });
 
     test(

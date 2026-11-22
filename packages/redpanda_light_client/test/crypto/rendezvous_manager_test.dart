@@ -610,22 +610,76 @@ void main() {
       expect(alice.timestampMs, greaterThan(bobAhead.timestampMs));
     });
 
-    test(
-      'the push ahead is capped below the node\'s 15-minute future limit',
-      () async {
-        final a = creator()..setOwnOhs(chan, [_oh('1.1.1.1:59558')]);
-        final b = joiner()..setOwnOhs(chan, [_oh('2.2.2.2:59558')]);
-        final bobFar = RendezvousManager.recordFromStoreBytes(
-          (await b.buildSignedStore(chan, now + 60 * minute))!,
-        );
-        await a.applyResolvedRecordDetailed(chan, bobFar, now);
-        final alice = RendezvousManager.recordFromStoreBytes(
-          (await a.buildSignedStore(chan, now))!,
-        );
-        expect(alice.timestampMs, now + RendezvousManager.maxFutureLeadMs);
-        expect(alice.timestampMs, lessThan(now + 15 * minute));
-      },
-    );
+    test('Q6: a record further ahead than the node accepts (> 15 min) does '
+        'not lift the floor', () async {
+      final a = creator()..setOwnOhs(chan, [_oh('1.1.1.1:59558')]);
+      final b = joiner()..setOwnOhs(chan, [_oh('2.2.2.2:59558')]);
+      final bobFar = RendezvousManager.recordFromStoreBytes(
+        (await b.buildSignedStore(chan, now + 60 * minute))!,
+      );
+      await a.applyResolvedRecordDetailed(chan, bobFar, now);
+      final alice = RendezvousManager.recordFromStoreBytes(
+        (await a.buildSignedStore(chan, now))!,
+      );
+      expect(alice.timestampMs, now);
+    });
+
+    test('a record inside the node\'s window lifts the floor, capped at '
+        '14 min ahead', () async {
+      final a = creator()..setOwnOhs(chan, [_oh('1.1.1.1:59558')]);
+      final b = joiner()..setOwnOhs(chan, [_oh('2.2.2.2:59558')]);
+      final bobAhead = RendezvousManager.recordFromStoreBytes(
+        (await b.buildSignedStore(chan, now + 14 * minute + 30000))!,
+      );
+      await a.applyResolvedRecordDetailed(chan, bobAhead, now);
+      final alice = RendezvousManager.recordFromStoreBytes(
+        (await a.buildSignedStore(chan, now))!,
+      );
+      expect(alice.timestampMs, now + RendezvousManager.maxFutureLeadMs);
+    });
+
+    test('Q6: near UTC midnight the record timestamp never crosses into '
+        'tomorrow — the node files it under the timestamp\'s day', () async {
+      final late = DateTime.utc(2026, 11, 22, 23, 58).millisecondsSinceEpoch;
+      final endOfDay = DateTime.utc(2026, 11, 23).millisecondsSinceEpoch - 1;
+      final a = creator()..setOwnOhs(chan, [_oh('1.1.1.1:59558')]);
+      final b = joiner()..setOwnOhs(chan, [_oh('2.2.2.2:59558')]);
+      // Bob's clock is 90 s ahead: his record already says 23:59:30.
+      final bob = RendezvousManager.recordFromStoreBytes(
+        (await b.buildSignedStore(chan, late + 90000))!,
+      );
+      await a.applyResolvedRecordDetailed(chan, bob, late);
+      // Another, still later one at the very last millisecond of the day.
+      final bob2 = RendezvousManager.recordFromStoreBytes(
+        (await b.buildSignedStore(chan, endOfDay))!,
+      );
+      await a.applyResolvedRecordDetailed(chan, bob2, late);
+      final alice = RendezvousManager.recordFromStoreBytes(
+        (await a.buildSignedStore(chan, late))!,
+      );
+      expect(alice.timestampMs, endOfDay, reason: 'capped at the day end');
+      final todayKey = (await a.lookupKeys(chan, late)).first;
+      expect(
+        await ChannelRendezvous.rendezvousKademliaId(sk, alice.timestampMs),
+        todayKey,
+        reason: 'the write must stay findable under today\'s key',
+      );
+    });
+
+    test('Q6: a record of TOMORROW (other clock ahead past midnight) does '
+        'not set today\'s floor — it lives under another key', () async {
+      final late = DateTime.utc(2026, 11, 22, 23, 55).millisecondsSinceEpoch;
+      final a = creator()..setOwnOhs(chan, [_oh('1.1.1.1:59558')]);
+      final b = joiner()..setOwnOhs(chan, [_oh('2.2.2.2:59558')]);
+      final bobTomorrow = RendezvousManager.recordFromStoreBytes(
+        (await b.buildSignedStore(chan, late + 10 * minute))!,
+      );
+      await a.applyResolvedRecordDetailed(chan, bobTomorrow, late);
+      final alice = RendezvousManager.recordFromStoreBytes(
+        (await a.buildSignedStore(chan, late))!,
+      );
+      expect(alice.timestampMs, late);
+    });
 
     test(
       'successive own writes never go backwards, even if the clock does',

@@ -3211,6 +3211,7 @@ class RedPandaLightClient implements RedPandaClient {
     // process (channel creation). Everything else reads first.
     if (freshRegistration &&
         _rendezvous.isCreatorOf(channelId) == true &&
+        _creatorFirstPublishUsed.add(channelId) &&
         !_rendezvousPublishedOnce.contains(channelId) &&
         !_rendezvous.knowsCounterpartEntry(channelId) &&
         !_hasCounterpartOh(channelId) &&
@@ -3229,11 +3230,14 @@ class RedPandaLightClient implements RedPandaClient {
   /// flight returns: the held publish writes the current own-OH set when it
   /// ends, so nothing is lost.
   Future<void> _publishRendezvous(String channelId) async {
+    // Review 2/Q2: the creation exemption is used up by the FIRST attempt,
+    // whatever its outcome — a retry seconds or hours later (no sendable
+    // peer, no hops, a build error the first time) may come after the
+    // joiner has written, so it reads first like any other publish.
+    final blindFirst = _creatorFirstPublish.remove(channelId);
     if (_prePublishHolds.containsKey(channelId)) return;
-    if (_creatorFirstPublish.contains(channelId)) {
-      if (await _publishRendezvousNow(channelId)) {
-        _creatorFirstPublish.remove(channelId);
-      }
+    if (blindFirst) {
+      await _publishRendezvousNow(channelId);
       return;
     }
     if (_needsReadBeforeWrite(channelId)) {
@@ -3264,8 +3268,8 @@ class RedPandaLightClient implements RedPandaClient {
       _channelCounterpartOhSet[channelId]?.isNotEmpty ?? false;
 
   /// T160: read-before-write. Sends today's lookup first and holds the
-  /// publish until one of ITS answers has been merged (a found record, or
-  /// "no record" for today's key) — at most
+  /// publish until a record found under today's key has been merged (see
+  /// [_PrePublishHold] for why nothing else releases it) — at most
   /// [RendezvousTiming.prePublishHoldMax]: a counterpart that is offline or
   /// whose store was lost must not keep this side out of the DHT. The held
   /// publish writes the MERGED record. If no lookup could be sent (no relay
@@ -3281,17 +3285,22 @@ class RedPandaLightClient implements RedPandaClient {
     _prePublishHolds[channelId] = hold;
     var sent = 0;
     try {
-      final startsPairing =
+      // Review 2/Q5: the sequence (and with it the first round's
+      // yesterday lookup) starts only with a lookup that actually went out;
+      // a read that could not be sent leaves it for the next attempt.
+      final wantsPairing =
           _rendezvous.isCreatorOf(channelId) == false &&
           !_hasCounterpartOh(channelId) &&
-          _pairingSequenceStarted.add(channelId);
+          !_pairingSequenceStarted.contains(channelId);
       sent = await _lookupRendezvous(
         channelId,
         force: true,
-        includeYesterday: startsPairing,
+        includeYesterday: wantsPairing,
         hold: hold,
       );
-      if (startsPairing) _schedulePairingLookup(channelId);
+      if (wantsPairing && sent > 0 && _pairingSequenceStarted.add(channelId)) {
+        _schedulePairingLookup(channelId);
+      }
       if (sent > 0) {
         final holdMax = _rendezvousTiming.prePublishHoldMax;
         RpLog.debug(
@@ -3335,6 +3344,10 @@ class RedPandaLightClient implements RedPandaClient {
   /// T160: the creator's first publish at channel creation — the only one
   /// that does not read first (see [_needsReadBeforeWrite]).
   final Set<String> _creatorFirstPublish = {};
+
+  /// Channels whose creation exemption has been granted once (it is never
+  /// granted again in this worker, review 2/Q2).
+  final Set<String> _creatorFirstPublishUsed = {};
 
   /// Channels this worker has published a rendezvous record for.
   final Set<String> _rendezvousPublishedOnce = {};
@@ -3495,11 +3508,25 @@ class RedPandaLightClient implements RedPandaClient {
     // Dart Ed25519/X25519 keygen on the single-threaded network isolate, and
     // recovery is triggered on every send failure — doing that keygen when we
     // could never send would stall the isolate (fetch/register timeouts).
-    final hops = _selectGarlicHops(
+    var hops = _selectGarlicHops(
       channelId,
       submitVia,
       avoidExitNodeId: avoidExitNodeId,
     );
+    if (hops.isEmpty && avoidExitNodeId != null) {
+      // Review 2/Q1: in a small network today's executing node may be the
+      // only candidate. Losing yesterday's lookup (a creator offline across
+      // UTC midnight would stay unfindable) is worse than one node seeing
+      // both keys, so fall back to an ordinary route — still a separate
+      // packet, still offset in time.
+      hops = _selectGarlicHops(channelId, submitVia);
+      if (hops.isNotEmpty) {
+        RpLog.info(
+          'RedPandaLightClient: no route avoids the node of today\'s '
+          'rendezvous lookup — yesterday\'s lookup takes an ordinary route',
+        );
+      }
+    }
     if (hops.isEmpty) return 0;
     if (day == 0) _lastLookupExit[channelId] = _hexEncode(hops.last.nodeId);
 
@@ -3599,7 +3626,13 @@ class RedPandaLightClient implements RedPandaClient {
         if (_hasCounterpartOh(channelId)) return;
         _pairingLookupAttempts[channelId] = attempt + 1;
         unawaited(
-          _lookupRendezvous(channelId, force: true)
+          // Review 2/Q4: a hold still waiting (its first answer lost) is
+          // released by the found answer of this step as well.
+          _lookupRendezvous(
+                channelId,
+                force: true,
+                hold: _prePublishHolds[channelId],
+              )
               .catchError((Object e) {
                 RpLog.info(
                   'RedPandaLightClient: pairing lookup for $channelId '
@@ -3663,6 +3696,14 @@ class RedPandaLightClient implements RedPandaClient {
       final hold = _prePublishHolds[channelId];
       if (hold != null) {
         hold.answered(tagHex, found: resolved != null);
+        // Review 2/Q3: a record found under YESTERDAY's key was merged but
+        // does not release the hold, and adopting its mailboxes ends the
+        // pairing sequence — ask today's key once more (on a fresh route),
+        // so the held write can carry today's creator entry instead of
+        // waiting out the hold and writing yesterday's over it.
+        if (resolved != null && hold.claimTodayReask(tagHex)) {
+          unawaited(_sendRendezvousLookup(channelId, force: true, hold: hold));
+        }
       } else if (resolved != null && resolved.needsRepair) {
         // T160 read-repair: the record in the DHT lacks what we know — either
         // someone wrote it without our current entry (the node keeps only
@@ -5914,19 +5955,30 @@ class _CounterpartOh {
 }
 
 /// T160: a rendezvous publish held until the lookup that must precede it has
-/// answered. Correlated by the lookups' ack tags (registered before each
-/// packet leaves), so an answer to an EARLIER lookup — a late "no record",
-/// say — can neither end nor shorten the hold. Completes on the first found
-/// record of any of its lookups, or once every DECISIVE lookup (today's key:
-/// the one the held write would overwrite) came back without one.
+/// answered, correlated by the lookups' ack tags (registered before each
+/// packet leaves). Only a FOUND record for TODAY's key — the record the held
+/// write replaces — releases it; otherwise it runs until
+/// [RendezvousTiming.prePublishHoldMax]:
+///
+/// - a record found under yesterday's key is merged but is not what the
+///   node keeps under today's key: releasing on it would write yesterday's
+///   (older) creator entry over today's newer one (review 2/Q3);
+/// - "no record" never releases. The published node answers a second lookup
+///   for the same key within 30 s with an immediate, false "no record"
+///   (the `KademliaSearchJob` anti-loop blacklist, fixed in redpandaj
+///   `8f6268f`, not yet deployed), and the dense pairing schedule plus both
+///   parties' reads produce exactly such repeats. Releasing on it let the
+///   joiner write itself alone over the creator's record (lab `r1-local-1`).
+///   A genuine "no record" comes only after the node's DHT search times
+///   out (5–7 s), i.e. after the hold has ended anyway.
 class _PrePublishHold {
   final Completer<void> done = Completer<void>();
-  final Set<String> _tags = {};
-  final Set<String> _decisivePending = {};
+  final Set<String> _decisive = {};
+  final Set<String> _tracked = {};
 
   void track(String tagHex, {required bool decisive}) {
-    _tags.add(tagHex);
-    if (decisive) _decisivePending.add(tagHex);
+    _tracked.add(tagHex);
+    if (decisive) _decisive.add(tagHex);
   }
 
   /// Releases the hold without an answer (disconnect).
@@ -5935,13 +5987,18 @@ class _PrePublishHold {
   }
 
   void answered(String? tagHex, {required bool found}) {
-    if (tagHex == null || !_tags.contains(tagHex)) return;
-    if (found) {
-      release();
-      return;
-    }
-    _decisivePending.remove(tagHex);
-    if (_decisivePending.isEmpty) release();
+    if (found && tagHex != null && _decisive.contains(tagHex)) release();
+  }
+
+  bool _reasked = false;
+
+  /// True (once per hold) when [tagHex] is a NON-decisive lookup of this
+  /// hold — the caller then asks today's key once more.
+  bool claimTodayReask(String? tagHex) {
+    if (_reasked || done.isCompleted || tagHex == null) return false;
+    if (_decisive.contains(tagHex) || !_tracked.contains(tagHex)) return false;
+    _reasked = true;
+    return true;
   }
 }
 

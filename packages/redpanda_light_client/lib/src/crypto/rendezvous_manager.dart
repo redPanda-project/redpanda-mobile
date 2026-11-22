@@ -26,6 +26,13 @@ class RendezvousManager {
   /// 15 min) minus one minute for the node's own clock error.
   static const int maxFutureLeadMs = 14 * 60 * 1000;
 
+  /// The node's limit for record timestamps ahead of its clock
+  /// (`ChannelDht.MAX_FUTURE_SKEW_MS`).
+  static const int nodeFutureSkewMs = 15 * 60 * 1000;
+
+  static const int _dayMs = 24 * 60 * 60 * 1000;
+  static int _utcDay(int ms) => ms ~/ _dayMs;
+
   /// Registers (or refreshes) a channel's rendezvous state. Idempotent — keeps
   /// the accumulated merge state across re-registrations.
   ///
@@ -145,9 +152,16 @@ class RendezvousManager {
     final entryTs = previousOwnTs != null && previousOwnTs >= nowMs
         ? (previousOwnTs + 1 > cap ? cap : previousOwnTs + 1)
         : nowMs;
-    final seen = state.newestSeenRecordTs;
+    // Review 2/Q6: the node files a record under the UTC day of ITS
+    // timestamp (`KadContent.createKademliaId`), so the record timestamp
+    // must stay inside today's UTC day — pushed past midnight it would land
+    // under tomorrow's key, invisible to today's lookups. Only records of the
+    // same UTC day compete for that key, so the floor is taken per day.
+    final dayEnd = (_utcDay(nowMs) + 1) * _dayMs - 1;
+    final recordCap = cap < dayEnd ? cap : dayEnd;
+    final seen = state.newestSeenRecordTsByDay[_utcDay(nowMs)];
     final recordTs = seen != null && seen >= nowMs
-        ? (seen + 1 > cap ? cap : seen + 1)
+        ? (seen + 1 > recordCap ? recordCap : seen + 1)
         : nowMs;
     final ownEntry = RendezvousEntry(
       participantId: ownId,
@@ -168,7 +182,7 @@ class RendezvousManager {
       recordTs,
     );
     state.lastBuiltRecordTs = signed.timestampMs;
-    state.noteSeenRecordTs(signed.timestampMs);
+    state.noteSeenRecordTs(signed.timestampMs, nowMs);
     state.lastBuiltEntryTs = {
       for (final e in merged) _hex(e.participantId): e.entryTs,
     };
@@ -269,7 +283,7 @@ class RendezvousManager {
         hasForeignEntry &&
         (lastBuilt == null || record.timestampMs > lastBuilt) &&
         (ownInRecord == null || !_sameOhList(ownInRecord.ohs, state.ownOhs));
-    state.noteSeenRecordTs(record.timestampMs);
+    state.noteSeenRecordTs(record.timestampMs, nowMs);
 
     final counterpartId = ChannelRendezvous.participantId(
       state.channelSecret,
@@ -429,13 +443,23 @@ class _ChannelRendezvousState {
   /// this side built (T160/P3: what our write in the DHT carries).
   Map<String, int> lastBuiltEntryTs = const {};
 
-  /// The newest record timestamp seen (resolved) or built (T160/P5: the
-  /// floor for the next record timestamp).
-  int? newestSeenRecordTs;
+  /// The newest record timestamp seen (resolved) or built, per UTC day
+  /// (day index = ms ~/ 86 400 000) — the floor for the next record
+  /// timestamp of that day (T160/P5, review 2/Q6).
+  final Map<int, int> newestSeenRecordTsByDay = {};
 
-  void noteSeenRecordTs(int ts) {
-    final seen = newestSeenRecordTs;
-    if (seen == null || ts > seen) newestSeenRecordTs = ts;
+  /// Notes [ts] for the timestamp floor. A timestamp further ahead than the
+  /// node accepts (`ChannelDht.MAX_FUTURE_SKEW_MS`, 15 min past [nowMs]) is
+  /// ignored: such a record was never stored, and adopting it as a floor
+  /// would push both sides to the cap (review 2/Q6). Only today and
+  /// yesterday are kept.
+  void noteSeenRecordTs(int ts, int nowMs) {
+    if (ts > nowMs + RendezvousManager.nodeFutureSkewMs) return;
+    final day = RendezvousManager._utcDay(ts);
+    final seen = newestSeenRecordTsByDay[day];
+    if (seen == null || ts > seen) newestSeenRecordTsByDay[day] = ts;
+    final today = RendezvousManager._utcDay(nowMs);
+    newestSeenRecordTsByDay.removeWhere((d, _) => d < today - 1);
   }
 
   /// Newest-known entry per participant id (hex), the client-side merge state.
