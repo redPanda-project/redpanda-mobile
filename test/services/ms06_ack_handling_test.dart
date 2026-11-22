@@ -101,7 +101,8 @@ void main() {
       expect((await messageById(id)).status, MessageStatus.delivered);
     });
 
-    test('HANDLE_EXPIRED re-queues the message with backoff', () async {
+    test('HANDLE_EXPIRED re-sends the message at once with the same id, '
+        'booking a retry (T164)', () async {
       final id = await insertSentMessage();
       client.stateController.add(
         const RoutingAckUpdate.ack(
@@ -113,10 +114,32 @@ void main() {
       );
       await pump();
       final msg = await messageById(id);
-      expect(msg.status, MessageStatus.pending);
+      expect(client.sentMessages.map((m) => m.messageId), [messageIdHex]);
+      expect(msg.status, MessageStatus.sent);
       expect(msg.retryCount, 1);
-      expect(msg.lastRetryAt, isNotNull);
+      // (No lastRetryAt check: markSent of the re-send stamps it anyway.)
     });
+
+    test(
+      'MAILBOX_FULL re-queues the message with backoff, no re-send',
+      () async {
+        final id = await insertSentMessage();
+        client.stateController.add(
+          const RoutingAckUpdate.ack(
+            channelId: channelId,
+            messageIdHex: messageIdHex,
+            status: RoutingAck.statusMailboxFull,
+            latencyMs: 1234,
+          ),
+        );
+        await pump();
+        final msg = await messageById(id);
+        expect(client.sentMessages, isEmpty);
+        expect(msg.status, MessageStatus.pending);
+        expect(msg.retryCount, 1);
+        expect(msg.lastRetryAt, isNotNull);
+      },
+    );
 
     test('timeout re-queues only messages still in sent', () async {
       final id = await insertSentMessage(status: MessageStatus.routed);
@@ -128,6 +151,7 @@ void main() {
       );
       await pump();
       expect((await messageById(id)).status, MessageStatus.routed);
+      expect(client.sentMessages, isEmpty);
     });
   });
 

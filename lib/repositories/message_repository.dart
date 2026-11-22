@@ -112,6 +112,13 @@ class MessageRepository {
     return row != null;
   }
 
+  /// The row with `Messages.id` [id], or null.
+  Future<Message?> getMessage(int id) {
+    return (_db.select(
+      _db.messages,
+    )..where((t) => t.id.equals(id))).getSingleOrNull();
+  }
+
   /// All messages still waiting to be sent (status pending).
   Future<List<Message>> getPendingMessages() {
     return (_db.select(
@@ -301,7 +308,8 @@ class MessageRepository {
 
   /// MS06: re-queues a sent message whose R-ACK timed out (or whose ack
   /// reported HANDLE_EXPIRED) for a retry over fresh hops. Increments
-  /// retryCount and stamps lastRetryAt so the normal backoff applies;
+  /// retryCount and stamps lastRetryAt so the normal backoff applies (T164:
+  /// unless the outbox re-sends at once, which it decides, not this write);
   /// touches only messages still in `sent` — a late Channel-ACK or R-ACK
   /// must not resurrect an already confirmed message.
   ///
@@ -309,7 +317,10 @@ class MessageRepository {
   /// [MessageLifecycle] permits into `pending`. The state machine says which
   /// transitions are legal at all; "only a message we are still waiting for
   /// feedback on may be re-queued" is a precondition of this operation.
-  Future<void> requeueSentByNetworkId(
+  ///
+  /// Returns true if a row was re-queued (T164: the outbox grants an
+  /// immediate re-send only then).
+  Future<bool> requeueSentByNetworkId(
     String conversationId,
     String messageIdHex,
   ) async {
@@ -323,20 +334,22 @@ class MessageRepository {
               )
               ..limit(1))
             .getSingleOrNull();
-    if (msg == null) return;
+    if (msg == null) return false;
 
     // T112: re-check `sent` in the write, not only in the select above — an
     // ACK arriving in between must not be downgraded to pending.
-    await (_db.update(_db.messages)..where(
-          (t) => t.id.equals(msg.id) & t.status.equals(MessageStatus.sent),
-        ))
-        .write(
-          MessagesCompanion(
-            status: const drift.Value(MessageStatus.pending),
-            retryCount: drift.Value(msg.retryCount + 1),
-            lastRetryAt: drift.Value(DateTime.now()),
-          ),
-        );
+    final written =
+        await (_db.update(_db.messages)..where(
+              (t) => t.id.equals(msg.id) & t.status.equals(MessageStatus.sent),
+            ))
+            .write(
+              MessagesCompanion(
+                status: const drift.Value(MessageStatus.pending),
+                retryCount: drift.Value(msg.retryCount + 1),
+                lastRetryAt: drift.Value(DateTime.now()),
+              ),
+            );
+    return written > 0;
   }
 
   /// Puts a message back into the send queue for an immediate attempt,

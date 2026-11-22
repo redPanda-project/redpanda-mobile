@@ -547,7 +547,8 @@ void main() {
       expect((await messageById(id)).status, equals(MessageStatus.routed));
     });
 
-    test('an R-ACK timeout re-queues the message for fresh hops', () async {
+    test('an R-ACK timeout re-sends the message over fresh hops at once '
+        '(T164)', () async {
       final id = await insertPending(messageId: 'net-1');
       await outbox.runPass();
 
@@ -557,9 +558,11 @@ void main() {
           messageIdHex: 'net-1',
         ),
       );
+      await outbox.settled;
 
       final msg = await messageById(id);
-      expect(msg.status, equals(MessageStatus.pending));
+      expect(client.sentMessages.map((m) => m.messageId), ['net-1', 'net-1']);
+      expect(msg.status, equals(MessageStatus.sent));
       expect(msg.retryCount, equals(1));
     });
 

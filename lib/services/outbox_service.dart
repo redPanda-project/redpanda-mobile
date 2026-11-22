@@ -96,6 +96,13 @@ class DeliveryAttempt {
 /// drop from the DHT announce race re-sends quickly), then the tail doubles,
 /// capped at [maxBackoff].
 ///
+/// T164: two signals from the network client cut a backoff window short —
+/// [onCounterpartOhUpdate] (the partner's mailbox became known: the
+/// channel's pending messages go out at once) and a negative R-ACK or R-ACK
+/// timeout in [onRoutingAck] (a 1:1 message is re-sent at once, at most
+/// [maxImmediateAckRetries] times). Both still count every attempt against
+/// [maxRetries].
+///
 /// This is deliberately NOT part of `MessageSyncService`'s persistence chain
 /// (T110): that chain serializes every state write, and a send attempt can
 /// block for seconds on the network. The two meet only where they must —
@@ -138,12 +145,43 @@ class OutboxService {
   /// mailbox.
   static const int quotaExceededPenalty = 4;
 
+  /// T164: how many times ONE 1:1 message may be re-sent immediately after a
+  /// negative R-ACK (HANDLE_EXPIRED, REJECTED, unknown status) or an R-ACK
+  /// timeout, per process. Beyond that the re-queue falls back to the normal
+  /// [backoffFor] window — this is what keeps "send, negative R-ACK, send
+  /// again at once" from becoming a send loop: a node that rejects in
+  /// milliseconds would otherwise burn all [maxRetries] attempts within
+  /// seconds and fail a message that the old schedule kept trying for ~3 h.
+  /// Two is a judgement call, not a measurement: the testnet losses (lab
+  /// 2026-11-22) were single sends whose re-send takes a different route
+  /// (the reply block is single-use), so one or two fresh routes should
+  /// cover the transient case; a third consecutive negative R-ACK points at
+  /// persistent trouble, where the schedule's spacing is what matters.
+  static const int maxImmediateAckRetries = 2;
+
   Timer? _timer;
   bool _passInProgress = false;
   Future<void>? _passFuture;
   bool _rerunRequested = false;
   bool _rerunIgnoresBackoff = false;
   StreamSubscription<ConnectionStatus>? _connectionSub;
+
+  /// T164: conversations whose pending messages the next pass attempts
+  /// regardless of their backoff window (the counterpart's mailbox became
+  /// known). Drained by [_pass]; a request made while a pass runs stays here
+  /// for the rerun.
+  final Set<String> _flushConversations = {};
+
+  /// T164: (conversation id, network message id) of messages the next pass
+  /// attempts regardless of their backoff window (negative R-ACK / timeout).
+  final Set<(String, String)> _flushMessages = {};
+
+  /// T164: immediate re-sends already granted per (conversation id, network
+  /// message id) of a 1:1 message — the [maxImmediateAckRetries] budget. In
+  /// memory, per process. Dropped once the message is done (`routed`,
+  /// `delivered`, `failed`) or the user resets it ([retryNow]). Group
+  /// messages never get an entry (see [onRoutingAck]).
+  final Map<(String, String), int> _immediateAckRetries = {};
   ConnectionStatus? _lastSeenStatus;
 
   /// Set by the first [start]: the next pass begins with
@@ -157,6 +195,11 @@ class OutboxService {
   final _attemptController = StreamController<DeliveryAttempt>.broadcast();
 
   OutboxService(this._messages, this._client, this._groups);
+
+  /// Number of messages this outbox keeps immediate-retry bookkeeping for
+  /// (T164 review L2: must not grow with every message ever sent).
+  @visibleForTesting
+  int get trackedAckStates => _immediateAckRetries.length;
 
   /// Every attempt this outbox makes, in order. Broadcast and lossy by
   /// design — a listener that subscribes late has missed nothing that is
@@ -224,6 +267,8 @@ class OutboxService {
   Future<void> dispose() async {
     _disposed = true;
     stop();
+    _flushConversations.clear();
+    _flushMessages.clear();
     try {
       await settled;
     } catch (e) {
@@ -316,6 +361,17 @@ class OutboxService {
   Future<bool> retryNow(int messageRowId) async {
     final requeued = await _messages.resetForImmediateRetry(messageRowId);
     if (!requeued) return false;
+    // T164 review R8: the user starts the message over — including its
+    // immediate re-send budget, like its backoff. The row is already reset
+    // at this point, so a failing read here must not keep the pass from
+    // being kicked (or turn the user's retry into an error): the budget
+    // then simply stays as it was.
+    try {
+      final row = await _messages.getMessage(messageRowId);
+      if (row != null) _forget(row.conversationId, row.messageId);
+    } catch (e) {
+      debugPrint('OutboxService: manual retry could not reset the budget: $e');
+    }
     unawaited(
       runPass().catchError(
         (Object e) => debugPrint('OutboxService: manual retry failed: $e'),
@@ -378,19 +434,106 @@ class OutboxService {
     // TD002/T51: pull back anything stuck `sent` without an ack tag before
     // looking at the pending set, so a message this sweep just requeued is
     // picked up by the very same pass instead of waiting another tick.
+    // T164: take the targeted requests BEFORE reading the pending set — the
+    // re-queue that asked for them has already been written, so this pass
+    // sees the row. Requests that arrive later stay for the rerun.
+    // Removed from the queue only once the pending set was read: a failing
+    // read must not swallow a request whose budget is already spent (T164
+    // review L1).
+    final flushConversations = Set.of(_flushConversations);
+    final flushMessages = Set.of(_flushMessages);
     await _messages.requeueStaleSent(olderThan: staleSentThreshold);
     final pending = await _messages.getPendingMessages();
+    _flushConversations.removeAll(flushConversations);
+    _flushMessages.removeAll(flushMessages);
     final now = DateTime.now();
 
     for (final msg in pending) {
       if (_disposed) return;
+      // The cap holds for every trigger, targeted or not.
       if (msg.retryCount >= maxRetries) {
         await _messages.markFailed(msg.id);
+        _forget(msg.conversationId, msg.messageId);
         continue;
       }
-      if (!ignoreBackoff && !isDue(msg, now)) continue;
-      await _attempt(msg);
+      final forced =
+          ignoreBackoff ||
+          flushConversations.contains(msg.conversationId) ||
+          (msg.messageId != null &&
+              flushMessages.contains((msg.conversationId, msg.messageId!)));
+      if (!forced && !isDue(msg, now)) continue;
+      // T164 review L3: the snapshot above may be seconds old by now (an
+      // earlier attempt of this pass blocked on the network) — an ACK that
+      // confirmed the row meanwhile means there is nothing left to send.
+      final current = await _messages.getMessage(msg.id);
+      if (current == null || current.status != MessageStatus.pending) {
+        continue;
+      }
+      await _attempt(current);
     }
+  }
+
+  /// Drops the T164 bookkeeping of a message that is done.
+  void _forget(String conversationId, String? messageIdHex) {
+    if (messageIdHex == null || messageIdHex.isEmpty) return;
+    _immediateAckRetries.remove((conversationId, messageIdHex));
+  }
+
+  /// Kicks a pass that attempts the targeted rows regardless of their
+  /// backoff (T164). Never awaited by the caller: the callers sit in
+  /// `MessageSyncService`'s persistence chain, which must not block on a
+  /// network send. [settled] is how a test waits for it.
+  void _kickTargetedPass({String? conversationId, (String, String)? message}) {
+    if (_disposed) return;
+    if (conversationId != null) _flushConversations.add(conversationId);
+    if (message != null) _flushMessages.add(message);
+    unawaited(
+      runPass().catchError(
+        (Object e) => debugPrint('OutboxService: targeted pass failed: $e'),
+      ),
+    );
+  }
+
+  /// T164: the counterpart's mailbox set for [CounterpartOhUpdate.channelId]
+  /// changed (first learned via rendezvous, or moved via in-band
+  /// `oh_update`). Every pending message of that channel is attempted now
+  /// instead of at the end of its backoff window — a message that failed
+  /// with [UnknownCounterpartException] is deliverable the moment the
+  /// network client knows where to deposit it (testnet lab run 1: mailbox
+  /// known at 102 s, first send at 220 s).
+  ///
+  /// [maxRetries] still applies, and every failed attempt books a retry as
+  /// usual. The client emits this only when the set actually changes, so it
+  /// cannot drive a loop by itself.
+  void onCounterpartOhUpdate(CounterpartOhUpdate update) {
+    if (update.descriptors.isEmpty) return;
+    _kickTargetedPass(conversationId: update.channelId);
+  }
+
+  /// Re-queues a sent message after negative routing feedback and — while
+  /// its [maxImmediateAckRetries] budget lasts and [immediate] is set —
+  /// attempts it right away over fresh hops (T164). Without budget the
+  /// normal backoff from now applies, as before T164. 1:1 messages only.
+  Future<void> _requeueAfterNegativeAck(
+    RoutingAckUpdate update, {
+    required bool immediate,
+  }) async {
+    final requeued = await _messages.requeueSentByNetworkId(
+      update.channelId,
+      update.messageIdHex,
+    );
+    if (!requeued || !immediate) return;
+    final key = (update.channelId, update.messageIdHex);
+    final granted = _immediateAckRetries[key] ?? 0;
+    if (granted >= maxImmediateAckRetries) {
+      debugPrint(
+        'OutboxService: immediate re-send budget used up for '
+        '${update.messageIdHex} — normal backoff',
+      );
+      return;
+    }
+    _immediateAckRetries[key] = granted + 1;
+    _kickTargetedPass(message: key);
   }
 
   /// ONE delivery attempt for [msg], plus the ONE policy for what each
@@ -448,6 +591,7 @@ class OutboxService {
         // Item exceeds the per-item size limit (64 KiB) — re-sending the
         // same payload can never succeed.
         await _messages.markFailed(msg.id);
+        _forget(msg.conversationId, msg.messageId);
         failure = DeliveryFailure.tooLarge;
       } else if (e.isQuotaExceeded) {
         // Recipient mailbox full (reject-new): back off harder than for
@@ -478,8 +622,11 @@ class OutboxService {
 
   /// Applies routing-layer delivery feedback (MS06): an R-ACK confirms the
   /// message reached the recipient's OH mailbox (`routed`); HANDLE_EXPIRED,
-  /// MAILBOX_FULL or a timeout re-queue the message for a retry over fresh
-  /// hops (the node scorer already penalized the old ones on timeout).
+  /// REJECTED, an unknown status or a timeout re-queue the message and
+  /// (T164) re-send it at once over fresh hops — the node scorer already
+  /// penalized the old ones on timeout — within [maxImmediateAckRetries];
+  /// MAILBOX_FULL re-queues with the normal backoff. The immediate re-send
+  /// applies to 1:1 messages only; group messages always take the backoff.
   ///
   /// T112: called from `MessageSyncService`'s persistence chain, which owns
   /// the subscription — but the transition itself belongs here, with the
@@ -490,6 +637,12 @@ class OutboxService {
     final memberIdHex = update.memberIdHex;
     if (memberIdHex != null) {
       if (update.timedOut || update.status != RoutingAck.statusStored) {
+        // T164 deliberately stops at 1:1: a group fan-out gets one R-ACK per
+        // member, so feedback for an earlier attempt can meet a later one,
+        // and the R-ACK does not say which attempt it describes. Telling
+        // them apart needs the send time from the client (review round 2);
+        // until then a group message keeps the pre-T164 behaviour — re-queue
+        // with the normal backoff.
         await _messages.requeueSentByNetworkId(
           update.channelId,
           update.messageIdHex,
@@ -520,18 +673,21 @@ class OutboxService {
     }
 
     if (update.timedOut) {
+      // T164: a timeout is treated like a negative R-ACK. 90 s of silence
+      // already exceed the early backoff steps; the hops were scored down,
+      // so the re-send takes a fresh route; and if only the R-ACK was lost,
+      // the duplicate costs one deposit — the receiver drops it by message
+      // id. On the testnet a timeout has so far always meant a lost message.
       debugPrint(
         'OutboxService: no R-ACK for ${update.messageIdHex} — '
         're-queueing for fresh hops',
       );
-      await _messages.requeueSentByNetworkId(
-        update.channelId,
-        update.messageIdHex,
-      );
+      await _requeueAfterNegativeAck(update, immediate: true);
       return;
     }
     switch (update.status) {
       case RoutingAck.statusStored:
+        _forget(update.channelId, update.messageIdHex);
         await _messages.markRoutedByNetworkId(
           update.channelId,
           update.messageIdHex,
@@ -543,10 +699,7 @@ class OutboxService {
         debugPrint(
           'OutboxService: recipient mailbox full for ${update.messageIdHex}',
         );
-        await _messages.requeueSentByNetworkId(
-          update.channelId,
-          update.messageIdHex,
-        );
+        await _requeueAfterNegativeAck(update, immediate: false);
         break;
       case RoutingAck.statusHandleExpired:
       case RoutingAck.statusRejected:
@@ -555,10 +708,9 @@ class OutboxService {
           'OutboxService: deposit failed for ${update.messageIdHex} '
           '(status ${update.status})',
         );
-        await _messages.requeueSentByNetworkId(
-          update.channelId,
-          update.messageIdHex,
-        );
+        // T164: re-send now over fresh hops (bounded by
+        // maxImmediateAckRetries) instead of after the backoff window.
+        await _requeueAfterNegativeAck(update, immediate: true);
         break;
     }
   }
@@ -588,6 +740,9 @@ class OutboxService {
       );
       if (!complete) return;
     }
+    // T164: a delivered 1:1 message is done. (Group messages carry no
+    // budget; review round 1 H1 was about resetting it on ONE member's ack.)
+    _forget(update.channelId, update.messageIdHex);
     await _messages.markDeliveredByNetworkId(
       update.channelId,
       update.messageIdHex,
