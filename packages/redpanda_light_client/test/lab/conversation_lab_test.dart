@@ -47,13 +47,18 @@ import '../e2e/redpanda_node_launcher.dart';
 /// - `pairing`: from the moment Bob "scans the QR" until his first message
 ///   reaches Alice. A send that fails with `UnknownCounterpartException` is
 ///   repeated on the app outbox's backoff ([outboxBackoff]). Once Bob has
-///   learned Alice's mailbox the lab sends at once — as the app does, whose
-///   outbox flushes a channel's pending messages on `CounterpartOhUpdate`.
+///   learned Alice's mailbox the lab sends at once, like the app's outbox,
+///   which flushes a channel's pending messages on `CounterpartOhUpdate`.
+///   The lab does that once, for the first mailbox Bob learns; the app does
+///   it on every change of the set. A retry in the app that no such event
+///   triggers waits for the outbox's 10 s check interval, which the lab does
+///   not model.
 ///   [pairingBudget] is the limit for `firstDeliveryMs`.
-///   `aliceLearnedBobMailboxMs` is read the moment the hello arrives, so it
-///   is null for a creator who learns the joiner's mailbox a moment later;
-///   `aliceLearnedBobMailboxAfterHelloMs` is filled in at the end of the run
-///   and is negative when she knew it before the hello.
+///   `aliceLearnedBobMailboxMs` is read at the end of the pairing step, so it
+///   is null for a creator who learns the joiner's mailbox after that;
+///   `aliceLearnedBobMailboxAfterHelloMs` is filled in at the end of the
+///   run: negative when she knew it before the hello, null when she never
+///   learned it or the hello never arrived.
 /// - `rounds`: [messagesPerRound] alternating messages, each sent the moment
 ///   the previous one arrived, started by the side that received last. One
 ///   round right after pairing, further warm rounds, and one after [idleGap]
@@ -495,11 +500,14 @@ void main() {
       // is abandoned without unwinding, and that is exactly the run whose
       // report matters most.
       addTearDown(() async {
-        final helloAt = helloArrivedAtMs;
-        if (pairingReport != null && helloAt != null) {
+        final pairingEntry = pairingReport;
+        if (pairingEntry != null) {
+          // Always written once pairing has started, so a reader can tell
+          // "never happened" (null) from a report cut off earlier.
+          final helloAt = helloArrivedAtMs;
           final learnedMs = creator?.counterpartOhLearnedMs;
-          pairingReport['aliceLearnedBobMailboxAfterHelloMs'] =
-              learnedMs == null ? null : learnedMs - helloAt;
+          pairingEntry['aliceLearnedBobMailboxAfterHelloMs'] =
+              helloAt == null || learnedMs == null ? null : learnedMs - helloAt;
         }
         report['violations'] = violations;
         report['elapsedMs'] = clock.elapsedMilliseconds;
