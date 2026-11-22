@@ -600,8 +600,11 @@ void main() {
       final (client, node, relays) = await connectedClient(
         timing: RendezvousTiming(
           prePublishHoldMax: const Duration(seconds: 20),
+          // Both pairing steps far beyond this test: the second lookup on
+          // today's key can then only be the re-ask after yesterday's find,
+          // on a slow machine as well.
           pairingLookupDelays: const [
-            Duration(milliseconds: 600),
+            Duration(seconds: 30),
             Duration(seconds: 30),
           ],
           jitter: 0,
@@ -672,6 +675,11 @@ void main() {
             )).where((s) => s.isLookup && s.lookupKeyHex == keys[0]).length >=
             2,
         reason: 'today\'s key was not asked again',
+      );
+      expect(
+        client.pairingLookupAttemptsOf(chan),
+        0,
+        reason: 'the second lookup must be the re-ask, not a pairing step',
       );
       final pairingLookup = (await peelAll(
         node,
