@@ -443,7 +443,11 @@ class RedPandaLightClient implements RedPandaClient {
         // T27: (re-)connected — run a catch-up poll right away instead of
         // waiting for the next scheduled tick (up to 30 s). Deliberately
         // does NOT start the fast-cadence window; a non-empty fetch does.
-        if (_pollingEnabled && !_pollInProgress) {
+        // Only a FULL cycle in flight makes this redundant (it fetches every
+        // mailbox and re-arms itself); a T167 follow-up fetches just the
+        // notified mailboxes and keeps [_nextPollAt], so the catch-up must
+        // still be scheduled then.
+        if (_pollingEnabled && !_fullCycleInProgress) {
           _schedulePoll(const Duration(seconds: 1));
         }
 
@@ -939,8 +943,10 @@ class RedPandaLightClient implements RedPandaClient {
     RpLog.debug('RedPandaLightClient: reconnected mailbox host: $address');
     const catchUp = Duration(seconds: 1);
     final next = _nextPollAt;
+    // As above: a follow-up in flight (T167) does not fetch this host's
+    // mailboxes, only a full cycle does.
     if (_pollingEnabled &&
-        !_pollInProgress &&
+        !_fullCycleInProgress &&
         (next == null || next.isAfter(DateTime.now().add(catchUp)))) {
       _schedulePoll(catchUp);
     }
