@@ -1400,6 +1400,12 @@ class RedPandaLightClient implements RedPandaClient {
     // Notifies cannot drive its maintenance work (oh_update resends,
     // republish, redundancy sweep) faster than [activePollInterval].
     _pollFollowUpOhs.add(ohHex);
+    // The follow-up does not move the full cycle, so pull a slow (idle
+    // cadence) full cycle forward explicitly. The old idle path did this
+    // implicitly: it ran a full cycle, which rescheduled itself at
+    // [activePollInterval]. A conversation that just went live must get its
+    // maintenance (oh_update resends, ACK expiry) on the fast cadence.
+    _notePollActivity();
     if (!_pollInProgress) _armPollTimer();
   }
 
