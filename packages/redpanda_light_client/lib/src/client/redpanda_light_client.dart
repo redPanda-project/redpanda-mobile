@@ -1078,6 +1078,37 @@ class RedPandaLightClient implements RedPandaClient {
   String? _hostNodeId(String? endpoint) =>
       endpoint == null ? null : _livePeerFor(endpoint)?.discoveredNodeId;
 
+  /// T162: the node hosting our own mailbox [ownOh] as the closing hop of a
+  /// path that ends in that mailbox (our RGBs and R-ACK return paths).
+  ///
+  /// Without it the last relay receives a deliver for an OH it does not host
+  /// and has to resolve the host through the DHT (MS02b `OhForwarder`). On
+  /// the testnet nodes that lookup is rejected whenever the same node looked
+  /// the same OH up in the last 30 s (the anti-loop blacklist of
+  /// `KademliaSearchJob`) — and a reply plus the R-ACK of the message it
+  /// answers hit the same OH within milliseconds, so replies were dropped
+  /// with HANDLE_EXPIRED after a 15 s parked retry. With the host closing the
+  /// path the deliver is deposited locally; no node resolves anything. The
+  /// last relay no longer learns the oh_id either (only the host, which
+  /// knows it anyway, decrypts the deliver layer).
+  ///
+  /// Null when the host is not a live peer with a known identity and
+  /// encryption key — the path then ends at the last relay as before.
+  GarlicHop? _ownHostHop(OHRegistration ownOh) {
+    final endpoint = ownOh.serverEndpoint;
+    if (endpoint == null) return null;
+    final host = _livePeerFor(endpoint);
+    return host == null ? null : _selfHop(host);
+  }
+
+  /// Whether [rgb] ends at the host of [ownOh] (see [_ownHostHop]).
+  bool _rgbClosesAtHost(ReverseGarlicBlock rgb, OHRegistration ownOh) {
+    final hostId = _hostNodeId(ownOh.serverEndpoint);
+    return hostId != null &&
+        rgb.hops.isNotEmpty &&
+        _hexEncode(rgb.hops.last.nodeId) == hostId;
+  }
+
   /// T162 route diagnostics (debug level only, i.e. only in a lab/test client
   /// log): `address/nodeId-prefix` of a garlic hop as the peer list knows it.
   String _diagHop(List<int> nodeId) {
@@ -2630,12 +2661,14 @@ class RedPandaLightClient implements RedPandaClient {
         .firstOrNull;
     if (ownOh == null) return null;
 
-    // The mailbox host never becomes a return relay (mirrors the MS04
-    // counterpartOhEndpoint exclusion on the forward path).
+    // The mailbox host never becomes a return RELAY (mirrors the MS04
+    // counterpartOhEndpoint exclusion on the forward path) — it closes the
+    // path instead (T162, see [_ownHostHop]).
     final rgb = _rgbBuilder.build(
       ohId: ownOh.ohId,
       hopCount: defaultHopCount,
       excludeAddresses: _hostAddresses(ownOh.serverEndpoint),
+      closingHop: _ownHostHop(ownOh),
     );
     if (rgb == null) {
       RpLog.info(
@@ -2644,10 +2677,11 @@ class RedPandaLightClient implements RedPandaClient {
       );
       return null;
     }
-    if (rgb.hops.length < defaultHopCount) {
+    final relayCount = rgb.hops.length - (_rgbClosesAtHost(rgb, ownOh) ? 1 : 0);
+    if (relayCount < defaultHopCount) {
       RpLog.info(
         'RedPandaLightClient: sendMessage() reply path has only '
-        '${rgb.hops.length} of $defaultHopCount hops — reduced privacy',
+        '$relayCount of $defaultHopCount relay hops — reduced privacy',
       );
     }
     _sessionTagStore.store(rgb.sessionTagHex, channelId);
@@ -2729,18 +2763,22 @@ class RedPandaLightClient implements RedPandaClient {
     if (ownOh == null) return null;
 
     // Return hops: same selector and exclusions as the RGB (the ack OH host
-    // never relays its own acks; the submit node sees us directly).
-    final returnHops = _hopSelector.selectHops(
-      count: defaultHopCount,
-      excludeAddresses: {
-        ..._hostAddresses(ownOh.serverEndpoint),
-        submitVia.address,
-      },
-      excludeNodeIds: {
-        ?submitVia.discoveredNodeId,
-        ?_hostNodeId(ownOh.serverEndpoint),
-      },
-    );
+    // never relays its own acks; the submit node sees us directly). Like the
+    // RGB, the path is closed by the ack OH host itself (T162).
+    final returnHops = [
+      ..._hopSelector.selectHops(
+        count: defaultHopCount,
+        excludeAddresses: {
+          ..._hostAddresses(ownOh.serverEndpoint),
+          submitVia.address,
+        },
+        excludeNodeIds: {
+          ?submitVia.discoveredNodeId,
+          ?_hostNodeId(ownOh.serverEndpoint),
+        },
+      ),
+      ?_ownHostHop(ownOh),
+    ];
     final withinBudget =
         payloadLength <=
         GarlicBuilder.maxAckedPayloadLength(

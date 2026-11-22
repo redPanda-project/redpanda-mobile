@@ -26,6 +26,12 @@ class RgbBuilder {
   /// [HopSelector.selectHops]; pass the OH host so the return path never
   /// starts or ends at the mailbox node itself).
   ///
+  /// [closingHop] (T162) is appended after the relay hops: the node hosting
+  /// [ohId], so the reply onion ends where the mailbox lives and is deposited
+  /// locally — without it the last relay has to resolve the OH host through
+  /// the DHT (MS02b), which drops replies on the testnet. It is not counted
+  /// in [hopCount] and never chosen as a relay.
+  ///
   /// Returns null when no eligible hop candidates are known — the message
   /// then travels without a reply path (the responder falls back to the
   /// forward MS04 path, master spec MS05, OQ 3).
@@ -34,6 +40,7 @@ class RgbBuilder {
     int hopCount = 3,
     Set<String> excludeAddresses = const {},
     Set<String> excludeNodeIds = const {},
+    GarlicHop? closingHop,
   }) {
     final hops = _hopSelector.selectHops(
       count: hopCount,
@@ -46,7 +53,7 @@ class RgbBuilder {
       expiryTs: DateTime.now().add(rgbLifetime).millisecondsSinceEpoch,
       sessionTag: CryptoUtils.randomBytes(GarlicBuilder.sessionTagLength),
       ohId: ohId,
-      hops: hops,
+      hops: [...hops, ?closingHop],
     );
   }
 }
