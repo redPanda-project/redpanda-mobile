@@ -5,12 +5,14 @@ import 'dart:typed_data';
 import 'package:test/test.dart';
 
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
+import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
 import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/generated/outbound.pb.dart';
 import 'package:redpanda_light_client/src/logging/logger.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
 import 'package:redpanda_light_client/src/network/active_peer.dart';
+import 'package:redpanda_light_client/src/peer_repository.dart';
 
 /// T167: a Notify that arrives while a poll cycle runs, after that cycle has
 /// already fetched the notified mailbox, is followed by a fetch right after
@@ -219,6 +221,164 @@ class _Node {
     for (final (id, at) in fetches)
       if (_sameBytes(id, ohId) && (after == null || at.isAfter(after))) at,
   ];
+}
+
+/// Scripted mailbox host for the reconnect tests (several nodes, each with
+/// its own mailbox — the T163 harness plus fetch control and Notify).
+class _HostSocket implements Socket {
+  _HostSocket(this.nodeIdByte);
+
+  final int nodeIdByte;
+  final _incoming = StreamController<Uint8List>();
+  final List<int> _out = [];
+  bool _handshakeAnswered = false;
+
+  /// OH ids of every FetchRequest this socket received, in order.
+  final List<List<int>> fetchOhIds = [];
+
+  /// While it returns true for a fetched OH, the fetch is not answered.
+  bool Function(List<int> ohId)? holdFetch;
+  int heldFetches = 0;
+
+  @override
+  Future<void> get done => Completer<void>().future;
+
+  void _reply(List<int> data) {
+    if (!_incoming.isClosed) _incoming.add(Uint8List.fromList(data));
+  }
+
+  void _replyCommand(int command, List<int> body) {
+    final b = BytesBuilder()
+      ..addByte(command)
+      ..add(
+        (ByteData(
+          4,
+        )..setInt32(0, body.length, Endian.big)).buffer.asUint8List(),
+      )
+      ..add(body);
+    _reply(b.toBytes());
+  }
+
+  void notify(List<int> ohId) =>
+      _replyCommand(161, (Notify()..ohId = ohId).writeToBuffer());
+
+  /// Answers every held fetch (empty mailbox).
+  void releaseFetches() {
+    holdFetch = null;
+    for (; heldFetches > 0; heldFetches--) {
+      _replyCommand(153, (FetchResponse()..status = Status.OK).writeToBuffer());
+    }
+  }
+
+  /// The node drops the connection (not the client).
+  void dropFromNodeSide() => _incoming.close();
+
+  bool fetched(List<int> ohId) => fetchOhIds.any((id) => _sameBytes(id, ohId));
+
+  @override
+  void add(List<int> data) {
+    _out.addAll(data);
+    if (!_handshakeAnswered) {
+      if (_out.length < 30) return;
+      _out.removeRange(0, 30);
+      _handshakeAnswered = true;
+      final hs = BytesBuilder()
+        ..add('k3gV'.codeUnits)
+        ..addByte(22)
+        ..addByte(0)
+        ..add(Uint8List(20)..[0] = nodeIdByte)
+        ..add(Uint8List(4));
+      _reply(hs.toBytes());
+    }
+    while (_out.isNotEmpty) {
+      final command = _out[0];
+      const framed = {141, 142, 150, 152, 156, 159};
+      if (!framed.contains(command)) {
+        _out.removeAt(0);
+        continue;
+      }
+      if (_out.length < 5) return;
+      final len = ByteData.sublistView(
+        Uint8List.fromList(_out.sublist(1, 5)),
+      ).getInt32(0, Endian.big);
+      if (_out.length < 5 + len) return;
+      final payload = Uint8List.fromList(_out.sublist(5, 5 + len));
+      _out.removeRange(0, 5 + len);
+      if (command == 159) {
+        _replyCommand(
+          160,
+          (SubscribeResponse()..status = Status.OK).writeToBuffer(),
+        );
+      } else if (command == 152) {
+        final ohId = FetchRequest.fromBuffer(payload).ohId;
+        fetchOhIds.add(ohId);
+        if (holdFetch?.call(ohId) ?? false) {
+          heldFetches++;
+          continue;
+        }
+        _replyCommand(
+          153,
+          (FetchResponse()..status = Status.OK).writeToBuffer(),
+        );
+      }
+    }
+  }
+
+  @override
+  StreamSubscription<Uint8List> listen(
+    void Function(Uint8List event)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) => _incoming.stream.listen(
+    onData,
+    onError: onError,
+    onDone: onDone,
+    cancelOnError: cancelOnError,
+  );
+
+  @override
+  bool setOption(SocketOption option, bool enabled) => true;
+
+  @override
+  void destroy() => _incoming.close();
+
+  @override
+  Future<void> close() async => _incoming.close();
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+/// Scripted network: the first dial of an address connects at once, every
+/// redial waits until the test opens that address's gate — so the test, not
+/// the client's 2–6 s retry backoff, decides when a host comes back.
+class _GatedNet {
+  final Map<String, List<_HostSocket>> sockets = {};
+  final Map<String, Completer<void>> _gates = {};
+
+  /// Redials of [address] that are waiting at the gate.
+  final Map<String, int> waitingRedials = {};
+
+  Future<Socket> dial(String host, int port) async {
+    final address = '$host:$port';
+    final list = sockets.putIfAbsent(address, () => []);
+    if (list.isNotEmpty) {
+      waitingRedials[address] = (waitingRedials[address] ?? 0) + 1;
+      await _gates.putIfAbsent(address, Completer<void>.new).future;
+      waitingRedials[address] = waitingRedials[address]! - 1;
+    }
+    final socket = _HostSocket(int.parse(host.split('.').last));
+    list.add(socket);
+    return socket;
+  }
+
+  void openGate(String address) {
+    final gate = _gates.putIfAbsent(address, Completer<void>.new);
+    if (!gate.isCompleted) gate.complete();
+  }
+
+  _HostSocket latest(String address) => sockets[address]!.last;
 }
 
 void main() {
@@ -485,5 +645,174 @@ void main() {
     final followUps = logs.where((l) => l.contains('poll follow-up fetched'));
     expect(followUps, hasLength(1));
     expect(followUps.single, contains('from 3 notified OH(s)'));
+  });
+
+  group('T167 review: a reconnect during a follow-up still gets its '
+      'catch-up poll', () {
+    const nodeA = '10.0.0.1:59558';
+    const nodeB = '10.0.0.2:59558';
+    late _GatedNet net;
+    late RedPandaLightClient client;
+    late OHRegistration ohA;
+    late OHRegistration ohB;
+
+    Future<OHRegistration> restoredOn(String host, int seed) async =>
+        OHRegistration(
+          ohId: List.generate(20, (i) => (i * 7 + seed * 31) & 0xff),
+          keypair: await OHKeypair.generate(),
+          expiresAtMs: DateTime.now()
+              .add(const Duration(days: 7))
+              .millisecondsSinceEpoch,
+          serverEndpoint: host,
+        );
+
+    /// Two nodes, each hosting one of our mailboxes. [fetchResponseTimeout]
+    /// is how long a fetch into a dead connection stays pending.
+    Future<void> start({required Duration fetchResponseTimeout}) async {
+      net = _GatedNet();
+      final keys = await KeyPair.generate();
+      client = RedPandaLightClient(
+        selfNodeId: NodeId.fromPublicKey(keys),
+        selfKeys: keys,
+        seeds: const [nodeA, nodeB],
+        peerRepository: InMemoryPeerRepository(),
+        socketFactory: net.dial,
+        fetchResponseTimeout: fetchResponseTimeout,
+      );
+      addTearDown(client.disconnect);
+      ohA = await restoredOn(nodeA, 1);
+      ohB = await restoredOn(nodeB, 2);
+      await client.restoreOutboundHandle(ohA);
+      await client.restoreOutboundHandle(ohB);
+      await client.connect();
+      await pumpUntil(
+        () => client.activePeerAddresses.length == 2,
+        timeout: const Duration(seconds: 10),
+        reason: 'both scripted nodes connected',
+      );
+    }
+
+    /// B drops and its redial waits at the gate. Then a full cycle is
+    /// pulled forward (`onResume`: full cycle in 1 s, fast cadence) and the
+    /// test waits for its end, so the next regular cycle is
+    /// [RedPandaLightClient.activePollInterval] (5 s) away.
+    Future<void> dropBAndWaitForCycleEnd() async {
+      net.latest(nodeB).dropFromNodeSide();
+      await pumpUntil(
+        () => (net.waitingRedials[nodeB] ?? 0) > 0,
+        timeout: const Duration(seconds: 15),
+        reason: 'the client redials B (held at the gate)',
+      );
+      final seen = logs.length;
+      client.onResume();
+      await pumpUntil(
+        () => logs.skip(seen).any((l) => l.contains('poll cycle fetched')),
+        timeout: const Duration(seconds: 10),
+        reason: 'a full poll cycle ended',
+      );
+    }
+
+    /// Notify for A's mailbox; A holds the follow-up fetch.
+    Future<DateTime> followUpHeldOnA() async {
+      final a = net.latest(nodeA);
+      a.holdFetch = (ohId) => _sameBytes(ohId, ohA.ohId);
+      final t0 = DateTime.now();
+      a.notify(ohA.ohId);
+      await pumpUntil(
+        () => a.heldFetches > 0,
+        timeout: const Duration(seconds: 2),
+        reason: 'the follow-up fetch of A is in flight',
+      );
+      expect(
+        logs.where((l) => l.contains('poll follow-up fetched')),
+        isEmpty,
+        reason: 'precondition: the follow-up is still running',
+      );
+      return t0;
+    }
+
+    /// The catch-up poll is due ~1 s after the reconnect; the regular cycle
+    /// ~5 s after the Notify. 3 s leaves ~2 s on either side.
+    const catchUpDeadline = Duration(seconds: 3);
+
+    test('a mailbox host that reconnects while the follow-up runs '
+        '(_onPeerConnected)', () async {
+      await start(fetchResponseTimeout: const Duration(seconds: 10));
+      await dropBAndWaitForCycleEnd();
+      final t0 = await followUpHeldOnA();
+
+      // B comes back while the client stays connected over A: the
+      // per-host path, not the client-wide connect edge.
+      net.openGate(nodeB);
+      await pumpUntil(
+        () =>
+            client.activePeerAddresses.contains(nodeB) &&
+            net.sockets[nodeB]!.length == 2,
+        timeout: const Duration(seconds: 2),
+        reason: 'B reconnected',
+      );
+      expect(
+        logs.any((l) => l.contains('a mailbox host reconnected')),
+        isTrue,
+        reason: 'precondition: _onPeerConnected handled B',
+      );
+      net.latest(nodeA).releaseFetches(); // the follow-up ends
+
+      final b = net.latest(nodeB);
+      await pumpUntil(
+        () => b.fetched(ohB.ohId),
+        timeout: t0.add(catchUpDeadline).difference(DateTime.now()),
+        reason:
+            "B's mailbox was not fetched after the reconnect — the "
+            'catch-up poll was dropped while the follow-up ran',
+      );
+    }, timeout: const Timeout(Duration(seconds: 60)));
+
+    test(
+      'the client-wide connect edge during the follow-up (_updateStatus)',
+      () async {
+        // A fetch into a dead connection stays pending until this timeout;
+        // it ends the follow-up shortly after the reconnect (A is gone, so
+        // nobody can answer it).
+        await start(fetchResponseTimeout: const Duration(seconds: 1));
+        await dropBAndWaitForCycleEnd();
+        final t0 = await followUpHeldOnA();
+
+        // A drops too: no peer left, the follow-up's fetch stays pending.
+        // A's own redial stays at its gate for the rest of the test.
+        net.latest(nodeA).dropFromNodeSide();
+        await pumpUntil(
+          () => client.activePeerAddresses.isEmpty,
+          timeout: const Duration(seconds: 2),
+          reason: 'the client lost every peer',
+        );
+        net.openGate(nodeB);
+        await pumpUntil(
+          () => client.activePeerAddresses.contains(nodeB),
+          timeout: const Duration(seconds: 2),
+          reason: 'B reconnected (client-wide connect edge)',
+        );
+        expect(
+          logs.any((l) => l.contains('a mailbox host reconnected')),
+          isFalse,
+          reason: 'precondition: the edge, not _onPeerConnected, handled B',
+        );
+
+        final b = net.latest(nodeB);
+        await pumpUntil(
+          () => b.fetched(ohB.ohId),
+          timeout: t0.add(catchUpDeadline).difference(DateTime.now()),
+          reason:
+              "B's mailbox was not fetched after the reconnect — the "
+              'catch-up poll was dropped while the follow-up ran',
+        );
+        expect(
+          logs.any((l) => l.contains('poll follow-up fetched')),
+          isTrue,
+          reason: 'precondition: the follow-up ended (fetch timeout)',
+        );
+      },
+      timeout: const Timeout(Duration(seconds: 60)),
+    );
   });
 }
