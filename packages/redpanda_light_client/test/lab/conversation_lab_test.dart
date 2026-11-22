@@ -46,15 +46,14 @@ import '../e2e/redpanda_node_launcher.dart';
 ///   garlic hop candidates are known.
 /// - `pairing`: from the moment Bob "scans the QR" until his first message
 ///   reaches Alice. A send that fails with `UnknownCounterpartException` is
-///   repeated on the app outbox's backoff ([outboxBackoff]), because those
-///   failing sends are what triggers the rendezvous lookup. Once Bob has
-///   learned Alice's mailbox the lab sends at once instead of sitting out the
-///   backoff, so `firstDeliveryMs` is the best the protocol can do —
-///   [pairingBudget] is its limit. What a user of today's app would see is
-///   `appFirstDeliveryEstimateMs`: the outbox's next scheduled attempt
-///   (`appNextAttemptMs`) plus the measured delivery latency. That is a lower
-///   bound, the outbox only looks every 10 s. Closing the gap between the two
-///   is the outbox's job and is tested at app level, not here.
+///   repeated on the app outbox's backoff ([outboxBackoff]). Once Bob has
+///   learned Alice's mailbox the lab sends at once — as the app does, whose
+///   outbox flushes a channel's pending messages on `CounterpartOhUpdate`.
+///   [pairingBudget] is the limit for `firstDeliveryMs`.
+///   `aliceLearnedBobMailboxMs` is read the moment the hello arrives, so it
+///   is null for a creator who learns the joiner's mailbox a moment later;
+///   `aliceLearnedBobMailboxAfterHelloMs` is filled in at the end of the run
+///   and is negative when she knew it before the hello.
 /// - `rounds`: [messagesPerRound] alternating messages, each sent the moment
 ///   the previous one arrived, started by the side that received last. One
 ///   round right after pairing, further warm rounds, and one after [idleGap]
@@ -486,10 +485,22 @@ void main() {
             sink.writeln('[${clock.elapsedMilliseconds}] $message');
       }
 
+      // Set once pairing has started; the tear-down completes the entry
+      // with what the creator learned after the hello had arrived.
+      Map<String, Object?>? pairingReport;
+      _Party? creator;
+      int? helloArrivedAtMs;
+
       // In a tear-down, not a `finally`: a test that runs into its timeout
       // is abandoned without unwinding, and that is exactly the run whose
       // report matters most.
       addTearDown(() async {
+        final helloAt = helloArrivedAtMs;
+        if (pairingReport != null && helloAt != null) {
+          final learnedMs = creator?.counterpartOhLearnedMs;
+          pairingReport['aliceLearnedBobMailboxAfterHelloMs'] =
+              learnedMs == null ? null : learnedMs - helloAt;
+        }
         report['violations'] = violations;
         report['elapsedMs'] = clock.elapsedMilliseconds;
         RpLog.sink = previousSink;
@@ -575,6 +586,8 @@ void main() {
       // ── Pairing ──────────────────────────────────────────────────────
       final pairing = <String, Object?>{};
       report['pairing'] = pairing;
+      pairingReport = pairing;
+      creator = alice;
 
       // Registers [party]'s own mailbox in the background, like the app's
       // create/join screens do; the error text, or null when it worked.
@@ -633,7 +646,6 @@ void main() {
       final attempts = <Map<String, Object?>>[];
       pairing['attempts'] = attempts;
       String? helloId;
-      int? helloSentMs;
 
       Future<bool> sendHello(String trigger) async {
         final atMs = clock.elapsedMilliseconds;
@@ -650,7 +662,6 @@ void main() {
           );
           entry['result'] = 'sent';
           entry['hops'] = bob.client.lastSendHopCount;
-          helloSentMs = atMs;
           return true;
         } catch (e) {
           entry['result'] = e.toString();
@@ -666,16 +677,13 @@ void main() {
         if (remainingMs <= 0) break;
         final backoff =
             outboxBackoff[math.min(retry, outboxBackoff.length - 1)];
-        final nextAttemptMs =
-            clock.elapsedMilliseconds + backoff.inMilliseconds;
         // Never wait past the cutoff: a pairing that does not work must end
         // as a failed run with a report, not as a test timeout.
         final cutShort = backoff.inMilliseconds > remainingMs;
         final wait = cutShort ? Duration(milliseconds: remainingMs) : backoff;
         if (!sentOnLearning && await bob.learnsCounterpartOh(wait)) {
           sentOnLearning = true;
-          pairing['appNextAttemptMs'] = nextAttemptMs - scanMs;
-          sent = await sendHello('lab: mailbox learned');
+          sent = await sendHello('mailbox learned');
         } else {
           if (sentOnLearning) await Future<void>.delayed(wait);
           if (cutShort) break;
@@ -706,13 +714,7 @@ void main() {
       pairing['aliceLearnedBobMailboxMs'] = sinceScan(
         alice.counterpartOhLearnedMs,
       );
-      final appNextAttemptMs = pairing['appNextAttemptMs'] as int?;
-      pairing['appFirstDeliveryEstimateMs'] =
-          helloArrivedMs == null || helloSentMs == null
-          ? null
-          : appNextAttemptMs == null
-          ? firstDeliveryMs
-          : appNextAttemptMs + (helloArrivedMs - helloSentMs!);
+      helloArrivedAtMs = helloArrivedMs;
       pairing['withinBudget'] =
           firstDeliveryMs != null &&
           firstDeliveryMs <= pairingBudget.inMilliseconds;
