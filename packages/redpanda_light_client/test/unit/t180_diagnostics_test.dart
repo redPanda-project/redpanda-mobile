@@ -8,6 +8,8 @@ import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/diagnostics/diag_catalogue.dart';
 import 'package:redpanda_light_client/src/diagnostics/rp_diag.dart';
 import 'package:redpanda_light_client/src/diagnostics/rp_network.dart';
+import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
+import 'package:redpanda_light_client/src/domain/oh_registration.dart';
 import 'package:redpanda_light_client/src/logging/logger.dart';
 import 'package:redpanda_light_client/src/models/key_pair.dart';
 import 'package:redpanda_light_client/src/models/node_id.dart';
@@ -285,6 +287,122 @@ void main() {
       await client.connect();
       await Future<void>.delayed(const Duration(milliseconds: 300));
       expect(events, isEmpty);
+    });
+  });
+
+  group('idle and offline volume', () {
+    const seedA = '192.0.2.1:59558';
+    const seedB = '192.0.2.2:59558';
+
+    test('a one-hour outage reports each address once and keeps the start '
+        'of the outage', () async {
+      RpDiag.setEnabled(true);
+      var now = DateTime.utc(2026, 11, 22, 15, 55);
+      var dials = 0;
+      final keys = await KeyPair.generate();
+      final client = RedPandaLightClient(
+        selfNodeId: NodeId.fromPublicKey(keys),
+        selfKeys: keys,
+        seeds: const [seedA, seedB],
+        peerRepository: InMemoryPeerRepository(),
+        now: () => now,
+        socketFactory: (h, p) async {
+          dials++;
+          throw const SocketException(
+            'Connection failed (OS Error: Network is unreachable, errno = 101)',
+          );
+        },
+      );
+      addTearDown(client.disconnect);
+      await client.connect();
+      await waitFor(() => dials >= 2, description: 'first dials');
+
+      // One hour in 31 s steps: every step expires both backoffs.
+      for (var i = 0; i < 120; i++) {
+        now = now.add(const Duration(seconds: 31));
+        final before = dials;
+        await client.addPeer(seedA);
+        await waitFor(() => dials >= before + 2, description: 'redial $i');
+      }
+
+      final connEvents = events
+          .where(
+            (e) => e.name == DiagEvt.connDown || e.name == DiagEvt.connBackoff,
+          )
+          .toList();
+      expect(dials, greaterThan(240));
+      expect(
+        connEvents.length,
+        lessThanOrEqualTo(4),
+        reason: 'one conn.down + conn.backoff per address, not one per dial',
+      );
+      expect(connEvents.first.name, DiagEvt.connDown);
+      expect(connEvents.first.attrs[DiagKey.reason], startsWith('dial_failed'));
+      expect(
+        client.diagSuppressedDialsForTesting,
+        dials - connEvents.where((e) => e.name == DiagEvt.connDown).length,
+      );
+
+      // The suppressed count reaches the summary (window > heartbeat).
+      client.diagFlushFetchSummaryForTesting();
+      now = now.add(const Duration(minutes: 1));
+      client.diagFlushFetchSummaryForTesting();
+      final summary = events.lastWhere((e) => e.name == DiagEvt.fetchSummary);
+      expect(summary.attrs[DiagKey.dialFail], greaterThan(200));
+      expect(client.diagSuppressedDialsForTesting, 0);
+    });
+
+    test('fetch.summary: silent while idle, a heartbeat every 15 min, at '
+        'once after a failure', () async {
+      RpDiag.setEnabled(true);
+      var now = DateTime.utc(2026, 11, 22, 12);
+      final keys = await KeyPair.generate();
+      final client = RedPandaLightClient(
+        selfNodeId: NodeId.fromPublicKey(keys),
+        selfKeys: keys,
+        seeds: const [],
+        peerRepository: InMemoryPeerRepository(),
+        now: () => now,
+        socketFactory: (h, p) async =>
+            throw const SocketException('test: unreachable'),
+      );
+      addTearDown(client.disconnect);
+      List<DiagEvent> summaries() =>
+          events.where((e) => e.name == DiagEvt.fetchSummary).toList();
+
+      client.diagFlushFetchSummaryForTesting(); // opens the window
+      for (var minute = 1; minute < 15; minute++) {
+        now = now.add(const Duration(minutes: 1));
+        client.diagFlushFetchSummaryForTesting();
+      }
+      expect(summaries(), isEmpty, reason: 'nothing happened for 14 min');
+
+      now = now.add(const Duration(minutes: 1, seconds: 1));
+      client.diagFlushFetchSummaryForTesting();
+      expect(summaries(), hasLength(1), reason: 'the 15-min heartbeat');
+
+      // A failing fetch makes the next minute interesting.
+      final oh = OHRegistration(
+        ohId: List.generate(20, (i) => i),
+        keypair: await OHKeypair.generate(),
+        expiresAtMs: DateTime.now()
+            .add(const Duration(days: 7))
+            .millisecondsSinceEpoch,
+        channelId: 'chan',
+        serverEndpoint: 'dead:1',
+      );
+      await client.fetchMessages(oh);
+      now = now.add(const Duration(seconds: 30));
+      client.diagFlushFetchSummaryForTesting();
+      expect(summaries(), hasLength(1), reason: 'less than a minute');
+      now = now.add(const Duration(seconds: 31));
+      client.diagFlushFetchSummaryForTesting();
+      expect(summaries(), hasLength(2));
+      expect(summaries().last.attrs[DiagKey.fetchFail], 1);
+
+      now = now.add(const Duration(minutes: 2));
+      client.diagFlushFetchSummaryForTesting();
+      expect(summaries(), hasLength(2), reason: 'idle again');
     });
   });
 }

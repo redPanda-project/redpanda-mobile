@@ -55,6 +55,7 @@ class FieldDiagnosticsService {
 
   static const String enabledPrefsKey = 'field_diagnostics_enabled';
   static const String deviceNamePrefsKey = 'field_diagnostics_device_name';
+  static const String bootCounterPrefsKey = 'field_diagnostics_boot';
   static const String bufferFileName = 'field_diagnostics.jsonl';
   static const int maxDeviceNameLength = 40;
 
@@ -79,13 +80,29 @@ class FieldDiagnosticsService {
   Timer? _uploadTimer;
   Timer? _flushTimer;
   bool _uploading = false;
+  Timer? _notifyTimer;
   StreamSubscription<ConnectionStatus>? _statusSub;
   bool? _lastConnected;
 
-  /// Random id of this process; with `rp.seq` it orders events across
-  /// restarts.
-  final String boot = _randomHex(4);
+  /// Serializes [setEnabled] (and the restore in [init]): each queued step
+  /// applies the value requested LAST, so an on→off pair can never end on.
+  Future<void> _toggleTail = Future.value();
+  bool? _wanted;
+
+  /// Process counter, persisted and incremented by every [init] (0 when
+  /// [init] never ran). `rp.t_ms` is the primary order key of the events;
+  /// (`rp.boot`, `rp.seq`) identifies an event uniquely, so a batch that is
+  /// uploaded again after the process was killed mid-upload can be
+  /// de-duplicated.
+  int boot = 0;
+
+  /// Random id of this process (`rp.boot_id`); tells two installs apart
+  /// whose [boot] counters restarted from 0.
+  final String bootId = _randomHex(4);
   int _seq = 0;
+
+  /// Ring-buffer drops already reported in a `diag.state`.
+  int _reportedRingDrops = 0;
 
   int uploaded = 0;
   int uploadFailures = 0;
@@ -111,28 +128,73 @@ class FieldDiagnosticsService {
 
   /// Restores the persisted switch and device name. Call once at startup,
   /// before the network client is created, so its first events are kept.
+  ///
+  /// With the network gate closed nothing starts, and any buffer a build for
+  /// the testnet left behind is deleted: it holds identifiers in clear text
+  /// and this build offers no switch to clear it.
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
     _deviceName = prefs.getString(deviceNamePrefsKey) ?? '';
-    if (!available) return;
+    if (!available) {
+      await _deleteBufferFiles();
+      return;
+    }
+    boot = (prefs.getInt(bootCounterPrefsKey) ?? 0) + 1;
+    await prefs.setInt(bootCounterPrefsKey, boot);
     if (prefs.getBool(enabledPrefsKey) ?? false) {
-      await _start();
+      await _enqueue(true, persist: false);
     }
   }
 
   /// Switches diagnostics on or off and persists the choice. Switching on is
   /// ignored when the network gate is closed. Switching off stops recording
-  /// and uploading and deletes the events not uploaded yet.
-  Future<void> setEnabled(bool value) async {
-    if (value && !available) return;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(enabledPrefsKey, value);
-    if (value) {
+  /// and uploading and deletes the events not uploaded yet. Calls are
+  /// serialized; the last requested value wins.
+  Future<void> setEnabled(bool value) {
+    if (value && !available) return Future.value();
+    return _enqueue(value, persist: true);
+  }
+
+  Future<void> _enqueue(bool value, {required bool persist}) {
+    _wanted = value;
+    final next = _toggleTail
+        .then((_) => _apply(persist: persist))
+        .catchError((Object _) {});
+    _toggleTail = next;
+    return next;
+  }
+
+  Future<void> _apply({required bool persist}) async {
+    final want = _wanted;
+    if (want == null) return;
+    if (persist) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(enabledPrefsKey, want);
+    }
+    if (want) {
       await _start();
     } else {
       await _stop();
     }
     _notify();
+  }
+
+  /// Deletes every buffer file of both build modes, including files moved
+  /// aside after a read error.
+  Future<void> _deleteBufferFiles() async {
+    try {
+      final dir = await _directory();
+      if (!await dir.exists()) return;
+      final stem = bufferFileName.replaceFirst('.jsonl', '');
+      await for (final entity in dir.list()) {
+        final name = entity.uri.pathSegments.isEmpty
+            ? ''
+            : entity.uri.pathSegments.last;
+        if (entity is File && name.startsWith(stem)) {
+          await entity.delete();
+        }
+      }
+    } catch (_) {}
   }
 
   Future<void> setDeviceName(String name) async {
@@ -198,25 +260,30 @@ class FieldDiagnosticsService {
     }
   }
 
+  String get _modeFileName => _releaseMode
+      ? bufferFileName
+      : bufferFileName.replaceFirst('.jsonl', '-debug.jsonl');
+
   Future<void> _start() async {
     if (_enabled) return;
+    final dir = await _directory();
     final buffer = _buffer ??= DiagRingBuffer(
-      File(
-        '${(await _directory()).path}/'
-        '${_releaseMode ? bufferFileName : bufferFileName.replaceFirst('.jsonl', '-debug.jsonl')}',
-      ),
+      File('${dir.path}/$_modeFileName'),
       capacityBytes: capacityBytes,
     );
     await buffer.load();
+    // A later request (off) is queued behind this one and undoes it; no
+    // need to start in between.
+    if (_wanted == false) return;
     _enabled = true;
     RpDiag.sink = _record;
     RpDiag.setEnabled(true);
     _uploader.setLogsEnabled(true);
     _uploadTimer?.cancel();
-    _uploadTimer = Timer.periodic(
-      uploadInterval,
-      (_) => unawaited(uploadNow()),
-    );
+    _uploadTimer = Timer.periodic(uploadInterval, (_) {
+      _reportDrops();
+      unawaited(uploadNow());
+    });
     RpDiag.emit(DiagEvt.diagState, {
       DiagKey.enabled: true,
       DiagKey.buffered: buffer.length,
@@ -234,8 +301,34 @@ class FieldDiagnosticsService {
     _uploadTimer = null;
     _flushTimer?.cancel();
     _flushTimer = null;
+    _notifyTimer?.cancel();
+    _notifyTimer = null;
     await _buffer?.clear();
+    // Files a read error moved aside hold unsent events as well.
+    await _buffer?.deleteAsideFiles();
   }
+
+  /// Reports, as a `diag.state`, events that never reached the buffer
+  /// (main-isolate rate limit) or were evicted from it (capacity) since the
+  /// last report — so a gap in the timeline is explained in Sentry.
+  void _reportDrops() {
+    final buffer = _buffer;
+    if (!_enabled || buffer == null) return;
+    final ringDrops = buffer.dropped - _reportedRingDrops;
+    final rateDrops = RpDiag.dropped;
+    if (ringDrops <= 0 && rateDrops <= 0) return;
+    _reportedRingDrops = buffer.dropped;
+    RpDiag.emit(DiagEvt.diagState, {
+      DiagKey.enabled: true,
+      DiagKey.buffered: buffer.length,
+      DiagKey.diagDropped: RpDiag.takeDropped(),
+      DiagKey.ringDropped: ringDrops,
+    });
+  }
+
+  /// Runs the drop report of the upload tick (tests).
+  @visibleForTesting
+  void reportDropsForTesting() => _reportDrops();
 
   /// [RpDiag.sink]: stamps the envelope and appends to the buffer.
   /// Synchronous; the disk write follows within [flushDelay].
@@ -247,6 +340,7 @@ class FieldDiagnosticsService {
       't': event.tMs,
       's': _seq++,
       'b': boot,
+      'i': bootId,
       'd': _deviceName,
       'a': event.attrs,
     });
@@ -254,6 +348,11 @@ class FieldDiagnosticsService {
     _flushTimer ??= Timer(flushDelay, () {
       _flushTimer = null;
       unawaited(buffer.flush());
+    });
+    // The "N waiting" count on screen, at most once a second.
+    _notifyTimer ??= Timer(const Duration(seconds: 1), () {
+      _notifyTimer = null;
+      _notify();
     });
   }
 
@@ -327,7 +426,12 @@ class FieldDiagnosticsService {
     out[_k(DiagKey.build)] = SentryAttribute.string(build);
     out[_k(DiagKey.tMs)] = SentryAttribute.int(record['t'] as int);
     out[_k(DiagKey.seq)] = SentryAttribute.int(record['s'] as int);
-    out[_k(DiagKey.boot)] = SentryAttribute.string(record['b'] as String);
+    final boot = record['b'];
+    if (boot is int) out[_k(DiagKey.boot)] = SentryAttribute.int(boot);
+    final bootId = record['i'];
+    if (bootId is String) {
+      out[_k(DiagKey.bootId)] = SentryAttribute.string(bootId);
+    }
     return out;
   }
 
@@ -355,6 +459,7 @@ class FieldDiagnosticsService {
   Future<void> dispose() async {
     _uploadTimer?.cancel();
     _flushTimer?.cancel();
+    _notifyTimer?.cancel();
     await _statusSub?.cancel();
     await _buffer?.flush();
     await _changes.close();
@@ -481,8 +586,42 @@ class DiagRingBuffer {
       }
       if (_trim() || skipped) _rewrite = true;
     } catch (_) {
-      _rewrite = true;
+      // Unreadable (I/O error, invalid UTF-8): never let the next flush
+      // overwrite it with the empty in-memory state. Move it aside and
+      // start a fresh file; the aside file is deleted with the buffer.
+      _lines.clear();
+      _bytes = 0;
+      _rewrite = false;
+      try {
+        await file.rename(
+          '${file.path}$asideMarker${DateTime.now().millisecondsSinceEpoch}',
+        );
+      } catch (_) {
+        // Could not move it: keep appending to it, never rewrite it in
+        // this process.
+        _appendOnly = true;
+      }
     }
+  }
+
+  /// Infix of a file moved aside after a read error.
+  static const String asideMarker = '.unreadable-';
+
+  /// Set when an unreadable file could not be moved aside: removals then
+  /// stay in memory and the file is only ever appended to.
+  bool _appendOnly = false;
+
+  /// Deletes files [load] moved aside.
+  Future<void> deleteAsideFiles() async {
+    try {
+      final name = file.uri.pathSegments.last;
+      await for (final entity in file.parent.list()) {
+        if (entity is File &&
+            entity.uri.pathSegments.last.startsWith('$name$asideMarker')) {
+          await entity.delete();
+        }
+      }
+    } catch (_) {}
   }
 
   void add(String line) {
@@ -530,6 +669,7 @@ class DiagRingBuffer {
   }
 
   Future<void> _persist() async {
+    if (_rewrite && _appendOnly) _rewrite = false;
     if (_rewrite) {
       _rewrite = false;
       _pendingAppend.clear();

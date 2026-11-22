@@ -1116,6 +1116,88 @@ void main() {
       },
     );
 
+    test('exactly one fetch.item per item: a malformed R-ACK and an '
+        'undecryptable item are reported once each, as dropped', () async {
+      final (host, export) = await makeHost();
+      final (client, socket, relays) = await setupClient(hostExport: export);
+      addTearDown(client.disconnect);
+      final frames = <Uint8List>[];
+      socket.onCommandFrame = (cmd, payload) {
+        if (cmd == 142) frames.add(payload);
+      };
+      late OHRegistration oh;
+      final channel = await channelWithOwnOh(client, onOh: (o) => oh = o);
+      await client.sendMessage(channel.id, 'needs an ack tag');
+      await waitFor(() => frames.isNotEmpty, description: 'garlic frame');
+      final peeled = await peelAny(frames.single, [...relays, host]);
+      events.clear();
+
+      final badAck = Uint8List.fromList([0xff, 0xff, 0xff]);
+      final garbage = Uint8List.fromList(List<int>.filled(64, 3));
+      serveMailbox(socket, [
+        MailItem(
+          receivedAtMs: fixnum.Int64(DateTime.now().millisecondsSinceEpoch),
+          payload: badAck,
+          sequenceId: fixnum.Int64(1),
+          sessionTag: peeled.ackTag,
+        ),
+        MailItem(
+          receivedAtMs: fixnum.Int64(DateTime.now().millisecondsSinceEpoch),
+          payload: garbage,
+          sequenceId: fixnum.Int64(2),
+        ),
+      ]);
+      await client.fetchMessages(oh);
+      final items = named(DiagEvt.fetchItem);
+      expect(items, hasLength(2));
+      final ack = items.singleWhere(
+        (e) => e.attrs[DiagKey.itemHash] == RpDiag.hash16(badAck),
+      );
+      expect(ack.attrs[DiagKey.kind], 'r-ack');
+      expect(ack.attrs[DiagKey.outcome], 'dropped');
+      expect(ack.attrs[DiagKey.reason], 'malformed_r_ack');
+      final bad = items.singleWhere(
+        (e) => e.attrs[DiagKey.itemHash] == RpDiag.hash16(garbage),
+      );
+      expect(bad.attrs[DiagKey.outcome], 'dropped');
+      expect(bad.attrs[DiagKey.reason], startsWith('processing_failed'));
+      expect(named(DiagEvt.ackRouted), isEmpty);
+    });
+
+    test(
+      'a mailbox without channel keys reports every item as no_key',
+      () async {
+        final (_, export) = await makeHost();
+        final (client, socket, _) = await setupClient(hostExport: export);
+        addTearDown(client.disconnect);
+        final oh = OHRegistration(
+          ohId: ownOhId,
+          keypair: await OHKeypair.generate(),
+          expiresAtMs: DateTime.now()
+              .add(const Duration(days: 7))
+              .millisecondsSinceEpoch,
+          channelId: 'unknown-channel',
+          serverEndpoint: 'scripted:1',
+        );
+        await client.restoreOutboundHandle(oh);
+        serveMailbox(socket, [
+          for (var i = 0; i < 2; i++)
+            MailItem(
+              receivedAtMs: fixnum.Int64(DateTime.now().millisecondsSinceEpoch),
+              payload: List<int>.filled(30, i),
+              sequenceId: fixnum.Int64(i + 1),
+            ),
+        ]);
+        await client.fetchMessages(oh);
+        final items = named(DiagEvt.fetchItem);
+        expect(items, hasLength(2));
+        for (final e in items) {
+          expect(e.attrs[DiagKey.outcome], 'dropped');
+          expect(e.attrs[DiagKey.reason], 'no_key');
+        }
+      },
+    );
+
     test('a tagged item with an unknown session tag is reported as dropped '
         'with its reason', () async {
       final (_, export) = await makeHost();

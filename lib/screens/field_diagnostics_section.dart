@@ -53,7 +53,9 @@ class _FieldDiagnosticsSectionState
             'Testnet only. Sends this device\'s connection, mailbox and '
             'message events to Sentry — including mailbox ids, message ids, '
             'node ids and addresses in clear text — under the device name '
-            'below.${status == null ? '' : '\n$status'}',
+            'below. Events already handed to Sentry may still go out for a '
+            'few seconds after switching off.'
+            '${status == null ? '' : '\n$status'}',
           ),
           value: state.enabled,
           onChanged: (value) => notifier.setEnabled(value),

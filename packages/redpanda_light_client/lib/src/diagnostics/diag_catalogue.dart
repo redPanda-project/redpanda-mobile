@@ -73,7 +73,8 @@ class DiagEvt {
   /// Result of a loopback self-test (also run by the connection doctor).
   static const loopbackResult = 'loopback.result';
 
-  /// Diagnostics were switched on, or the app started with them on.
+  /// Diagnostics were switched on, the app started with them on, or events
+  /// were lost (rate limit, buffer capacity) since the last report.
   static const diagState = 'diag.state';
 }
 
@@ -102,17 +103,35 @@ class DiagKey {
   static const build = 'build';
 
   /// Device time of the event, ms since epoch (Sentry shows only seconds).
+  /// THE order key: the time is taken where the event happened (worker or
+  /// main isolate), [seq] only reflects arrival order on the main isolate.
   static const tMs = 't_ms';
 
   /// Per-process sequence number, assigned in arrival order on the main
-  /// isolate; restarts at 0 with every process (see [boot]).
+  /// isolate; restarts at 0 with every process.
   static const seq = 'seq';
 
-  /// Random id of the process that recorded the event; with [seq] it orders
-  /// events across restarts.
+  /// Persisted process counter, +1 per app start. ([boot], [seq]) is the
+  /// unique key of an event — the de-duplication key when a batch is
+  /// uploaded again after the process was killed mid-upload. Not an order
+  /// key (use [tMs]).
   static const boot = 'boot';
 
-  static const envelope = [evt, role, device, net, build, tMs, seq, boot];
+  /// Random id of the process; tells two installs apart whose [boot]
+  /// counters both restarted.
+  static const bootId = 'boot_id';
+
+  static const envelope = [
+    evt,
+    role,
+    device,
+    net,
+    build,
+    tMs,
+    seq,
+    boot,
+    bootId,
+  ];
 
   // --- event fields -------------------------------------------------------
 
@@ -136,6 +155,12 @@ class DiagKey {
   /// Number of connections that can carry commands right now.
   static const peers = 'peers';
   static const retry = 'retry';
+
+  /// Failed dials NOT reported individually (a repeat of the address's last
+  /// reported failure class). On `conn.up` / `conn.down`: for that address
+  /// since its last reported failure; on `fetch.summary`: all addresses in
+  /// the window.
+  static const dialFail = 'dial_fail';
   static const waitMs = 'wait_ms';
 
   static const result = 'result';
@@ -227,6 +252,9 @@ class DiagKey {
   static const error = 'error';
   static const enabled = 'enabled';
   static const buffered = 'buffered';
+
+  /// Events the app's ring buffer evicted (capacity) since the last report.
+  static const ringDropped = 'ring_dropped';
 }
 
 /// Which keys each event may carry — the machine-readable catalogue.
@@ -237,6 +265,7 @@ class DiagCatalogue {
     DiagEvt.appLifecycle: [DiagKey.state],
     DiagEvt.netIfaces: [DiagKey.trigger, DiagKey.ifaces, DiagKey.count],
     DiagEvt.connUp: [
+      DiagKey.dialFail,
       DiagKey.addr,
       DiagKey.node,
       DiagKey.dialMs,
@@ -252,6 +281,7 @@ class DiagCatalogue {
       DiagKey.intentional,
       DiagKey.mailboxHost,
       DiagKey.peers,
+      DiagKey.dialFail,
     ],
     DiagEvt.connBackoff: [DiagKey.addr, DiagKey.retry, DiagKey.waitMs],
     DiagEvt.ohRegister: [
@@ -353,6 +383,7 @@ class DiagCatalogue {
     ],
     DiagEvt.fetchSummary: [
       DiagKey.windowMs,
+      DiagKey.dialFail,
       DiagKey.polls,
       DiagKey.fetchOk,
       DiagKey.fetchFail,
@@ -370,7 +401,12 @@ class DiagCatalogue {
       DiagKey.hopCount,
       DiagKey.error,
     ],
-    DiagEvt.diagState: [DiagKey.enabled, DiagKey.buffered],
+    DiagEvt.diagState: [
+      DiagKey.enabled,
+      DiagKey.buffered,
+      DiagKey.diagDropped,
+      DiagKey.ringDropped,
+    ],
   };
 
   /// `fetch.item` kinds.

@@ -777,6 +777,59 @@ void main() {
       },
     );
 
+    test('oh.register names its purpose: new vs redundancy', () async {
+      final (client, socket, _) = await connectedClient();
+      addTearDown(client.disconnect);
+      socket.onCommandFrame = (command, payload) {
+        if (command == 150) {
+          socket.replyCommand(
+            151,
+            (RegisterOhResponse()
+                  ..status = Status.OK
+                  ..expiresAtMs = fixnum.Int64(
+                    DateTime.now()
+                        .add(const Duration(days: 7))
+                        .millisecondsSinceEpoch,
+                  ))
+                .writeToBuffer(),
+          );
+        } else if (command == 159) {
+          socket.replyCommand(
+            160,
+            (SubscribeResponse()..status = Status.OK).writeToBuffer(),
+          );
+        }
+      };
+      client.addChannelKeys(
+        'chan',
+        channelKey,
+        counterpartOhId: counterpartOhId,
+        isChannelCreator: true,
+      );
+      // A top-up excludes the endpoints already in use, like a failover —
+      // but it is not one.
+      // The top-up needs the node's identity: let it send its public export.
+      socket.reply([2, ...List<int>.generate(64, (i) => i + 1)]);
+      final deadline = DateTime.now().add(const Duration(seconds: 10));
+      while (named(DiagEvt.ohRegister).isEmpty) {
+        if (DateTime.now().isAfter(deadline)) {
+          fail('no redundancy registration');
+        }
+        await client.ensureOhRedundancy('chan');
+        await Future.delayed(const Duration(milliseconds: 20));
+      }
+      expect(
+        named(DiagEvt.ohRegister).first.attrs[DiagKey.purpose],
+        'redundancy',
+      );
+
+      await client.registerOutboundHandle(
+        channelId: 'chan',
+        excludeEndpoints: {'elsewhere:1'},
+      );
+      expect(named(DiagEvt.ohRegister).last.attrs[DiagKey.purpose], 'new');
+    });
+
     test('diagnostics off: the same failover emits nothing', () async {
       RpDiag.setEnabled(false);
       final (client, socket, _) = await connectedClient();

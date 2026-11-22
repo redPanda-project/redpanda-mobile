@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -40,10 +41,14 @@ void main() {
   late FakeUploader uploader;
   final services = <FieldDiagnosticsService>[];
 
-  FieldDiagnosticsService newService({bool releaseMode = true}) {
+  FieldDiagnosticsService newService({
+    bool releaseMode = true,
+    int capacity = DiagRingBuffer.defaultCapacityBytes,
+  }) {
     final s = FieldDiagnosticsService(
       directory: () async => dir,
       uploader: uploader,
+      capacityBytes: capacity,
       uploadInterval: const Duration(hours: 1), // uploads driven by the test
       flushDelay: const Duration(milliseconds: 1),
       releaseMode: releaseMode,
@@ -99,6 +104,26 @@ void main() {
       },
     );
 
+    test(
+      'another network: a buffer left by a testnet build is deleted',
+      () async {
+        final names = [
+          FieldDiagnosticsService.bufferFileName,
+          'field_diagnostics-debug.jsonl',
+          'field_diagnostics.jsonl${DiagRingBuffer.asideMarker}1',
+        ];
+        for (final n in names) {
+          File('${dir.path}/$n').writeAsStringSync('{"e":"conn.up"}\n');
+        }
+        File('${dir.path}/unrelated.txt').writeAsStringSync('keep');
+        await newService().init();
+        for (final n in names) {
+          expect(File('${dir.path}/$n').existsSync(), isFalse, reason: n);
+        }
+        expect(File('${dir.path}/unrelated.txt').existsSync(), isTrue);
+      },
+    );
+
     test('another network: a persisted "on" is not restored', () async {
       SharedPreferences.setMockInitialValues({
         FieldDiagnosticsService.enabledPrefsKey: true,
@@ -111,11 +136,14 @@ void main() {
 
     testWidgets('another network: neither the switch nor the indicator is '
         'shown', (tester) async {
-      final service = newService();
-      SharedPreferences.setMockInitialValues({
-        FieldDiagnosticsService.enabledPrefsKey: true,
-      });
-      await tester.runAsync(service.init);
+      // Not registered for the shared tearDown: nothing ever starts here,
+      // and the tearDown's async work cannot complete inside this widget
+      // test's fake-async zone.
+      final service = FieldDiagnosticsService(
+        directory: () async => dir,
+        uploader: uploader,
+      );
+      await tester.runAsync(() => service.setEnabled(true)); // refused
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
@@ -240,6 +268,27 @@ void main() {
       final buffer = DiagRingBuffer(file);
       await buffer.load();
       expect(buffer.length, 2);
+    });
+
+    test('an unreadable file is moved aside, never overwritten', () async {
+      final file = File('${dir.path}/b.jsonl')
+        ..writeAsBytesSync([0xff, 0xfe, 0x00, 0x80, 0x0a]);
+      final buffer = DiagRingBuffer(file);
+      await buffer.load();
+      expect(buffer.length, 0);
+      buffer.add(line(1));
+      buffer.removeFirst(1); // would rewrite the file
+      buffer.add(line(2));
+      await buffer.flush();
+      final aside = dir
+          .listSync()
+          .whereType<File>()
+          .where((f) => f.path.contains(DiagRingBuffer.asideMarker))
+          .toList();
+      expect(aside, hasLength(1));
+      expect(aside.single.readAsBytesSync(), [0xff, 0xfe, 0x00, 0x80, 0x0a]);
+      await buffer.deleteAsideFiles();
+      expect(aside.single.existsSync(), isFalse);
     });
 
     test('an oversized file is trimmed on load', () async {
@@ -385,6 +434,94 @@ void main() {
         expect(prefs.getBool(FieldDiagnosticsService.enabledPrefsKey), isFalse);
       },
     );
+
+    test('on→off while the start is still loading ends OFF', () async {
+      final gate = Completer<Directory>();
+      final service = FieldDiagnosticsService(
+        directory: () => gate.future,
+        uploader: uploader,
+        uploadInterval: const Duration(hours: 1),
+        releaseMode: true,
+      );
+      services.add(service);
+      final on = service.setEnabled(true);
+      final off = service.setEnabled(false);
+      gate.complete(dir);
+      await on;
+      await off;
+      expect(service.enabled, isFalse);
+      expect(RpDiag.enabled, isFalse);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getBool(FieldDiagnosticsService.enabledPrefsKey), isFalse);
+      RpDiag.emit(DiagEvt.connUp, {DiagKey.addr: 'a:1'});
+      expect(service.buffered, 0);
+    });
+
+    test('off→on→off→on: the last request wins, one buffer', () async {
+      final service = newService();
+      final calls = [
+        service.setEnabled(true),
+        service.setEnabled(false),
+        service.setEnabled(true),
+      ];
+      await Future.wait(calls);
+      expect(service.enabled, isTrue);
+      expect(RpDiag.enabled, isTrue);
+      final buffer = service.buffer;
+      await service.setEnabled(false);
+      await service.setEnabled(true);
+      expect(identical(service.buffer, buffer), isTrue);
+    });
+
+    test(
+      'boot counter: +1 per process start, (boot, seq) on every event',
+      () async {
+        final first = newService();
+        await first.init();
+        final second = newService();
+        await second.init();
+        expect(first.boot, 1);
+        expect(second.boot, 2);
+        await second.setEnabled(true);
+        RpDiag.emit(DiagEvt.connUp, {DiagKey.addr: 'a:1'});
+        await second.uploadNow();
+        final up = uploader.sent.firstWhere((s) => s.$1 == DiagEvt.connUp).$2;
+        expect(up['rp.boot']!.value, 2);
+        expect(up['rp.boot_id']!.value, second.bootId);
+      },
+    );
+
+    test('drops are reported as diag.state', () async {
+      // The trim leaves 10 % headroom, so the report itself fits.
+      final service = newService(capacity: 4000);
+      await service.setEnabled(true);
+      for (var i = 0; i < 60; i++) {
+        RpDiag.emit(DiagEvt.connUp, {DiagKey.addr: 'a:$i'});
+      }
+      expect(service.droppedByCapacity, greaterThan(0));
+      service.reportDropsForTesting();
+      final state =
+          jsonDecode(
+                service.buffer!
+                    .peek(1000)
+                    .lastWhere((l) => l.contains('diag.state')),
+              )
+              as Map;
+      expect((state['a'] as Map)['ring_dropped'], greaterThan(0));
+      // Reported once, not again.
+      final count = service.buffer!
+          .peek(1000)
+          .where((l) => l.contains('diag.state'))
+          .length;
+      service.reportDropsForTesting();
+      expect(
+        service.buffer!
+            .peek(1000)
+            .where((l) => l.contains('diag.state'))
+            .length,
+        count,
+      );
+    });
 
     test('the envelope cannot be overwritten by an event field', () {
       final attrs = FieldDiagnosticsService.toSentryAttributes({
