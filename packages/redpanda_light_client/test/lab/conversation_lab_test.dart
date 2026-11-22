@@ -245,27 +245,61 @@ Future<bool> _sendOnce(
   return true;
 }
 
-Map<String, Object?> _roundResult(
+/// A round's report entry plus the side that received its last message
+/// ([lastReceiver], null when nothing arrived) — that side opens the next
+/// round.
+typedef _RoundOutcome = ({Map<String, Object?> report, _Party? lastReceiver});
+
+_RoundOutcome _roundOutcome(
   String label,
   List<Map<String, Object?>> messages,
   bool complete,
   int startMs,
   int? endMs,
+  _Party? lastReceiver,
 ) {
   final totalMs = complete && endMs != null ? endMs - startMs : null;
-  return {
-    'label': label,
-    'complete': complete,
-    'totalMs': totalMs,
-    'withinBudget':
-        totalMs != null && totalMs <= conversationBudget.inMilliseconds,
-    'messages': messages,
-  };
+  return (
+    report: {
+      'label': label,
+      'complete': complete,
+      'totalMs': totalMs,
+      'withinBudget':
+          totalMs != null && totalMs <= conversationBudget.inMilliseconds,
+      'messages': messages,
+    },
+    lastReceiver: lastReceiver,
+  );
+}
+
+/// Waits for [content] at [receiver] until [lostAfter] after it was SENT
+/// ([sentMs] on the lab clock) and records the outcome in [entry]. An
+/// arrival after that deadline counts as lost, also when it is already known
+/// by the time this is called. The arrival time on the lab clock, or null.
+Future<int?> _awaitArrival(
+  _Party receiver,
+  String content,
+  Map<String, Object?> entry,
+  int sentMs,
+  Stopwatch clock,
+) async {
+  final deadlineMs = sentMs + lostAfter.inMilliseconds;
+  final remainingMs = math.max(0, deadlineMs - clock.elapsedMilliseconds);
+  final arrivedMs = await receiver.arrivalOf(
+    content,
+    Duration(milliseconds: remainingMs),
+  );
+  if (arrivedMs == null || arrivedMs > deadlineMs) {
+    entry['lost'] = true;
+    return null;
+  }
+  entry['latencyMs'] = arrivedMs - sentMs;
+  return arrivedMs;
 }
 
 /// One conversation round: [messagesPerRound] alternating messages, each sent
 /// once, the next one the moment the previous arrived. [first] sends #1.
-Future<Map<String, Object?>> _runRound(
+Future<_RoundOutcome> _runRound(
   String label,
   String channelId,
   _Party first,
@@ -275,6 +309,7 @@ Future<Map<String, Object?>> _runRound(
   final messages = <Map<String, Object?>>[];
   final startMs = clock.elapsedMilliseconds;
   int? endMs;
+  _Party? lastReceiver;
   var complete = true;
 
   for (var i = 1; i <= messagesPerRound; i++) {
@@ -291,21 +326,26 @@ Future<Map<String, Object?>> _runRound(
       complete = false;
       break;
     }
-    final arrivedMs = await receiver.arrivalOf(content, lostAfter);
+    final arrivedMs = await _awaitArrival(
+      receiver,
+      content,
+      entry,
+      entry['sentAtMs']! as int,
+      clock,
+    );
     if (arrivedMs == null) {
-      entry['lost'] = true;
       complete = false;
       break;
     }
-    entry['latencyMs'] = arrivedMs - (entry['sentAtMs']! as int);
     endMs = arrivedMs;
+    lastReceiver = receiver;
   }
-  return _roundResult(label, messages, complete, startMs, endMs);
+  return _roundOutcome(label, messages, complete, startMs, endMs, lastReceiver);
 }
 
 /// The burst round: [first] sends two messages back to back, then [second]
 /// does. Every message is still sent once; all four must arrive.
-Future<Map<String, Object?>> _runBurst(
+Future<_RoundOutcome> _runBurst(
   String label,
   String channelId,
   _Party first,
@@ -315,6 +355,7 @@ Future<Map<String, Object?>> _runBurst(
   final messages = <Map<String, Object?>>[];
   final startMs = clock.elapsedMilliseconds;
   int? endMs;
+  _Party? lastReceiver;
   var complete = true;
   var n = 0;
 
@@ -335,18 +376,23 @@ Future<Map<String, Object?>> _runBurst(
       }
     }
     for (final (content, entry) in pending) {
-      final arrivedMs = await receiver.arrivalOf(content, lostAfter);
+      final arrivedMs = await _awaitArrival(
+        receiver,
+        content,
+        entry,
+        entry['sentAtMs']! as int,
+        clock,
+      );
       if (arrivedMs == null) {
-        entry['lost'] = true;
         complete = false;
         continue;
       }
-      entry['latencyMs'] = arrivedMs - (entry['sentAtMs']! as int);
       endMs = math.max(endMs ?? 0, arrivedMs);
+      lastReceiver = receiver;
     }
     if (!complete) break;
   }
-  return _roundResult(label, messages, complete, startMs, endMs);
+  return _roundOutcome(label, messages, complete, startMs, endMs, lastReceiver);
 }
 
 void _emitReport(Map<String, Object?> report) {
@@ -689,7 +735,9 @@ void main() {
       report['rounds'] = rounds;
 
       // Bob's hello arrived last, so Alice opens; after that the opener is
-      // always the side that received the previous round's last message.
+      // the side that received the last message that actually ARRIVED in
+      // the previous round — also when that round stopped early. A round in
+      // which nothing arrived leaves the opener as it was.
       var opener = alice;
       var other = bob;
 
@@ -701,13 +749,12 @@ void main() {
           );
           return;
         }
-        final result = burst
+        final outcome = burst
             ? await _runBurst(label, channel.id, opener, other, clock)
             : await _runRound(label, channel.id, opener, other, clock);
+        final result = outcome.report;
         rounds.add(result);
-        // An odd number of alternating messages ends at `other`, who opens
-        // next; a burst ends with `other` sending, so `opener` opens again.
-        if (!burst && messagesPerRound.isOdd) {
+        if (outcome.lastReceiver == other) {
           (opener, other) = (other, opener);
         }
         if (result['withinBudget'] != true) {
