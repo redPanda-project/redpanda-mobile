@@ -576,14 +576,25 @@ class RedPandaLightClient implements RedPandaClient {
       return false;
     });
 
+    // Nodes hosting one of our own mailboxes (T163). Neither the capacity
+    // trim nor the rotation may pick them: fetch, ack, renew and the Notify
+    // subscription only work over the connection to exactly that node.
+    final mailboxHosts = _ownMailboxHostAddresses();
+
     // 2. Classify Current Peers
     // A. Verify Capacity
     if (_peers.length > maxConnections) {
-      // Disconnect worst performing extra peers
+      // Disconnect worst performing extra peers: everything past the first
+      // maxConnections entries. Mailbox hosts sort first (then lower latency
+      // first), so a host is trimmed only when there are more hosts than
+      // slots.
       final sortedParams = _peers.values.toList()
-        ..sort(
-          (a, b) => a.averageLatencyMs.compareTo(b.averageLatencyMs),
-        ); // Lower latency first
+        ..sort((a, b) {
+          final hostA = mailboxHosts.contains(a.address) ? 1 : 0;
+          final hostB = mailboxHosts.contains(b.address) ? 1 : 0;
+          if (hostA != hostB) return hostB - hostA;
+          return a.averageLatencyMs.compareTo(b.averageLatencyMs);
+        });
 
       // Remove active peers that are worst
       for (var i = maxConnections; i < sortedParams.length; i++) {
@@ -595,34 +606,25 @@ class RedPandaLightClient implements RedPandaClient {
     }
 
     // B. Rotate Roaming Peers
-    // B. Rotate Roaming Peers
     final best3 = _peerRepository.getBestPeers(3).map((p) => p.address).toSet();
-    final connectedRoaming = _peers.values
-        .where((p) => p.isHandshakeVerified && !best3.contains(p.address))
-        .toList();
-
-    if (connectedRoaming.length >= 2) {
-      // Find candidates for rotation (Age > 10s)
-      final candidates = connectedRoaming.where((p) {
-        final age = DateTime.now().difference(p.connectedSince).inSeconds;
-        // print('DEBUG: Rotation Candidate: ${p.address} Age=${age}s');
-        return age >= 10;
-      }).toList();
-
-      // Disconnect ONLY ONE (the oldest)
-      if (candidates.isNotEmpty) {
-        candidates.sort(
-          (a, b) => a.connectedSince.compareTo(b.connectedSince),
-        ); // Oldest first
-        final victim = candidates.first;
-        final age = DateTime.now().difference(victim.connectedSince).inSeconds;
-
-        RpLog.debug(
-          'RedPandaLightClient: Rotating ONE roaming peer ${victim.address} (Connected ${age}s). Keeping others.',
-        );
-        _intentionalDisconnects.add(victim.address);
-        victim.disconnect();
-      }
+    final victimAddress = pickRotationVictim(
+      verifiedPeers: [
+        for (final p in _peers.values)
+          if (p.isHandshakeVerified)
+            (address: p.address, connectedSince: p.connectedSince),
+      ],
+      core: best3,
+      protected: mailboxHosts,
+      now: DateTime.now(),
+    );
+    final victim = victimAddress == null ? null : _peers[victimAddress];
+    if (victim != null) {
+      final age = DateTime.now().difference(victim.connectedSince).inSeconds;
+      RpLog.debug(
+        'RedPandaLightClient: Rotating ONE roaming peer ${victim.address} (Connected ${age}s). Keeping others.',
+      );
+      _intentionalDisconnects.add(victim.address);
+      victim.disconnect();
     }
 
     // 3. Slot Filling
@@ -716,7 +718,17 @@ class RedPandaLightClient implements RedPandaClient {
             selfNodeId: selfNodeId,
             selfKeys: selfKeys,
             socketFactory: _socketFactory,
-            onStatusChange: _updateStatus,
+            onStatusChange: (status) {
+              // The client-wide connect edge in [_updateStatus] subscribes
+              // every handle; it only fires for the FIRST sendable peer. A
+              // mailbox host that (re)connects while other peers stay up
+              // needs its own re-subscribe (T163).
+              final wasConnected = _currentStatus == ConnectionStatus.connected;
+              _updateStatus(status);
+              if (status == ConnectionStatus.connected && wasConnected) {
+                _onPeerConnected(address);
+              }
+            },
             onNodeIdDiscovered: (nodeId, encryptionPublicKey) {
               _peerRepository.updatePeer(
                 address,
@@ -806,6 +818,87 @@ class RedPandaLightClient implements RedPandaClient {
   }
 
   // --- Helper Methods ---
+
+  /// The roaming peer the connection check disconnects this cycle, or null.
+  ///
+  /// Roaming = handshake-verified and not in [core] (the repository's best
+  /// three). Rotation only starts once both [roamingSlots] are taken. The
+  /// victim is the oldest roaming peer connected for at least [minAge] that
+  /// is NOT in [protected] (T163: nodes hosting one of our own mailboxes —
+  /// rotating one away killed its Notify subscription and left fetches
+  /// failing until the redial, ~4–5 s per message and spurious T21
+  /// failovers in the 5-node lab). Protected peers still count toward the
+  /// "slots taken" trigger, so the remaining non-host roaming peers keep
+  /// rotating.
+  ///
+  /// Pure (no client state) so the selection is testable without sockets or
+  /// a 10 s wall-clock wait. Public for tests only.
+  static String? pickRotationVictim({
+    required Iterable<({String address, DateTime connectedSince})>
+    verifiedPeers,
+    required Set<String> core,
+    required Set<String> protected,
+    required DateTime now,
+    Duration minAge = const Duration(seconds: 10),
+  }) {
+    final roaming = verifiedPeers
+        .where((p) => !core.contains(p.address))
+        .toList();
+    if (roaming.length < roamingSlots) return null;
+    final candidates =
+        roaming
+            .where(
+              (p) =>
+                  !protected.contains(p.address) &&
+                  now.difference(p.connectedSince) >= minAge,
+            )
+            .toList()
+          ..sort((a, b) => a.connectedSince.compareTo(b.connectedSince));
+    return candidates.firstOrNull?.address;
+  }
+
+  /// A peer reached [ActivePeer.canSendCommands] while the client was
+  /// already connected (T163). A Notify subscription lives only for its
+  /// connection, so every own mailbox this peer hosts is re-subscribed, and
+  /// the next poll is pulled forward to collect what arrived while the host
+  /// was unreachable — the same two steps the client-wide connect edge in
+  /// [_updateStatus] runs for all handles. Before this, a host that
+  /// reconnected after the first connect edge (rotation, T33 forced
+  /// reconnect, a dropped socket) stayed unsubscribed until the client lost
+  /// ALL peers, and its mail arrived only with the poll.
+  void _onPeerConnected(String address) {
+    final peer = _peers[address];
+    if (peer == null || !peer.canSendCommands) return;
+    var hosted = 0;
+    for (final oh in List.of(_registeredOHs)) {
+      final endpoint = oh.serverEndpoint;
+      if (endpoint == null || !identical(_livePeerFor(endpoint), peer)) {
+        continue;
+      }
+      _enqueueSubscribe(oh);
+      hosted++;
+    }
+    if (hosted == 0) return;
+    RpLog.info(
+      'RedPandaLightClient: mailbox host $address connected — '
+      're-subscribing $hosted handle(s)',
+    );
+    const catchUp = Duration(seconds: 1);
+    final next = _nextPollAt;
+    if (_pollingEnabled &&
+        !_pollInProgress &&
+        (next == null || next.isAfter(DateTime.now().add(catchUp)))) {
+      _schedulePoll(catchUp);
+    }
+  }
+
+  /// Addresses of the peers hosting our own mailboxes (T163): every
+  /// registered OH's recorded endpoint plus the live peer serving it under
+  /// another name ([_hostAddresses]).
+  Set<String> _ownMailboxHostAddresses() => {
+    for (final oh in _registeredOHs)
+      if (oh.serverEndpoint != null) ..._hostAddresses(oh.serverEndpoint),
+  };
 
   /// Whether [address] is still inside its retry backoff and must not be
   /// dialled in this cycle.
