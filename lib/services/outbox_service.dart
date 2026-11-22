@@ -362,9 +362,16 @@ class OutboxService {
     final requeued = await _messages.resetForImmediateRetry(messageRowId);
     if (!requeued) return false;
     // T164 review R8: the user starts the message over — including its
-    // immediate re-send budget, like its backoff.
-    final row = await _messages.getMessage(messageRowId);
-    if (row != null) _forget(row.conversationId, row.messageId);
+    // immediate re-send budget, like its backoff. The row is already reset
+    // at this point, so a failing read here must not keep the pass from
+    // being kicked (or turn the user's retry into an error): the budget
+    // then simply stays as it was.
+    try {
+      final row = await _messages.getMessage(messageRowId);
+      if (row != null) _forget(row.conversationId, row.messageId);
+    } catch (e) {
+      debugPrint('OutboxService: manual retry could not reset the budget: $e');
+    }
     unawaited(
       runPass().catchError(
         (Object e) => debugPrint('OutboxService: manual retry failed: $e'),
