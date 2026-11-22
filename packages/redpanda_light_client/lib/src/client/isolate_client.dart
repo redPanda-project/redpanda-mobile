@@ -10,6 +10,7 @@ import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
 import 'package:redpanda_light_client/src/client/worker_replay_state.dart';
 import 'package:redpanda_light_client/src/client_facade.dart';
 import 'package:redpanda_light_client/src/crypto/oh_keypair.dart';
+import 'package:redpanda_light_client/src/diagnostics/rp_diag.dart';
 import 'package:redpanda_light_client/src/domain/channel_doctor_report.dart';
 import 'package:redpanda_light_client/src/domain/decrypted_message.dart';
 import 'package:redpanda_light_client/src/domain/group_state.dart';
@@ -78,7 +79,8 @@ class RedPandaIsolateClient implements RedPandaClient {
   /// The command types whose post-respawn state is carried by a client FLAG
   /// or by the init path instead of by [WorkerReplayState]: [CmdInit] from
   /// [_initNodeId]/[_initKeys], connect/disconnect from [_connectRequested],
-  /// pause/resume from [_lifecyclePaused] — see [_onWorkerReady] and
+  /// pause/resume from [_lifecyclePaused], diagnostics from [RpDiag.enabled]
+  /// — see [_onWorkerReady] and
   /// [_replayState]. Together with `WorkerReplayState.replayCommands()` this
   /// is the complete set of commands the worker-ready path re-establishes;
   /// `isolate_command_recovery_test.dart` holds every
@@ -91,6 +93,7 @@ class RedPandaIsolateClient implements RedPandaClient {
     CmdDisconnect,
     CmdLifecyclePause,
     CmdLifecycleResume,
+    CmdSetDiagnostics,
   };
 
   /// Worker entry point override — exists only so tests can inject a fake
@@ -139,7 +142,15 @@ class RedPandaIsolateClient implements RedPandaClient {
   }) : _explicitNodeId = selfNodeId,
        _explicitKeys = selfKeys,
        _workerEntryPointOverride = workerEntryPoint {
+    RpDiag.addListener(_onDiagnosticsChanged);
     _startIsolate();
+  }
+
+  /// T180: mirrors the main isolate's diagnostics switch into the worker. A
+  /// change while no worker is attached is dropped by [_send] on purpose —
+  /// [_onWorkerReady] sends the current state.
+  void _onDiagnosticsChanged(bool enabled) {
+    _send(CmdSetDiagnostics(enabled));
   }
 
   Future<void> _startIsolate() async {
@@ -195,6 +206,7 @@ class RedPandaIsolateClient implements RedPandaClient {
   /// its whole lifetime.
   void dispose() {
     _disposed = true;
+    RpDiag.removeListener(_onDiagnosticsChanged);
     _isolate?.kill(priority: Isolate.immediate);
     _isolate = null;
     _exitPort?.close();
@@ -222,6 +234,9 @@ class RedPandaIsolateClient implements RedPandaClient {
       return;
     }
     _sendPort = port;
+    // T180: ahead of CmdInit, so the new client's first connection events
+    // are already captured.
+    if (RpDiag.enabled) port.send(CmdSetDiagnostics(true));
     port.send(CmdInit(nodeId: _initNodeId, keyPair: _initKeys, seeds: seeds));
     _replayState(port);
     if (!_isolateReady.isCompleted) {
@@ -445,6 +460,8 @@ class RedPandaIsolateClient implements RedPandaClient {
       if (!_stateController.isClosed) {
         _stateController.add(event.update);
       }
+    } else if (event is EventDiag) {
+      RpDiag.deliver(event.event);
     } else if (event is EventLog) {
       // The worker forwards only LogLevel.info lines (privacy-sensitive
       // debug details never leave the worker), so re-emit at info here —
@@ -840,6 +857,7 @@ void _isolateEntryPoint(SendPort mainSendPort) {
       mainSendPort.send(EventLog(message));
     }
   };
+  installWorkerDiagnostics(mainSendPort);
 
   // Catch every uncaught async error (e.g. a socket write failing with
   // "connection reset by peer") so a single bad connection can never take
@@ -857,6 +875,9 @@ void _runWorker(SendPort mainSendPort) {
   RedPandaLightClient? client;
 
   receivePort.listen((message) async {
+    // T180: handled before the init check — the switch arrives ahead of
+    // CmdInit on a (re)spawn.
+    if (handleWorkerDiagnosticsCommand(message)) return;
     if (message is CmdInit) {
       RpLog.debug('RedPandaWorker: Initializing client...');
 
@@ -1106,6 +1127,22 @@ void _runWorker(SendPort mainSendPort) {
       RpLog.debug(stack.toString());
     }
   });
+}
+
+/// T180: routes the worker isolate's [RpDiag] events to the main isolate.
+/// Part of the worker entry point; public so a test worker can use the same
+/// wiring.
+void installWorkerDiagnostics(SendPort mainSendPort) {
+  RpDiag.sink = (event) => mainSendPort.send(EventDiag(event));
+}
+
+/// T180: applies a [CmdSetDiagnostics] inside the worker; returns whether
+/// [message] was one. Public for the same reason as
+/// [installWorkerDiagnostics].
+bool handleWorkerDiagnosticsCommand(Object? message) {
+  if (message is! CmdSetDiagnostics) return false;
+  RpDiag.setEnabled(message.enabled);
+  return true;
 }
 
 /// Runs a group operation and reports its outcome as [EventGroupOpDone],

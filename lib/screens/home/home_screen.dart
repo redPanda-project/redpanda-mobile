@@ -9,6 +9,7 @@ import 'package:redpanda/repositories/group_repository.dart';
 import 'package:redpanda/services/channel_health.dart';
 import 'package:redpanda/services/group_service.dart';
 import 'package:redpanda/shared/widgets/connection_status_badge.dart';
+import 'package:redpanda/shared/widgets/field_diagnostics_indicator.dart';
 import 'package:redpanda/shared/widgets/glass_backdrop.dart';
 import 'package:redpanda/shared/widgets/glass_surface.dart';
 
@@ -75,6 +76,7 @@ class _GlassTopBar extends StatelessWidget implements PreferredSizeWidget {
                   ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
                 ),
               ),
+              const FieldDiagnosticsIndicator(),
               const ConnectionStatusBadge(),
             ],
           ),

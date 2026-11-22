@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:redpanda/repositories/channel_repository.dart';
 import 'package:redpanda/router.dart';
+import 'package:redpanda/services/field_diagnostics.dart';
 import 'package:redpanda/services/field_logging.dart';
 import 'package:redpanda/services/foreground_service.dart';
 import 'package:redpanda/services/group_service.dart';
@@ -29,6 +30,14 @@ Future<void> main() async {
   } catch (e) {
     debugPrint('Failed to restore field logging setting: $e');
   }
+  // T180: restore the diagnostics switch before the network client exists,
+  // so the worker is switched on before its first connection events.
+  try {
+    await FieldDiagnosticsService.instance.init();
+  } catch (e) {
+    debugPrint('Failed to restore field diagnostics setting: $e');
+  }
+  RpDiag.emit(DiagEvt.appLifecycle, {DiagKey.state: 'start'});
   if (!kReleaseMode) {
     // Debug and profile runs (dev, E2E gate) report crashes locally;
     // keep Sentry to field release builds.
@@ -39,6 +48,13 @@ Future<void> main() async {
     options.dsn = _sentryDsn;
     options.tracesSampleRate = 0;
     options.sendDefaultPii = false;
+    // T180 field diagnostics (testnet only, opt-in): structured logs are
+    // on only while the switch is; beforeSendLog drops any log otherwise
+    // and restores each event's original device time.
+    options.enableLogs = RpDiag.enabled;
+    options.beforeSendLog = FieldDiagnosticsService.beforeSendLog;
+    SentryDiagUploader.options = options;
+    SentryDiagUploader.probeHost = Uri.parse(_sentryDsn).host;
   });
   FlutterError.onError = (details) {
     FlutterError.presentError(details);
@@ -116,6 +132,12 @@ class _MyAppState extends ConsumerState<MyApp> {
     super.initState();
     // Synchronous connection trigger (KeyPair gen is now fast)
     ref.read(redPandaClientProvider).connect();
+    // T180: net.ifaces snapshots on every connected/disconnected change.
+    ref
+        .read(fieldDiagnosticsServiceProvider)
+        .attachConnectionStatus(
+          ref.read(redPandaClientProvider).connectionStatus,
+        );
 
     // MS02: persist incoming messages/cursors, restore OHs, retry sends
     final syncService = ref.read(messageSyncServiceProvider);
@@ -165,11 +187,16 @@ class _MyAppState extends ConsumerState<MyApp> {
     // isolate client, so lifecycle signals silently never reached the
     // network worker (iOS resume waited for the next poll tick).
     final client = ref.read(redPandaClientProvider);
+    final diagnostics = ref.read(fieldDiagnosticsServiceProvider);
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
+      RpDiag.emit(DiagEvt.appLifecycle, {DiagKey.state: state.name});
       client.onPause();
+      unawaited(diagnostics.onPause());
     } else if (state == AppLifecycleState.resumed) {
+      RpDiag.emit(DiagEvt.appLifecycle, {DiagKey.state: state.name});
       client.onResume();
+      unawaited(diagnostics.onResume());
     }
   }
 

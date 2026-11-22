@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:redpanda/screens/field_diagnostics_section.dart';
 import 'package:redpanda/services/field_logging.dart';
 import 'package:redpanda/shared/providers.dart';
 import 'package:redpanda_light_client/redpanda_light_client.dart';
@@ -14,15 +15,21 @@ class DebugPeerStatsScreen extends ConsumerWidget {
     final connectingPeers = ref.watch(connectingPeersProvider);
     final fieldLogging = ref.watch(fieldLoggingProvider);
 
-    final loggingToggle = SwitchListTile(
-      title: const Text('Field logging (logcat)'),
-      subtitle: const Text(
-        'Writes operational logs to the device log for adb logcat. '
-        'Info level only — never OH ids, peer addresses or payloads.',
-      ),
-      value: fieldLogging,
-      onChanged: (value) =>
-          ref.read(fieldLoggingProvider.notifier).setEnabled(value),
+    final loggingToggle = Column(
+      children: [
+        SwitchListTile(
+          title: const Text('Field logging (logcat)'),
+          subtitle: const Text(
+            'Writes operational logs to the device log for adb logcat. '
+            'Info level only — never OH ids, peer addresses or payloads.',
+          ),
+          value: fieldLogging,
+          onChanged: (value) =>
+              ref.read(fieldLoggingProvider.notifier).setEnabled(value),
+        ),
+        // T180: testnet-only, renders nothing elsewhere.
+        const FieldDiagnosticsSection(),
+      ],
     );
 
     return Scaffold(

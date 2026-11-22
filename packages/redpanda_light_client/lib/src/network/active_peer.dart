@@ -152,6 +152,14 @@ class ActivePeer {
 
   // Stats
   final DateTime connectedSince = DateTime.now();
+
+  /// When this connection reached "connected" (encryption active), null
+  /// before. Diagnostics only (T180).
+  DateTime? upSince;
+
+  /// Why the connection ended — the first reason [_shutdown] was given.
+  /// Diagnostics only (T180); null while the connection is alive.
+  String? disconnectReason;
   int averageLatencyMs = 9999;
   Stopwatch? _pingStopwatch;
 
@@ -225,7 +233,7 @@ class ActivePeer {
           '${_handshakeDeadline.inSeconds}s '
           '(verified=$_handshakeVerified) — dropping the connection',
         );
-        _shutdown();
+        _shutdown('handshake_timeout');
       });
 
       // Write failures (e.g. "connection reset by peer" during a send)
@@ -235,7 +243,7 @@ class ActivePeer {
       unawaited(
         socket.done.catchError((Object e) {
           RpLog.debug('ActivePeer($address) socket write error: $e');
-          _shutdown();
+          _shutdown('write_error: $e');
         }),
       );
 
@@ -246,22 +254,23 @@ class ActivePeer {
         _handleSocketData,
         onError: (e) {
           RpLog.debug('ActivePeer($address) socket error: $e');
-          _shutdown();
+          _shutdown('socket_error: $e');
         },
         onDone: () {
           RpLog.debug('ActivePeer($address) socket closed');
-          _shutdown();
+          _shutdown('closed');
         },
       );
     } catch (e) {
       RpLog.debug('ActivePeer($address) connection failed: $e');
-      _shutdown();
+      _shutdown('dial_failed: $e');
     }
   }
 
-  void _shutdown() {
+  void _shutdown(String reason) {
     if (_isDisconnecting) return;
     _isDisconnecting = true;
+    disconnectReason = reason;
     _handshakeTimer?.cancel();
     _handshakeTimer = null;
     _socket?.destroy(); // or close
@@ -272,7 +281,7 @@ class ActivePeer {
   }
 
   Future<void> disconnect() async {
-    _shutdown();
+    _shutdown('local');
   }
 
   void _sendHandshake() {
@@ -313,7 +322,7 @@ class ActivePeer {
           // Auth/framing failures must drop the connection (never deliver
           // silently corrupted plaintext).
           RpLog.debug('ActivePeer($address): inbound processing failed: $e');
-          _shutdown();
+          _shutdown('inbound_error: $e');
         });
   }
 
@@ -475,7 +484,7 @@ class ActivePeer {
     } catch (e, stack) {
       RpLog.debug('ActivePeer($address): Error processing buffer: $e');
       RpLog.debug(stack.toString());
-      _shutdown();
+      _shutdown('buffer_error: $e');
     } finally {
       _isProcessingBuffer = false;
     }
@@ -486,7 +495,7 @@ class ActivePeer {
     final magicVal = String.fromCharCodes(magicBytes);
     if (magicVal != _magic) {
       RpLog.debug('ActivePeer($address): Invalid magic. Disconnecting.');
-      _shutdown();
+      _shutdown('invalid_magic');
       return;
     }
 
@@ -641,7 +650,7 @@ class ActivePeer {
     } catch (e, stack) {
       RpLog.debug('ActivePeer($address): Error activating encryption: $e');
       RpLog.debug(stack.toString());
-      _shutdown();
+      _shutdown('encryption_error: $e');
     }
   }
 
@@ -654,6 +663,7 @@ class ActivePeer {
     _handshakeTimer = null;
     if (_connectedReported || _isDisconnecting) return;
     _connectedReported = true;
+    upSince = DateTime.now();
     onHandshakeComplete?.call();
     onStatusChange(ConnectionStatus.connected);
   }
@@ -716,7 +726,7 @@ class ActivePeer {
         })
         .catchError((Object e) {
           RpLog.debug('ActivePeer($address): outbound processing failed: $e');
-          _shutdown();
+          _shutdown('outbound_error: $e');
         });
   }
 
