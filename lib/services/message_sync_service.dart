@@ -158,7 +158,14 @@ class MessageSyncService {
       case OwnOhSetUpdate():
         await handleOhRegistrationUpdate(update);
       case CounterpartOhUpdate():
-        await handleCounterpartOhUpdate(update);
+        try {
+          await handleCounterpartOhUpdate(update);
+        } finally {
+          // T164: the client already holds the new set in memory, so the
+          // channel's waiting messages are sendable now — even if this
+          // write failed. Kicks a pass; does not wait for it.
+          _outbox.onCounterpartOhUpdate(update);
+        }
       case GroupStateUpdate():
         await _groups.applyStateUpdate(update);
       default:
