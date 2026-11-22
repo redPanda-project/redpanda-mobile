@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:fixnum/fixnum.dart' as fixnum;
@@ -8,6 +9,7 @@ import 'package:hex/hex.dart';
 import 'package:test/test.dart';
 
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
+import 'package:redpanda_light_client/src/client/rendezvous_timing.dart';
 import 'package:redpanda_light_client/src/crypto/channel_message.dart';
 import 'package:redpanda_light_client/src/crypto/channel_rendezvous.dart';
 import 'package:redpanda_light_client/src/crypto/crypto_utils.dart';
@@ -163,8 +165,27 @@ const chan = 'chan';
 final channelKey = List<int>.generate(32, (i) => i + 1);
 final channelSecret = List<int>.generate(32, (i) => 200 - i);
 
+/// Short, deterministic T160 timing: the tests exercise the order of
+/// events, not the production durations (those are pinned in
+/// `rendezvous_timing_test.dart`).
+const testHold = Duration(milliseconds: 400);
+RendezvousTiming testTiming() => RendezvousTiming(
+  prePublishHoldMax: testHold,
+  pairingLookupDelays: const [
+    Duration(milliseconds: 250),
+    Duration(milliseconds: 250),
+    Duration(milliseconds: 250),
+  ],
+  jitter: 0,
+  firstRetryFloor: Duration.zero,
+  yesterdayOffsetMin: const Duration(milliseconds: 40),
+  yesterdayOffsetMax: const Duration(milliseconds: 40),
+  random: Random(7),
+);
+
 Future<(RedPandaLightClient, ScriptedNode, List<TestHop>)> connectedClient({
   int hopCount = 6,
+  RendezvousTiming? timing,
 }) async {
   final node = ScriptedNode();
   final repo = InMemoryPeerRepository();
@@ -184,6 +205,7 @@ Future<(RedPandaLightClient, ScriptedNode, List<TestHop>)> connectedClient({
     selfKeys: keys,
     seeds: [nodeEndpoint],
     peerRepository: repo,
+    rendezvousTiming: timing ?? testTiming(),
     socketFactory: (h, p) async {
       if (h == 'scripted') return node;
       throw const SocketException('test: unreachable');
@@ -212,15 +234,32 @@ Future<void> pumpUntil(
   }
 }
 
+/// Today's (index 0) and yesterday's (index 1) record key, hex.
+Future<List<String>> recordKeysHex() async {
+  final m = RendezvousManager()
+    ..register(
+      chan,
+      channelSecret: channelSecret,
+      isCreator: true,
+      ownName: '',
+    );
+  final keys = await m.lookupKeys(chan, DateTime.now().millisecondsSinceEpoch);
+  return [for (final k in keys) HEX.encode(k)];
+}
+
 /// One peeled garlic packet as the node would see it at the exit.
 class Submitted {
   final int command;
   final Uint8List inner;
-  Submitted(this.command, this.inner);
+  final String exitNodeIdHex;
+  Submitted(this.command, this.inner, this.exitNodeIdHex);
 
   bool get isStore => command == GarlicBuilder.cmdRecordStore;
   bool get isLookup => command == GarlicBuilder.cmdRecordLookup;
   bool get isDeposit => !isStore && !isLookup;
+
+  /// The looked-up record key (hex).
+  String get lookupKeyHex => HEX.encode(inner.sublist(1, 21));
 
   /// The lookup's ack session tag (the answer must carry it).
   Uint8List get lookupAckTag =>
@@ -237,13 +276,25 @@ class Submitted {
       record.content,
     );
   }
+
+  /// The stored record's timestamp.
+  int get storedTs {
+    final len = ByteData.sublistView(inner, 1, 5).getUint32(0);
+    return RendezvousManager.recordFromStoreBytes(
+      inner.sublist(5, 5 + len),
+    ).timestampMs;
+  }
+
+  Future<Set<String>> storedParticipants() async => {
+    for (final e in await storedEntries()) HEX.encode(e.participantId),
+  };
 }
 
 Future<List<Submitted>> peelAll(ScriptedNode node, List<TestHop> relays) async {
   final out = <Submitted>[];
   for (final packet in List.of(node.garlic)) {
-    final inner = await peelGarlicInnermost(packet, relays);
-    out.add(Submitted(inner[0], inner));
+    final peeled = await peelGarlicToExit(packet, relays);
+    out.add(Submitted(peeled.inner[0], peeled.inner, peeled.exitNodeIdHex));
   }
   return out;
 }
@@ -258,24 +309,31 @@ OHDescriptor creatorOh(int seed) => OHDescriptor(
   authPublicKey: List<int>.generate(32, (i) => (seed + i) & 0xFF),
 );
 
-/// The creator's published record: `[1 found][KademliaStore]`, the payload
-/// of a record_lookup answer.
-Future<Uint8List> creatorAnswer(
+OHDescriptor joinerOh(int seed) => OHDescriptor(
+  serverEndpoint: 'joiner$seed:59558',
+  handleId: List<int>.generate(20, (i) => (seed * 11 + i + 100) & 0xFF),
+  authPublicKey: List<int>.generate(32, (i) => (seed + i + 50) & 0xFF),
+);
+
+/// A record published by the [creator] (or joiner) side alone:
+/// `[1 found][KademliaStore]`, the payload of a record_lookup answer.
+Future<Uint8List> recordAnswer(
   List<OHDescriptor> ohs, {
+  bool creator = true,
   int? atMs,
   List<RendezvousEntry> extraEntries = const [],
 }) async {
-  final creator = RendezvousManager()
+  final m = RendezvousManager()
     ..register(
       chan,
       channelSecret: channelSecret,
-      isCreator: true,
-      ownName: 'Alice',
+      isCreator: creator,
+      ownName: creator ? 'Alice' : 'Bob',
     );
-  creator.setOwnOhs(chan, ohs);
+  m.setOwnOhs(chan, ohs);
   final now = atMs ?? DateTime.now().millisecondsSinceEpoch;
   if (extraEntries.isNotEmpty) {
-    creator.restoreMergeState(
+    m.restoreMergeState(
       chan,
       jsonEncode([
         for (final e in extraEntries)
@@ -288,15 +346,65 @@ Future<Uint8List> creatorAnswer(
       ]),
     );
   }
-  final store = (await creator.buildSignedStore(chan, now))!;
+  final store = (await m.buildSignedStore(chan, now))!;
   return Uint8List.fromList([1, ...store]);
 }
+
+Future<Uint8List> creatorAnswer(
+  List<OHDescriptor> ohs, {
+  int? atMs,
+  List<RendezvousEntry> extraEntries = const [],
+}) => recordAnswer(ohs, atMs: atMs, extraEntries: extraEntries);
+
+final Uint8List noRecordAnswer = Uint8List.fromList([0]);
 
 MailItem answerItem(Uint8List ackTag, List<int> payload) => MailItem(
   payload: payload,
   sessionTag: ackTag,
   receivedAtMs: fixnum.Int64(DateTime.now().millisecondsSinceEpoch),
 );
+
+Future<void> deliver(
+  RedPandaLightClient client,
+  ScriptedNode node,
+  OHRegistration ownOh,
+  MailItem item,
+) async {
+  node.mailbox.add(item);
+  await client.fetchMessages(ownOh);
+}
+
+Future<OHRegistration> restoredOwnOh(RedPandaLightClient client) async {
+  final oh = OHRegistration(
+    ohId: List.generate(20, (i) => 60 + i),
+    keypair: await OHKeypair.generate(),
+    expiresAtMs: DateTime.now()
+        .add(const Duration(days: 7))
+        .millisecondsSinceEpoch,
+    channelId: chan,
+    serverEndpoint: nodeEndpoint,
+  );
+  await client.restoreOutboundHandle(oh);
+  return oh;
+}
+
+Future<Uint8List> firstDepositPacket(
+  ScriptedNode node,
+  List<TestHop> relays,
+) async {
+  for (final packet in List.of(node.garlic)) {
+    final inner = await peelGarlicInnermost(packet, relays);
+    if (inner[0] != GarlicBuilder.cmdRecordStore &&
+        inner[0] != GarlicBuilder.cmdRecordLookup) {
+      return packet;
+    }
+  }
+  fail('no deposit was submitted');
+}
+
+bool sameBytes(List<int> a, List<int> b) =>
+    a.length == b.length &&
+    List.generate(a.length, (i) => a[i] == b[i]).every((x) => x);
 
 void main() {
   setUpAll(() => ActivePeer.plaintextTransportForTesting = true);
@@ -305,8 +413,16 @@ void main() {
   group('T160 joiner: read before write', () {
     test('the joiner looks up first and publishes only the MERGED record; '
         'adopting the creator announces the own mailboxes (T161)', () async {
-      final (client, node, relays) = await connectedClient();
+      final (client, node, relays) = await connectedClient(
+        // Long hold: only the answer may end it here.
+        timing: RendezvousTiming(
+          prePublishHoldMax: const Duration(seconds: 20),
+          jitter: 0,
+          random: Random(1),
+        ),
+      );
       addTearDown(client.disconnect);
+      final keys = await recordKeysHex();
       final learned = <CounterpartOhUpdate>[];
       final sub = client.stateUpdates.of<CounterpartOhUpdate>().listen(
         learned.add,
@@ -321,50 +437,37 @@ void main() {
       );
       final ownOh = await client.registerOutboundHandle(channelId: chan);
 
-      // The lookups (today's + yesterday's key) go out; nothing is stored.
       await pumpUntil(
-        () async =>
-            (await peelAll(node, relays)).where((s) => s.isLookup).length >= 2,
+        () async => (await peelAll(node, relays)).any((s) => s.isLookup),
         reason: 'the joiner never looked the record up',
       );
-      await Future.delayed(const Duration(milliseconds: 500));
       var sent = await peelAll(node, relays);
-      expect(
-        sent.where((s) => s.isStore),
-        isEmpty,
-        reason: 'the joiner must not write the record before it has read it',
-      );
-      final firstLookup = sent.firstWhere((s) => s.isLookup);
+      expect(sent.where((s) => s.isStore), isEmpty);
+      final today = sent.firstWhere((s) => s.isLookup);
+      expect(today.lookupKeyHex, keys[0], reason: 'today\'s key goes first');
 
-      // The node answers with the creator's record (into our own mailbox).
       final aliceOhs = [creatorOh(1), creatorOh(2)];
-      node.mailbox.add(
-        answerItem(firstLookup.lookupAckTag, await creatorAnswer(aliceOhs)),
+      await deliver(
+        client,
+        node,
+        ownOh,
+        answerItem(today.lookupAckTag, await creatorAnswer(aliceOhs)),
       );
-      await client.fetchMessages(ownOh);
-
-      await pumpUntil(
-        () => learned.isNotEmpty,
-        reason: 'the creator\'s mailboxes were never adopted',
-      );
+      await pumpUntil(() => learned.isNotEmpty, reason: 'no adoption');
       expect(client.counterpartOhIds(chan), hasLength(2));
       expect(client.pairingLookupsActive(chan), isFalse);
 
-      // The held publish goes out now — carrying BOTH entries.
       await pumpUntil(
         () async => (await peelAll(node, relays)).any((s) => s.isStore),
         reason: 'the held publish never went out',
       );
       sent = await peelAll(node, relays);
-      final entries = await sent.firstWhere((s) => s.isStore).storedEntries();
-      expect(
-        entries.map((e) => HEX.encode(e.participantId)).toSet(),
-        equals({participantHex(creator: true), participantHex(creator: false)}),
-        reason: 'the record must keep the creator entry next to the own one',
-      );
+      expect(await sent.firstWhere((s) => s.isStore).storedParticipants(), {
+        participantHex(creator: true),
+        participantHex(creator: false),
+      });
 
-      // T161: the own mailbox set is announced in-band to the creator's
-      // mailboxes right after the adoption — without any sendMessage call.
+      // T161: the own mailbox set is announced in-band right away.
       await pumpUntil(
         () async =>
             (await peelAll(node, relays)).where((s) => s.isDeposit).length >= 2,
@@ -375,14 +478,10 @@ void main() {
         isChannelCreator: true,
       );
       final deposit = (await peelGarlicDeposit(
-        await _firstDepositPacket(node, relays),
+        await firstDepositPacket(node, relays),
         relays,
       ))!;
-      expect(
-        aliceOhs.any((oh) => _same(oh.handleId, deposit.ohId)),
-        isTrue,
-        reason: 'the announce must target a creator mailbox',
-      );
+      expect(aliceOhs.any((oh) => sameBytes(oh.handleId, deposit.ohId)), true);
       final message = await creatorSession.decrypt(deposit.payload, chan);
       expect(message.isOhUpdate, isTrue);
       final announced = jsonDecode(utf8.decode(message.ohUpdate!)) as List;
@@ -394,12 +493,118 @@ void main() {
       );
     });
 
-    test('no answer: the hold ends after prePublishHoldMax, the own entry is '
-        'published, the pairing lookups continue, and a late creator record '
-        'is merged back (read-repair)', () async {
+    test('P1: every answer of the hold lost — the own entry is written once, '
+        'and the NEXT publish reads first again', () async {
       final (client, node, relays) = await connectedClient();
       addTearDown(client.disconnect);
+      client.addChannelKeys(
+        chan,
+        channelKey,
+        channelSecret: channelSecret,
+        isChannelCreator: false,
+      );
+      await client.registerOutboundHandle(channelId: chan);
 
+      // Nobody answers: after the hold, the joiner writes itself.
+      await pumpUntil(
+        () async => (await peelAll(node, relays)).any((s) => s.isStore),
+        reason: 'the joiner stayed silent after the hold expired',
+      );
+      var sent = await peelAll(node, relays);
+      final firstStore = sent.indexWhere((s) => s.isStore);
+      expect(await sent[firstStore].storedParticipants(), {
+        participantHex(creator: false),
+      });
+
+      // A further own mailbox (redundancy top-up) changes the set: this
+      // publish must be preceded by a read again — the joiner still knows no
+      // creator entry.
+      await client.registerOutboundHandle(channelId: chan);
+      await pumpUntil(
+        () async =>
+            (await peelAll(node, relays)).where((s) => s.isStore).length >= 2,
+        reason: 'the second publish never went out',
+      );
+      sent = await peelAll(node, relays);
+      final secondStore = sent.lastIndexWhere((s) => s.isStore);
+      final stores = [
+        for (var i = 0; i < sent.length; i++)
+          if (sent[i].isStore) i,
+      ];
+      expect(stores, hasLength(2));
+      expect(
+        sent.sublist(firstStore + 1, secondStore).any((s) => s.isLookup),
+        isTrue,
+        reason: 'the second publish must read first',
+      );
+    });
+
+    test(
+      'P3: a late answer with the creator\'s OLDER record after the '
+      'hold timed out makes the joiner republish the merged record',
+      () async {
+        final (client, node, relays) = await connectedClient();
+        addTearDown(client.disconnect);
+        final keys = await recordKeysHex();
+        client.addChannelKeys(
+          chan,
+          channelKey,
+          channelSecret: channelSecret,
+          isChannelCreator: false,
+        );
+        final createdAt = DateTime.now().millisecondsSinceEpoch - 60000;
+        final ownOh = await client.registerOutboundHandle(channelId: chan);
+        await pumpUntil(
+          () async => (await peelAll(node, relays)).any((s) => s.isStore),
+        );
+        var sent = await peelAll(node, relays);
+        final ownStore = sent.firstWhere((s) => s.isStore);
+        final firstLookup = sent.firstWhere(
+          (s) => s.isLookup && s.lookupKeyHex == keys[0],
+        );
+
+        // The answer to the FIRST lookup comes back only now, carrying the
+        // creator's record from channel creation — older than our write.
+        final answer = await creatorAnswer([creatorOh(3)], atMs: createdAt);
+        expect(
+          RendezvousManager.recordFromStoreBytes(answer.sublist(1)).timestampMs,
+          lessThan(ownStore.storedTs),
+        );
+        await deliver(
+          client,
+          node,
+          ownOh,
+          answerItem(firstLookup.lookupAckTag, answer),
+        );
+
+        await pumpUntil(
+          () async =>
+              (await peelAll(node, relays)).where((s) => s.isStore).length >= 2,
+          reason: 'no republish after learning the creator from a late answer',
+        );
+        sent = await peelAll(node, relays);
+        expect(await sent.lastWhere((s) => s.isStore).storedParticipants(), {
+          participantHex(creator: true),
+          participantHex(creator: false),
+        });
+        expect(client.counterpartOhIds(chan), hasLength(1));
+      },
+    );
+
+    test('the hold is correlated by tag: an answer to an earlier lookup '
+        'neither ends nor shortens it', () async {
+      final (client, node, relays) = await connectedClient(
+        timing: RendezvousTiming(
+          prePublishHoldMax: const Duration(seconds: 20),
+          pairingLookupDelays: const [Duration(seconds: 30)],
+          jitter: 0,
+          yesterdayOffsetMin: const Duration(milliseconds: 40),
+          yesterdayOffsetMax: const Duration(milliseconds: 40),
+          random: Random(3),
+        ),
+      );
+      addTearDown(client.disconnect);
+      final keys = await recordKeysHex();
       client.addChannelKeys(
         chan,
         channelKey,
@@ -407,80 +612,52 @@ void main() {
         isChannelCreator: false,
       );
       final ownOh = await client.registerOutboundHandle(channelId: chan);
-      final registeredAt = DateTime.now();
-
-      // Nobody answers. The publish waits for the hold, then goes out alone.
       await pumpUntil(
-        () async => (await peelAll(node, relays)).any((s) => s.isStore),
-        timeout:
-            RedPandaLightClient.prePublishHoldMax + const Duration(seconds: 3),
-        reason: 'the joiner stayed silent after the hold expired',
-      );
-      final heldFor = DateTime.now().difference(registeredAt);
-      expect(
-        heldFor,
-        greaterThanOrEqualTo(
-          RedPandaLightClient.prePublishHoldMax -
-              const Duration(milliseconds: 200),
-        ),
+        () async =>
+            (await peelAll(node, relays)).where((s) => s.isLookup).length >= 2,
+        reason: 'today\'s and yesterday\'s lookup',
       );
       var sent = await peelAll(node, relays);
-      final alone = await sent.firstWhere((s) => s.isStore).storedEntries();
-      expect(
-        alone.map((e) => HEX.encode(e.participantId)),
-        equals([participantHex(creator: false)]),
-      );
+      final today = sent.firstWhere((s) => s.lookupKeyHex == keys[0]);
+      final yesterday = sent.firstWhere((s) => s.lookupKeyHex == keys[1]);
 
-      // The pairing sequence went on independently of any failing send:
-      // the +2.5 s and +4 s lookups have fired by the end of the 5 s hold.
-      expect(client.pairingLookupAttemptsOf(chan), greaterThanOrEqualTo(1));
+      // A stray answer (unknown tag) and "no record" for YESTERDAY's key do
+      // not decide the hold: today's record is the one the write replaces.
+      await deliver(
+        client,
+        node,
+        ownOh,
+        answerItem(Uint8List.fromList(List.filled(16, 9)), noRecordAnswer),
+      );
+      await deliver(
+        client,
+        node,
+        ownOh,
+        answerItem(yesterday.lookupAckTag, noRecordAnswer),
+      );
+      await Future.delayed(const Duration(milliseconds: 300));
+      sent = await peelAll(node, relays);
+      expect(sent.where((s) => s.isStore), isEmpty);
+
+      // "No record" for today's key decides it.
+      await deliver(
+        client,
+        node,
+        ownOh,
+        answerItem(today.lookupAckTag, noRecordAnswer),
+      );
       await pumpUntil(
-        () => client.pairingLookupAttemptsOf(chan) >= 2,
+        () async => (await peelAll(node, relays)).any((s) => s.isStore),
         timeout: const Duration(seconds: 3),
-        reason: 'the second pairing lookup (+4 s) never fired',
+        reason: 'today\'s "no record" must end the hold',
       );
-      expect(client.pairingLookupsActive(chan), isTrue);
-      await pumpUntil(
-        () async =>
-            (await peelAll(node, relays)).where((s) => s.isLookup).length >=
-            2 * 3,
-        reason: 'initial lookup + two pairing lookups, two keys each',
-      );
-      sent = await peelAll(node, relays);
-
-      // The creator publishes now (it never saw the joiner) — its record
-      // replaced the joiner's at the node. The next lookup reads it.
-      final storesBefore = sent.where((s) => s.isStore).length;
-      final lastLookup = sent.lastWhere((s) => s.isLookup);
-      node.mailbox.add(
-        answerItem(
-          lastLookup.lookupAckTag,
-          await creatorAnswer([creatorOh(3)]),
-        ),
-      );
-      await client.fetchMessages(ownOh);
-
-      await pumpUntil(
-        () async =>
-            (await peelAll(node, relays)).where((s) => s.isStore).length >
-            storesBefore,
-        reason: 'the record that lost the own entry was not repaired',
-      );
-      sent = await peelAll(node, relays);
-      final repaired = await sent.lastWhere((s) => s.isStore).storedEntries();
-      expect(
-        repaired.map((e) => HEX.encode(e.participantId)).toSet(),
-        equals({participantHex(creator: true), participantHex(creator: false)}),
-      );
-      expect(client.pairingLookupsActive(chan), isFalse);
-      expect(client.counterpartOhIds(chan), hasLength(1));
     });
 
     test('a third participant\'s entry survives the joiner\'s merged '
         'publish (the record is shared by every participant)', () async {
       final (client, node, relays) = await connectedClient();
       addTearDown(client.disconnect);
-
+      final keys = await recordKeysHex();
       client.addChannelKeys(
         chan,
         channelKey,
@@ -494,7 +671,7 @@ void main() {
       final lookup = (await peelAll(
         node,
         relays,
-      )).firstWhere((s) => s.isLookup);
+      )).firstWhere((s) => s.isLookup && s.lookupKeyHex == keys[0]);
 
       final third = RendezvousEntry(
         participantId: CryptoUtils.randomBytes(32),
@@ -502,38 +679,78 @@ void main() {
         entryTs: DateTime.now().millisecondsSinceEpoch - 1000,
         ohs: [creatorOh(9)],
       );
-      node.mailbox.add(
+      await deliver(
+        client,
+        node,
+        ownOh,
         answerItem(
           lookup.lookupAckTag,
           await creatorAnswer([creatorOh(1)], extraEntries: [third]),
         ),
       );
-      await client.fetchMessages(ownOh);
-
       await pumpUntil(
         () async => (await peelAll(node, relays)).any((s) => s.isStore),
         reason: 'the held publish never went out',
       );
-      final entries = await (await peelAll(
+      final stored = await (await peelAll(
         node,
         relays,
-      )).firstWhere((s) => s.isStore).storedEntries();
+      )).firstWhere((s) => s.isStore).storedParticipants();
+      expect(stored, {
+        participantHex(creator: true),
+        participantHex(creator: false),
+        HEX.encode(third.participantId),
+      });
+    });
+
+    test('P6: the first round asks yesterday\'s key on its own route and '
+        'later; the pairing lookups ask only today\'s', () async {
+      final (client, node, relays) = await connectedClient();
+      addTearDown(client.disconnect);
+      final keys = await recordKeysHex();
+      client.addChannelKeys(
+        chan,
+        channelKey,
+        channelSecret: channelSecret,
+        isChannelCreator: false,
+      );
+      await client.registerOutboundHandle(channelId: chan);
+      // Three pairing lookups at +250 ms each, then the sequence is used up.
+      await pumpUntil(
+        () =>
+            client.pairingLookupAttemptsOf(chan) >= 3 &&
+            !client.pairingLookupsActive(chan),
+        reason: 'the pairing sequence did not run out',
+      );
+      await Future.delayed(const Duration(milliseconds: 100));
+      final lookups = (await peelAll(
+        node,
+        relays,
+      )).where((s) => s.isLookup).toList();
+      final yesterday = lookups
+          .where((s) => s.lookupKeyHex == keys[1])
+          .toList();
+      expect(yesterday, hasLength(1), reason: 'yesterday\'s key only once');
+      expect(lookups.first.lookupKeyHex, keys[0]);
       expect(
-        entries.map((e) => HEX.encode(e.participantId)).toSet(),
-        equals({
-          participantHex(creator: true),
-          participantHex(creator: false),
-          HEX.encode(third.participantId),
-        }),
+        yesterday.single.exitNodeIdHex,
+        isNot(lookups.first.exitNodeIdHex),
+        reason: 'no node may execute both keys of the round',
+      );
+      // initial + 3 pairing rounds of today's key (a read-before-write of the
+      // timed-out hold's publish adds none: it is the same initial lookup).
+      expect(
+        lookups.where((s) => s.lookupKeyHex == keys[0]).length,
+        greaterThanOrEqualTo(4),
       );
     });
   });
 
   group('T160 creator', () {
-    test('the creator publishes at once and does not look up', () async {
+    test('the creator\'s first publish at creation is immediate, without a '
+        'lookup', () async {
       final (client, node, relays) = await connectedClient();
       addTearDown(client.disconnect);
-
       client.addChannelKeys(
         chan,
         channelKey,
@@ -541,42 +758,201 @@ void main() {
         isChannelCreator: true,
       );
       await client.registerOutboundHandle(channelId: chan);
-
       await pumpUntil(
         () async => (await peelAll(node, relays)).any((s) => s.isStore),
         timeout: const Duration(seconds: 2),
         reason: 'the creator\'s publish was held',
       );
-      await Future.delayed(const Duration(milliseconds: 300));
+      await Future.delayed(const Duration(milliseconds: 200));
       final sent = await peelAll(node, relays);
       expect(sent.where((s) => s.isLookup), isEmpty);
       expect(client.pairingLookupsActive(chan), isFalse);
     });
+
+    test(
+      'P2: a creator coming back (restart, offline at the scan) reads '
+      'before it writes, keeps the joiner in the record and adopts him',
+      () async {
+        final (client, node, relays) = await connectedClient();
+        addTearDown(client.disconnect);
+        final keys = await recordKeysHex();
+        final learned = <CounterpartOhUpdate>[];
+        final sub = client.stateUpdates.of<CounterpartOhUpdate>().listen(
+          learned.add,
+        );
+        addTearDown(sub.cancel);
+        client.addChannelKeys(
+          chan,
+          channelKey,
+          channelSecret: channelSecret,
+          isChannelCreator: true,
+        );
+        // The mailbox comes back from storage — no fresh registration, so the
+        // creation exemption does not apply; the poll cycle's sweep publishes.
+        final ownOh = await restoredOwnOh(client);
+
+        await pumpUntil(
+          () async => (await peelAll(node, relays)).any((s) => s.isLookup),
+          reason: 'the returning creator did not read first',
+        );
+        var sent = await peelAll(node, relays);
+        expect(sent.where((s) => s.isStore), isEmpty);
+        final today = sent.firstWhere(
+          (s) => s.isLookup && s.lookupKeyHex == keys[0],
+        );
+        // The DHT holds the joiner's lone record (his hold timed out, the
+        // creator's entry is gone).
+        final bobOh = joinerOh(1);
+        await deliver(
+          client,
+          node,
+          ownOh,
+          answerItem(
+            today.lookupAckTag,
+            await recordAnswer([bobOh], creator: false),
+          ),
+        );
+        await pumpUntil(
+          () async => (await peelAll(node, relays)).any((s) => s.isStore),
+          reason: 'no publish after the read',
+        );
+        sent = await peelAll(node, relays);
+        expect(await sent.firstWhere((s) => s.isStore).storedParticipants(), {
+          participantHex(creator: true),
+          participantHex(creator: false),
+        });
+        await pumpUntil(() => learned.isNotEmpty, reason: 'no adoption');
+        expect(client.counterpartOhIds(chan), [bobOh.handleId]);
+        // ... and announces itself to the joiner in-band.
+        await pumpUntil(
+          () async => (await peelAll(node, relays)).any((s) => s.isDeposit),
+          reason: 'no announce to the joiner',
+        );
+        final deposit = (await peelGarlicDeposit(
+          await firstDepositPacket(node, relays),
+          relays,
+        ))!;
+        expect(sameBytes(deposit.ohId, bobOh.handleId), isTrue);
+      },
+    );
+
+    test('P4: a creator that learned the joiner in-band, whose one-shot '
+        'lookup was throttled, still reads before its next publish', () async {
+      final (client, node, relays) = await connectedClient();
+      addTearDown(client.disconnect);
+      final keys = await recordKeysHex();
+      client.addChannelKeys(
+        chan,
+        channelKey,
+        channelSecret: channelSecret,
+        isChannelCreator: true,
+      );
+      final ownOh = await client.registerOutboundHandle(channelId: chan);
+      await pumpUntil(
+        () async => (await peelAll(node, relays)).any((s) => s.isStore),
+      );
+      // A send before anyone joined fails and stamps the recovery throttle.
+      await expectLater(
+        client.sendMessage(chan, 'too early'),
+        throwsA(anything),
+      );
+      // Recovery asks today's key and, on its own route a moment later,
+      // yesterday's.
+      await pumpUntil(
+        () async =>
+            (await peelAll(node, relays)).where((s) => s.isLookup).length >= 2,
+      );
+      await Future.delayed(const Duration(milliseconds: 100));
+      final lookupsBefore = (await peelAll(
+        node,
+        relays,
+      )).where((s) => s.isLookup).length;
+
+      // The joiner's in-band announce arrives; the one-shot read is
+      // throttled away.
+      final bobOh = joinerOh(2);
+      final joinerSession = await RatchetSession.create(
+        channelKey: channelKey,
+        isChannelCreator: false,
+      );
+      final announce = await joinerSession.encrypt(
+        ChannelMessage(
+          messageId: Uint8List.fromList(List.generate(16, (i) => i)),
+          timestampMs: DateTime.now().millisecondsSinceEpoch,
+          content: '',
+          ohUpdate: Uint8List.fromList(
+            utf8.encode(jsonEncode([bobOh.toJsonMap()])),
+          ),
+        ),
+        chan,
+      );
+      await deliver(
+        client,
+        node,
+        ownOh,
+        MailItem(
+          payload: announce,
+          receivedAtMs: fixnum.Int64(DateTime.now().millisecondsSinceEpoch),
+        ),
+      );
+      await pumpUntil(() => client.counterpartOhIds(chan).isNotEmpty);
+      await Future.delayed(const Duration(milliseconds: 100));
+      expect(
+        (await peelAll(node, relays)).where((s) => s.isLookup).length,
+        lookupsBefore,
+        reason: 'precondition: the one-shot read was throttled',
+      );
+
+      // Its next publish (another own mailbox) reads first and carries Bob.
+      final storesBefore = (await peelAll(
+        node,
+        relays,
+      )).where((s) => s.isStore).length;
+      await client.registerOutboundHandle(channelId: chan);
+      await pumpUntil(
+        () async =>
+            (await peelAll(node, relays)).where((s) => s.isLookup).length >
+            lookupsBefore,
+        reason: 'the publish did not read first',
+      );
+      var sent = await peelAll(node, relays);
+      expect(sent.where((s) => s.isStore).length, storesBefore);
+      final read = sent.lastWhere(
+        (s) => s.isLookup && s.lookupKeyHex == keys[0],
+      );
+      await deliver(
+        client,
+        node,
+        ownOh,
+        answerItem(
+          read.lookupAckTag,
+          await recordAnswer([bobOh], creator: false),
+        ),
+      );
+      await pumpUntil(
+        () async =>
+            (await peelAll(node, relays)).where((s) => s.isStore).length >
+            storesBefore,
+      );
+      sent = await peelAll(node, relays);
+      expect(await sent.lastWhere((s) => s.isStore).storedParticipants(), {
+        participantHex(creator: true),
+        participantHex(creator: false),
+      });
+    });
   });
 
-  group('T161 a pending announce survives an unknown counterpart', () {
+  group('T161 the pending announce', () {
     test('kept while no counterpart mailbox is known, sent once an in-band '
         'oh_update brings one', () async {
       final (client, node, relays) = await connectedClient();
       addTearDown(client.disconnect);
-
       // No channel secret: rendezvous stays dormant, only the in-band path
       // is exercised.
       client.addChannelKeys(chan, channelKey, isChannelCreator: false);
-      final ownOh = OHRegistration(
-        ohId: List.generate(20, (i) => 60 + i),
-        keypair: await OHKeypair.generate(),
-        expiresAtMs: DateTime.now()
-            .add(const Duration(days: 7))
-            .millisecondsSinceEpoch,
-        channelId: chan,
-        serverEndpoint: nodeEndpoint,
-      );
-      await client.restoreOutboundHandle(ownOh);
+      final ownOh = await restoredOwnOh(client);
 
-      // What the redundancy top-up does ~2 s after a join.
       client.queueOwnOhAnnounceForTesting(chan);
-      expect(client.hasPendingOhAnnounce(chan), isTrue);
       await client.flushPendingOhAnnounceForTesting(chan);
       expect(
         client.hasPendingOhAnnounce(chan),
@@ -585,7 +961,6 @@ void main() {
       );
       expect((await peelAll(node, relays)).where((s) => s.isDeposit), isEmpty);
 
-      // The creator announces its mailbox in-band.
       final creatorSession = await RatchetSession.create(
         channelKey: channelKey,
         isChannelCreator: true,
@@ -602,43 +977,78 @@ void main() {
         ),
         chan,
       );
-      node.mailbox.add(
+      await deliver(
+        client,
+        node,
+        ownOh,
         MailItem(
           payload: announce,
           receivedAtMs: fixnum.Int64(DateTime.now().millisecondsSinceEpoch),
         ),
       );
-      await client.fetchMessages(ownOh);
-
       await pumpUntil(
         () async => (await peelAll(node, relays)).any((s) => s.isDeposit),
         reason: 'the pending announce was not sent after the adoption',
       );
       final deposit = (await peelGarlicDeposit(
-        await _firstDepositPacket(node, relays),
+        await firstDepositPacket(node, relays),
         relays,
       ))!;
-      expect(_same(deposit.ohId, aliceOh.handleId), isTrue);
+      expect(sameBytes(deposit.ohId, aliceOh.handleId), isTrue);
       final message = await creatorSession.decrypt(deposit.payload, chan);
       expect(message.isOhUpdate, isTrue);
     });
+
+    test('concurrent triggers send once; a newer announce queued meanwhile '
+        'survives the older one running out of budget', () async {
+      final (client, node, relays) = await connectedClient();
+      addTearDown(client.disconnect);
+      client.addChannelKeys(
+        chan,
+        channelKey,
+        counterpartOhSet: [creatorOh(5)],
+        isChannelCreator: false,
+      );
+      await restoredOwnOh(client);
+
+      client.queueOwnOhAnnounceForTesting(chan);
+      await Future.wait([
+        client.flushPendingOhAnnounceForTesting(chan),
+        client.flushPendingOhAnnounceForTesting(chan),
+        client.flushPendingOhAnnounceForTesting(chan),
+      ]);
+      expect(
+        client.pendingOhAnnounceSendsLeftForTesting(chan),
+        2,
+        reason: 'three simultaneous triggers spend ONE send of the budget',
+      );
+      await pumpUntil(
+        () async => (await peelAll(node, relays)).any((s) => s.isDeposit),
+      );
+      await Future.delayed(const Duration(milliseconds: 200));
+      expect(
+        (await peelAll(node, relays)).where((s) => s.isDeposit),
+        hasLength(1),
+      );
+
+      // Use up the old announce's budget down to its last send ...
+      await client.flushPendingOhAnnounceForTesting(chan);
+      expect(client.pendingOhAnnounceSendsLeftForTesting(chan), 1);
+      // ... and queue a newer one while that last send is in flight.
+      final last = client.flushPendingOhAnnounceForTesting(chan);
+      client.queueOwnOhAnnounceForTesting(chan);
+      final again = client.flushPendingOhAnnounceForTesting(chan);
+      await Future.wait([last, again]);
+      expect(
+        client.hasPendingOhAnnounce(chan),
+        isTrue,
+        reason: 'the newer announce must not be removed with the old one',
+      );
+      expect(
+        client.pendingOhAnnounceSendsLeftForTesting(chan),
+        2,
+        reason: 'the newer announce was sent once after the old one',
+      );
+    });
   });
 }
-
-Future<Uint8List> _firstDepositPacket(
-  ScriptedNode node,
-  List<TestHop> relays,
-) async {
-  for (final packet in List.of(node.garlic)) {
-    final inner = await peelGarlicInnermost(packet, relays);
-    if (inner[0] != GarlicBuilder.cmdRecordStore &&
-        inner[0] != GarlicBuilder.cmdRecordLookup) {
-      return packet;
-    }
-  }
-  fail('no deposit was submitted');
-}
-
-bool _same(List<int> a, List<int> b) =>
-    a.length == b.length &&
-    List.generate(a.length, (i) => a[i] == b[i]).every((x) => x);

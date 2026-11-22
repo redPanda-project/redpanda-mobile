@@ -21,6 +21,11 @@ import 'package:redpanda_light_client/src/generated/commands.pb.dart';
 class RendezvousManager {
   final Map<String, _ChannelRendezvousState> _states = {};
 
+  /// How far ahead of the own clock a record timestamp may be pushed to stay
+  /// monotonic (T160/P5): the node's limit (`ChannelDht.MAX_FUTURE_SKEW_MS`,
+  /// 15 min) minus one minute for the node's own clock error.
+  static const int maxFutureLeadMs = 14 * 60 * 1000;
+
   /// Registers (or refreshes) a channel's rendezvous state. Idempotent — keeps
   /// the accumulated merge state across re-registrations.
   ///
@@ -115,6 +120,17 @@ class RendezvousManager {
   /// [nowMs]: our own fresh entry (`entry_ts = nowMs`) merged with the
   /// newest-known counterpart entries, encrypted and signed with the channel record
   /// key. Returns null if the channel is unknown or we have no own OH yet.
+  ///
+  /// T160/P5: the record timestamp is MONOTONIC over every record this side
+  /// has seen or built — `max(nowMs, newest seen + 1)` — because the node
+  /// replaces a record only by a strictly newer one (`KadStoreManager.put`).
+  /// A writer whose clock runs behind the other participant's would
+  /// otherwise never get a record accepted, and its read-repair would be
+  /// rejected on every attempt. Capped at [maxFutureLeadMs] ahead of the own
+  /// clock: the node rejects records more than 15 min in its future
+  /// (`ChannelDht.MAX_FUTURE_SKEW_MS`), so past the cap the write would be
+  /// lost anyway. The own entry's `entry_ts` is monotonic the same way (it
+  /// orders our entries at the other participants' merge).
   Future<Uint8List?> buildSignedStore(String channelId, int nowMs) async {
     final state = _states[channelId];
     if (state == null || state.ownOhs.isEmpty) return null;
@@ -123,10 +139,20 @@ class RendezvousManager {
       state.channelSecret,
       isCreator: state.isCreator,
     );
+    final ownIdHex = _hex(ownId);
+    final previousOwnTs = state.knownEntries[ownIdHex]?.entryTs;
+    final cap = nowMs + maxFutureLeadMs;
+    final entryTs = previousOwnTs != null && previousOwnTs >= nowMs
+        ? (previousOwnTs + 1 > cap ? cap : previousOwnTs + 1)
+        : nowMs;
+    final seen = state.newestSeenRecordTs;
+    final recordTs = seen != null && seen >= nowMs
+        ? (seen + 1 > cap ? cap : seen + 1)
+        : nowMs;
     final ownEntry = RendezvousEntry(
       participantId: ownId,
       name: state.ownName,
-      entryTs: nowMs,
+      entryTs: entryTs,
       ohs: state.ownOhs,
     );
     // Merge our fresh entry over everything we know so the published record
@@ -139,9 +165,13 @@ class RendezvousManager {
     final signed = await ChannelRendezvous.buildSignedRecord(
       state.channelSecret,
       merged,
-      nowMs,
+      recordTs,
     );
     state.lastBuiltRecordTs = signed.timestampMs;
+    state.noteSeenRecordTs(signed.timestampMs);
+    state.lastBuiltEntryTs = {
+      for (final e in merged) _hex(e.participantId): e.entryTs,
+    };
     return KademliaStore(
       timestamp: Int64(signed.timestampMs),
       publicKey: signed.publicKey,
@@ -233,11 +263,13 @@ class RendezvousManager {
       (e) => _hex(e.participantId) != ownIdHex,
     );
     final lastBuilt = state.lastBuiltRecordTs;
-    final needsRepair =
+    // (A) Someone wrote a newer record without our current entry.
+    final overwritten =
         state.ownOhs.isNotEmpty &&
         hasForeignEntry &&
         (lastBuilt == null || record.timestampMs > lastBuilt) &&
         (ownInRecord == null || !_sameOhList(ownInRecord.ohs, state.ownOhs));
+    state.noteSeenRecordTs(record.timestampMs);
 
     final counterpartId = ChannelRendezvous.participantId(
       state.channelSecret,
@@ -251,6 +283,28 @@ class RendezvousManager {
     final after = state.knownEntries[counterpartIdHex];
     final advanced =
         after != null && (before == null || after.entryTs > before.entryTs);
+    // (B) T160/P3: a record NOT newer than our own last write taught us an
+    // entry of another participant that this write did not carry (or carried
+    // older) — typically a late answer with the creator's older record after
+    // our hold had timed out and we had published only ourselves. The node
+    // most likely still holds our write, which lacks that entry, and (A)
+    // cannot see it because the answer is older. Republish the merged
+    // record. A NEWER record that carries our current entry needs nothing
+    // (the node holds everything already) — firing there would make every
+    // read a write, and two reading sides could keep re-stamping each other.
+    // Only once we have written at all: a side that has never published
+    // writes the merged record anyway.
+    final builtEntries = state.lastBuiltEntryTs;
+    final learnedUnwritten =
+        lastBuilt != null &&
+        record.timestampMs <= lastBuilt &&
+        state.ownOhs.isNotEmpty &&
+        state.knownEntries.entries.any((e) {
+          if (e.key == ownIdHex) return false;
+          final written = builtEntries[e.key];
+          return written == null || e.value.entryTs > written;
+        });
+    final needsRepair = overwritten || learnedUnwritten;
     return ResolvedRecord(
       counterpartOhs: advanced ? after.ohs : null,
       needsRepair: needsRepair,
@@ -370,6 +424,19 @@ class _ChannelRendezvousState {
   /// never, or not since a worker respawn). A resolved record that is not
   /// newer than this one predates our own write and is no reason to repair.
   int? lastBuiltRecordTs;
+
+  /// Participant id (hex) → `entry_ts` of every entry in the last record
+  /// this side built (T160/P3: what our write in the DHT carries).
+  Map<String, int> lastBuiltEntryTs = const {};
+
+  /// The newest record timestamp seen (resolved) or built (T160/P5: the
+  /// floor for the next record timestamp).
+  int? newestSeenRecordTs;
+
+  void noteSeenRecordTs(int ts) {
+    final seen = newestSeenRecordTs;
+    if (seen == null || ts > seen) newestSeenRecordTs = ts;
+  }
 
   /// Newest-known entry per participant id (hex), the client-side merge state.
   final Map<String, RendezvousEntry> knownEntries = {};

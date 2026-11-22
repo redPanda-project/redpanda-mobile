@@ -77,6 +77,13 @@ Future<GarlicDeposit?> peelGarlicDeposit(
 Future<Uint8List> peelGarlicInnermost(
   Uint8List packet,
   List<TestHop> hops,
+) async => (await peelGarlicToExit(packet, hops)).inner;
+
+/// [peelGarlicInnermost] plus the node id (hex) of the hop that peeled the
+/// innermost layer — the node that executes the packet.
+Future<({String exitNodeIdHex, Uint8List inner})> peelGarlicToExit(
+  Uint8List packet,
+  List<TestHop> hops,
 ) async {
   while (true) {
     final parsed = ParsedPacket.parse(packet);
@@ -86,7 +93,10 @@ Future<Uint8List> peelGarlicInnermost(
     );
     final plaintext = await parsed.decryptLayer(hop.keys.privateKey);
     if (plaintext[0] != GarlicBuilder.cmdForward) {
-      return Uint8List.fromList(plaintext);
+      return (
+        exitNodeIdHex: _hex(hop.nodeId),
+        inner: Uint8List.fromList(plaintext),
+      );
     }
     packet = GarlicBuilder.buildPacket(
       plaintext.sublist(1, 21),
