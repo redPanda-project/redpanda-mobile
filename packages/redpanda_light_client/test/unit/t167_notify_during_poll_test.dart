@@ -17,7 +17,7 @@ import 'package:redpanda_light_client/src/network/active_peer.dart';
 /// the cycle ends — not by the next regular tick (up to
 /// [RedPandaLightClient.activePollInterval] later). The follow-up is
 /// bounded by a token bucket: up to [RedPandaLightClient.pollBurst] cycles
-/// back to back, then at most one per [RedPandaLightClient.minPollGap]; and
+/// back to back, then at most one per [RedPandaLightClient.pollStartRefill]; and
 /// the full cycle keeps its own cadence. Same plaintext ScriptedSocket harness as the T38 suite.
 class ScriptedSocket implements Socket {
   @override
@@ -335,7 +335,7 @@ void main() {
   });
 
   test('a stream of Notifies is bounded: a burst, then one cycle per '
-      'minPollGap, and the full cycle keeps running', () async {
+      'pollStartRefill, and the full cycle keeps running', () async {
     final (_, node, a, _) = await cycleHeldOnB();
 
     // Worst case: every answered fetch of A is immediately followed by a
@@ -355,23 +355,24 @@ void main() {
     // interval would give in this window ...
     expect(times.length, greaterThanOrEqualTo(5));
     // ... but bounded (every fetch of A here is one cycle start): at most
-    // the burst plus one per minPollGap.
+    // the burst plus one per pollStartRefill.
     const burst = RedPandaLightClient.pollBurst;
     expect(
       times.length,
       lessThanOrEqualTo(
         burst +
             window.inMilliseconds ~/
-                RedPandaLightClient.minPollGap.inMilliseconds +
+                RedPandaLightClient.pollStartRefill.inMilliseconds +
             1,
       ),
     );
-    // Any burst + 1 consecutive starts span at least one minPollGap.
+    // Any burst + 1 consecutive starts span at least one pollStartRefill.
     for (var i = 0; i + burst < times.length; i++) {
       expect(
         times[i + burst].difference(times[i]),
         greaterThanOrEqualTo(
-          RedPandaLightClient.minPollGap - const Duration(milliseconds: 50),
+          RedPandaLightClient.pollStartRefill -
+              const Duration(milliseconds: 30),
         ),
         reason: 'fetches $i..${i + burst} ran without a pause',
       );
@@ -451,9 +452,37 @@ void main() {
       () =>
           node.fetchTimesOf(a.ohId, after: start).length >=
           RedPandaLightClient.pollBurst,
-      // A minPollGap pause anywhere in the cluster would take ≥ 1 s.
+      // A pause for budget anywhere in the cluster would take ≥ 500 ms.
       timeout: const Duration(milliseconds: 700),
       reason: 'a clustered Notify waited for a pause',
     );
+  });
+
+  test('Notifies for the redundant copies of one message share one '
+      'follow-up', () async {
+    final (client, socket) = await connectedClient();
+    addTearDown(client.disconnect);
+    final node = _Node(socket);
+    final ohs = [
+      for (final c in ['a', 'b', 'c'])
+        await client.registerOutboundHandle(channelId: c),
+    ];
+    await Future.delayed(const Duration(milliseconds: 2500));
+    final start = DateTime.now();
+    // The partner deposits into every mailbox: three Notifies within a few ms.
+    for (final oh in ohs) {
+      node.notify(oh.ohId);
+      await Future.delayed(const Duration(milliseconds: 3));
+    }
+    await pumpUntil(
+      () => ohs.every(
+        (oh) => node.fetchTimesOf(oh.ohId, after: start).isNotEmpty,
+      ),
+      timeout: const Duration(milliseconds: 700),
+      reason: 'not every notified mailbox was fetched',
+    );
+    final followUps = logs.where((l) => l.contains('poll follow-up fetched'));
+    expect(followUps, hasLength(1));
+    expect(followUps.single, contains('from 3 notified OH(s)'));
   });
 }

@@ -1262,14 +1262,31 @@ class RedPandaLightClient implements RedPandaClient {
   final Set<String> _pollFollowUpOhs = {};
 
   /// T167: how many poll cycles (full or follow-up) may start back to back
-  /// before [minPollGap] applies — see [_pollStartDelay].
-  static const int pollBurst = 3;
+  /// before the start rate is capped — see [_pollStartDelay].
+  static const int pollBurst = 5;
+
+  /// T167: once [pollBurst] is spent, one cycle start per this period.
+  /// Shorter than [minPollGap] on purpose: [minPollGap] spaces the *full*
+  /// cycles (many signed round trips, decryptions, maintenance) of the
+  /// fixed-rate loop, while the starts this bucket mostly paces are
+  /// follow-ups — one signed fetch per notified mailbox, driven by real mail.
+  /// A conversation produces about three Notifies per message (the partner
+  /// deposits into every one of our [ohRedundancy] mailboxes); at one start
+  /// per [minPollGap] the lab saw follow-ups queue up for ~0.9 s.
+  static const Duration pollStartRefill = Duration(milliseconds: 500);
+
+  /// T167: an idle Notify waits this long before its follow-up starts, so
+  /// the redundant copies' Notifies (lab: within 15–40 ms) share one start.
+  static const Duration notifyCoalesceDelay = Duration(milliseconds: 25);
 
   /// T167: poll-start budget, a token bucket kept as time credit: each cycle
-  /// start costs [minPollGap], the credit grows with wall time and is capped
-  /// at [pollBurst] × [minPollGap]. Credit as of [_pollCreditAt].
-  int _pollCreditMicros = pollBurst * minPollGap.inMicroseconds;
+  /// start costs [pollStartRefill], the credit grows with wall time and is
+  /// capped at [pollBurst] × [pollStartRefill]. Credit as of [_pollCreditAt].
+  int _pollCreditMicros = pollBurst * pollStartRefill.inMicroseconds;
   DateTime? _pollCreditAt;
+
+  /// T167: when [_pollFollowUpOhs] last went from empty to non-empty.
+  DateTime? _pollFollowUpSince;
 
   /// Whether the running cycle (if any) is a full one. A full cycle sets
   /// [_nextPollAt] itself when it ends; a follow-up keeps it, so a pull
@@ -1399,6 +1416,7 @@ class RedPandaLightClient implements RedPandaClient {
     // The full cycle keeps its own cadence either way, so a stream of
     // Notifies cannot drive its maintenance work (oh_update resends,
     // republish, redundancy sweep) faster than [activePollInterval].
+    if (_pollFollowUpOhs.isEmpty) _pollFollowUpSince = DateTime.now();
     _pollFollowUpOhs.add(ohHex);
     // The follow-up does not move the full cycle, so pull a slow (idle
     // cadence) full cycle forward explicitly. The old idle path did this
@@ -5352,7 +5370,7 @@ class RedPandaLightClient implements RedPandaClient {
   /// T167: the poll-start budget at [now] (see [_pollCreditMicros]).
   int _pollCredit(DateTime now) {
     final at = _pollCreditAt;
-    final cap = pollBurst * minPollGap.inMicroseconds;
+    final cap = pollBurst * pollStartRefill.inMicroseconds;
     if (at == null) return cap;
     return min(cap, _pollCreditMicros + now.difference(at).inMicroseconds);
   }
@@ -5361,17 +5379,17 @@ class RedPandaLightClient implements RedPandaClient {
   /// budget is left: up to [pollBurst] cycles can run back to back, so
   /// Notifies that cluster (a message, its ACKs, a second message) are each
   /// fetched at once. Once the budget is spent, at most one cycle starts per
-  /// [minPollGap]: whatever drives the poll (a stream of Notifies, a stream
-  /// of follow-ups), it cannot spin, and over any window T at most
-  /// [pollBurst] + T / [minPollGap] cycles start. The regular cadence
-  /// (cycles ≥ [minPollGap] apart) never runs short of budget.
+  /// [pollStartRefill]: whatever drives the poll (a stream of Notifies, a
+  /// stream of follow-ups), it cannot spin, and over any window T at most
+  /// [pollBurst] + T / [pollStartRefill] cycles start. The regular cadence
+  /// (full cycles ≥ [minPollGap] apart) never runs short of budget.
   Duration _pollStartDelay(DateTime now) {
-    final missing = minPollGap.inMicroseconds - _pollCredit(now);
+    final missing = pollStartRefill.inMicroseconds - _pollCredit(now);
     return missing <= 0 ? Duration.zero : Duration(microseconds: missing);
   }
 
   void _spendPollStart(DateTime now) {
-    _pollCreditMicros = _pollCredit(now) - minPollGap.inMicroseconds;
+    _pollCreditMicros = _pollCredit(now) - pollStartRefill.inMicroseconds;
     _pollCreditAt = now;
   }
 
@@ -5385,9 +5403,14 @@ class RedPandaLightClient implements RedPandaClient {
     final earliest = now.add(_pollStartDelay(now));
     var due = _nextPollAt ?? now;
     var followUp = false;
-    if (_pollFollowUpOhs.isNotEmpty && earliest.isBefore(due)) {
-      due = earliest;
-      followUp = true;
+    if (_pollFollowUpOhs.isNotEmpty) {
+      final since = _pollFollowUpSince ?? now;
+      final coalesced = since.add(notifyCoalesceDelay);
+      final followUpAt = coalesced.isAfter(earliest) ? coalesced : earliest;
+      if (followUpAt.isBefore(due)) {
+        due = followUpAt;
+        followUp = true;
+      }
     }
     if (due.isBefore(earliest)) due = earliest;
     _pollingTimer?.cancel();
