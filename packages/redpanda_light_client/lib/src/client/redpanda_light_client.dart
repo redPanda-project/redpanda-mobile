@@ -621,7 +621,8 @@ class RedPandaLightClient implements RedPandaClient {
     if (victim != null) {
       final age = DateTime.now().difference(victim.connectedSince).inSeconds;
       RpLog.debug(
-        'RedPandaLightClient: Rotating ONE roaming peer ${victim.address} (Connected ${age}s). Keeping others.',
+        'RedPandaLightClient: Rotating ONE roaming peer ${victim.address} (Connected ${age}s). Keeping others. '
+        'Own mailbox hosts (never rotated): ${mailboxHosts.toList()..sort()}',
       );
       _intentionalDisconnects.add(victim.address);
       victim.disconnect();
