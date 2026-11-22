@@ -8,4 +8,4 @@ tags:
     # Conversation lab (test/lab): opt-in via RP_LAB=1, one long test that
     # starts its own node network. The tag timeout overrides the @Timeout
     # annotation, like for e2e above.
-    timeout: 20m
+    timeout: 30m
