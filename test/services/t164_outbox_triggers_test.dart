@@ -29,10 +29,6 @@ void main() {
   late MessageSyncService sync;
   late GroupRepository groups;
 
-  /// The outbox's clock (T164 review M1): R-ACK helpers below advance it by
-  /// the time the client would have waited for that ack.
-  late DateTime now;
-
   const channelId = 'chan-1';
   const otherChannelId = 'chan-2';
 
@@ -41,8 +37,7 @@ void main() {
     client = FakeRedPandaClient();
     messages = MessageRepository(db);
     groups = GroupRepository(db);
-    now = DateTime(2026, 11, 22, 12);
-    outbox = OutboxService(messages, client, groups, clock: () => now);
+    outbox = OutboxService(messages, client, groups);
     sync = MessageSyncService(
       client,
       messages,
@@ -95,36 +90,25 @@ void main() {
     ],
   );
 
-  /// A negative R-ACK ([status]) or, with [status] null, an R-ACK timeout
-  /// for the most recent attempt: advances the outbox clock by the time the
-  /// client waited for it (20 s for an ack — the testnet's status-2 range —
-  /// and just over [RedPandaLightClient.ackTimeout] for a timeout).
+  /// A negative R-ACK ([status]) or, with [status] null, an R-ACK timeout.
   RoutingAckUpdate negativeAck(
     String messageIdHex, {
     int? status,
     String conversationId = channelId,
     String? memberIdHex,
-    int latencyMs = 20000,
-  }) {
-    if (status == null) {
-      now = now.add(
-        RedPandaLightClient.ackTimeout + const Duration(seconds: 1),
-      );
-      return RoutingAckUpdate.timeout(
-        channelId: conversationId,
-        messageIdHex: messageIdHex,
-        memberIdHex: memberIdHex,
-      );
-    }
-    now = now.add(Duration(milliseconds: latencyMs));
-    return RoutingAckUpdate.ack(
-      channelId: conversationId,
-      messageIdHex: messageIdHex,
-      status: status,
-      latencyMs: latencyMs,
-      memberIdHex: memberIdHex,
-    );
-  }
+  }) => status == null
+      ? RoutingAckUpdate.timeout(
+          channelId: conversationId,
+          messageIdHex: messageIdHex,
+          memberIdHex: memberIdHex,
+        )
+      : RoutingAckUpdate.ack(
+          channelId: conversationId,
+          messageIdHex: messageIdHex,
+          status: status,
+          latencyMs: 20000,
+          memberIdHex: memberIdHex,
+        );
 
   /// Enqueues a message whose first attempt succeeds; returns its row id
   /// and the network id the fake client assigned.
@@ -380,7 +364,7 @@ void main() {
     );
   });
 
-  group('T164 review round 1', () {
+  group('T164 review rounds 1 and 2', () {
     final groupId = 'ab' * 32;
     final me = 'aa' * 32;
     final bob = 'bb' * 32;
@@ -418,50 +402,11 @@ void main() {
       return (id, msg.messageId!);
     }
 
-    test('H1: a Channel-ACK from ANOTHER member does not refill the '
-        'immediate budget of a group message', () async {
-      final (id, netId) = await sentGroupMessage();
-      Future<void> bobFails() async {
-        client.stateController.add(
-          negativeAck(
-            netId,
-            status: RoutingAck.statusHandleExpired,
-            conversationId: groupId,
-            memberIdHex: bob,
-          ),
-        );
-        await settle();
-      }
-
-      await bobFails(); // budget 1
-      // Carol got the duplicate and acknowledges it.
-      client.stateController.add(
-        ChannelAckUpdate(
-          timestampMs: 0,
-          channelId: groupId,
-          messageIdHex: netId,
-          memberIdHex: carol,
-        ),
-      );
-      await settle();
-      await bobFails(); // budget 2
-      await bobFails(); // budget used up → backoff
-
-      expect(
-        client.sentGroupMessages,
-        hasLength(1 + OutboxService.maxImmediateAckRetries),
-      );
-      final msg = await messageById(id);
-      expect(msg.status, MessageStatus.pending);
-      expect(OutboxService.isDue(msg, DateTime.now()), isFalse);
-    });
-
-    test('M1: a second member\'s negative R-ACK for the SAME attempt is '
-        'stale once the re-send went out — no second fan-out, no extra '
-        'retryCount', () async {
+    test('round 2: a group message keeps the pre-T164 behaviour — negative '
+        'member R-ACKs and timeouts re-queue with the normal backoff, '
+        'nothing is re-sent at once', () async {
       final (id, netId) = await sentGroupMessage();
 
-      // Attempt 1 failed for Bob and Carol; Bob's ack arrives first.
       client.stateController.add(
         negativeAck(
           netId,
@@ -471,85 +416,122 @@ void main() {
         ),
       );
       await settle();
-      expect(client.sentGroupMessages, hasLength(2));
 
-      // Carol's ack for attempt 1, 300 ms later: 20.3 s since attempt 1, but
-      // attempt 2 started only 0.3 s ago.
-      now = now.add(const Duration(milliseconds: 300));
+      var msg = await messageById(id);
+      expect(client.sentGroupMessages, hasLength(1));
+      expect(msg.status, MessageStatus.pending);
+      expect(msg.retryCount, 1);
+      expect(OutboxService.isDue(msg, DateTime.now()), isFalse);
+      // Carol's timeout for the same attempt finds the row `pending`: no-op.
       client.stateController.add(
-        RoutingAckUpdate.ack(
-          channelId: groupId,
-          messageIdHex: netId,
-          status: RoutingAck.statusHandleExpired,
-          latencyMs: 20300,
-          memberIdHex: carol,
-        ),
+        negativeAck(netId, conversationId: groupId, memberIdHex: carol),
       );
       await settle();
-
-      expect(client.sentGroupMessages, hasLength(2));
-      final msg = await messageById(id);
-      expect(msg.status, MessageStatus.sent);
+      msg = await messageById(id);
+      expect(client.sentGroupMessages, hasLength(1));
       expect(msg.retryCount, 1);
+      expect(outbox.trackedAckStates, 0);
+
+      // Due again after the backoff → one fan-out; a member timeout for it
+      // re-queues again, still without an immediate re-send.
+      await (db.update(db.messages)..where((t) => t.id.equals(id))).write(
+        MessagesCompanion(
+          lastRetryAt: drift.Value(
+            DateTime.now().subtract(const Duration(minutes: 1)),
+          ),
+        ),
+      );
+      await outbox.runPass();
+      expect(client.sentGroupMessages, hasLength(2));
+      client.stateController.add(
+        negativeAck(netId, conversationId: groupId, memberIdHex: bob),
+      );
+      await settle();
+      msg = await messageById(id);
+      expect(client.sentGroupMessages, hasLength(2));
+      expect(msg.status, MessageStatus.pending);
+      expect(msg.retryCount, 2);
+      expect(outbox.trackedAckStates, 0);
     });
 
-    test('M1: a timeout younger than the current attempt is stale', () async {
+    test(
+      'round 2 R8: "send again" restores the immediate re-send budget',
+      () async {
+        final (id, netId) = await sentMessage();
+        for (var i = 0; i <= OutboxService.maxImmediateAckRetries; i++) {
+          client.stateController.add(
+            negativeAck(netId, status: RoutingAck.statusHandleExpired),
+          );
+          await settle();
+        }
+        // Budget used up: the last negative ack left it pending with backoff.
+        expect(
+          client.sentMessages,
+          hasLength(1 + OutboxService.maxImmediateAckRetries),
+        );
+        expect((await messageById(id)).status, MessageStatus.pending);
+
+        expect(await outbox.retryNow(id), isTrue);
+        await outbox.settled;
+        expect(
+          client.sentMessages,
+          hasLength(2 + OutboxService.maxImmediateAckRetries),
+        );
+
+        // After the manual retry a negative R-ACK re-sends at once again.
+        client.stateController.add(
+          negativeAck(netId, status: RoutingAck.statusHandleExpired),
+        );
+        await settle();
+        expect(
+          client.sentMessages,
+          hasLength(3 + OutboxService.maxImmediateAckRetries),
+        );
+        expect((await messageById(id)).status, MessageStatus.sent);
+      },
+    );
+
+    test('round 2, 1:1 stale feedback: the timeout of an attempt that failed '
+        'after its ack tag was stored hits the NEXT attempt — it costs at '
+        'most the budget, then the backoff takes over', () async {
+      // A1 ok → negative R-ACK → A2 at once (budget 1), but A2 fails in the
+      // app's eyes (e.g. the isolate call timed out) after the worker had
+      // already stored its ack tag.
       final (id, netId) = await sentMessage();
-      // Attempt 1 → negative ack → attempt 2 at once.
+      client.sendError = StateError('isolate call timed out');
       client.stateController.add(
         negativeAck(netId, status: RoutingAck.statusRejected),
       );
       await settle();
-      expect(client.sentMessages, hasLength(2));
+      expect((await messageById(id)).status, MessageStatus.pending);
 
-      // A timeout 10 s into attempt 2 cannot be attempt 2's.
-      now = now.add(const Duration(seconds: 10));
+      // A3 on the regular schedule.
+      client.sendError = null;
+      await outbox.runPass(ignoreBackoff: true);
+      expect(client.sentMessages, hasLength(2)); // A1, A3
+      expect((await messageById(id)).status, MessageStatus.sent);
+
+      // A2's timeout arrives while A3 is in flight: taken for A3 → A4 at
+      // once (budget 2).
+      client.stateController.add(negativeAck(netId));
+      await settle();
+      expect(client.sentMessages, hasLength(3));
+
+      // A3's own negative R-ACK now meets A4: budget used up → backoff.
       client.stateController.add(
-        RoutingAckUpdate.timeout(channelId: channelId, messageIdHex: netId),
+        negativeAck(netId, status: RoutingAck.statusHandleExpired),
       );
       await settle();
-
-      expect(client.sentMessages, hasLength(2));
-      expect((await messageById(id)).status, MessageStatus.sent);
+      expect(client.sentMessages, hasLength(3));
+      final msg = await messageById(id);
+      expect(msg.status, MessageStatus.pending);
+      expect(OutboxService.isDue(msg, DateTime.now()), isFalse);
     });
-
-    test(
-      'L2: a group message confirmed `routed` drops its bookkeeping',
-      () async {
-        final (_, netId) = await sentGroupMessage();
-        client.stateController.add(
-          negativeAck(
-            netId,
-            status: RoutingAck.statusHandleExpired,
-            conversationId: groupId,
-            memberIdHex: bob,
-          ),
-        );
-        await settle();
-        expect(outbox.trackedAckStates, 1);
-
-        for (final member in [bob, carol]) {
-          now = now.add(const Duration(seconds: 1));
-          client.stateController.add(
-            RoutingAckUpdate.ack(
-              channelId: groupId,
-              messageIdHex: netId,
-              status: RoutingAck.statusStored,
-              latencyMs: 1000,
-              memberIdHex: member,
-            ),
-          );
-        }
-        await settle();
-
-        expect(outbox.trackedAckStates, 0);
-      },
-    );
 
     test('L1: a pass that fails before reading the pending set keeps the '
         'targeted request for the next pass', () async {
       final flaky = _FlakyMessageRepository(db);
-      final local = OutboxService(flaky, client, groups, clock: () => now);
+      final local = OutboxService(flaky, client, groups);
       addTearDown(local.dispose);
       await insertChannel(channelId);
       final id = await local.enqueue(conversationId: channelId, content: 'x');
