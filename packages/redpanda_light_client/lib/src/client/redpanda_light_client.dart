@@ -1128,6 +1128,7 @@ class RedPandaLightClient implements RedPandaClient {
     _connectionTimer?.cancel();
     _pollingEnabled = false; // stop the self-rescheduling poll loop (T27)
     _nextPollAt = null;
+    _pollFollowUpOhs.clear();
     _pollingTimer?.cancel();
     _pollingTimer = null;
     _renewalTimer?.cancel();
@@ -1248,9 +1249,22 @@ class RedPandaLightClient implements RedPandaClient {
   /// Timestamp of the last chat activity; drives [_pollInterval].
   DateTime _lastChatActivity = DateTime.fromMillisecondsSinceEpoch(0);
 
-  /// When the currently scheduled poll fires — lets fresh activity pull an
-  /// already-scheduled (slow) poll forward.
+  /// When the next regular (full) poll cycle is due — lets fresh activity
+  /// pull an already-scheduled (slow) poll forward. Follow-up fetches (T167)
+  /// run in between without moving it, so a stream of Notifies cannot starve
+  /// the maintenance work of the full cycle.
   DateTime? _nextPollAt;
+
+  /// T167: OHs (hex) notified after the running cycle had already fetched
+  /// past them. Fetched by a follow-up right after the cycle, or first by
+  /// the next full cycle, whichever runs first.
+  final Set<String> _pollFollowUpOhs = {};
+
+  /// T167: when the last cycle (full or follow-up) ended, and whether that
+  /// cycle itself started less than [minPollGap] after its predecessor —
+  /// see [_backToBackPause].
+  DateTime? _lastPollCycleEndedAt;
+  bool _lastPollCycleWasBackToBack = false;
 
   /// Serializes fire-and-forget batch acks (T27): AckFetch responses share
   /// the single per-command completer slot, so acks must not overlap.
@@ -1330,6 +1344,11 @@ class RedPandaLightClient implements RedPandaClient {
   /// so an out-of-band fetch could race a running cycle. A Notify for an
   /// unknown OH is ignored (only logged). The regular poll loop stays as the
   /// fallback for missed Notifies.
+  ///
+  /// T167: a Notify that lands while a cycle runs is only covered by that
+  /// cycle if the cycle has not fetched the OH yet. Otherwise the OH is
+  /// queued for a follow-up fetch that runs as soon as the cycle ends
+  /// (bounded by [_backToBackPause]) instead of waiting out the interval.
   void _handleNotify(List<int> payload) {
     final Notify notify;
     try {
@@ -1359,11 +1378,17 @@ class RedPandaLightClient implements RedPandaClient {
     if (timing != 'idle' && timing != 'before-fetch') {
       _missedNotifyAt.putIfAbsent(ohHex, DateTime.now);
     }
-    // A cycle currently in flight will fetch this OH (it iterates all OHs);
-    // otherwise pull the next cycle forward to right now.
-    if (_pollingEnabled && !_pollInProgress) {
-      _schedulePoll(Duration.zero);
+    if (!_pollingEnabled) return;
+    if (_pollInProgress) {
+      // The running cycle still fetches this OH: nothing to do.
+      if (timing == 'before-fetch') return;
+      // Already fetched (or in flight, or not in the cycle's snapshot): the
+      // cycle's end arms a follow-up fetch for it.
+      _pollFollowUpOhs.add(ohHex);
+      return;
     }
+    // No cycle running: pull the next full cycle forward to right now.
+    _schedulePoll(Duration.zero);
   }
 
   /// T167: how far the running poll cycle has got with [ohHex] — `idle` (no
@@ -5296,30 +5321,167 @@ class RedPandaLightClient implements RedPandaClient {
       ? activePollInterval
       : idlePollInterval;
 
-  /// (Re-)schedules the next poll cycle in [delay]. Cycles run at a fixed
-  /// rate: each cycle's duration is subtracted from the then-current
+  /// (Re-)schedules the next regular poll cycle in [delay]. Cycles run at a
+  /// fixed rate: each cycle's duration is subtracted from the then-current
   /// [_pollInterval] (never below [minPollGap]), so slow cycles do not
   /// stretch the effective cadence.
   void _schedulePoll(Duration delay) {
     if (!_pollingEnabled) return;
-    _pollingTimer?.cancel();
     _nextPollAt = DateTime.now().add(delay);
-    _pollingTimer = Timer(delay, () async {
-      final cycleStarted = DateTime.now();
-      try {
-        await _runPollCycle();
-      } catch (e) {
-        // Never let one bad cycle kill the loop — without this, an
-        // exception escaping the cycle would end polling until restart.
-        RpLog.info('RedPandaLightClient: poll cycle failed: $e');
-      } finally {
-        final elapsed = DateTime.now().difference(cycleStarted);
-        final interval = _pollInterval;
-        _schedulePoll(
-          elapsed >= interval - minPollGap ? minPollGap : interval - elapsed,
+    _armPollTimer();
+  }
+
+  /// T167: the pause the next cycle must keep after the last one ended.
+  /// Zero, unless the last cycle itself started back to back (less than
+  /// [minPollGap] after its predecessor ended): then the next one waits until
+  /// [minPollGap] has passed since that end. So two cycles may follow each
+  /// other without a pause — a Notify that arrived mid-cycle is fetched at
+  /// once — but never three: whatever drives the poll (a stream of Notifies,
+  /// a stream of follow-ups), at least every other gap is [minPollGap].
+  Duration _backToBackPause(DateTime now) {
+    final lastEnd = _lastPollCycleEndedAt;
+    if (lastEnd == null || !_lastPollCycleWasBackToBack) return Duration.zero;
+    final since = now.difference(lastEnd);
+    return since >= minPollGap ? Duration.zero : minPollGap - since;
+  }
+
+  /// Arms the one poll timer for whichever comes first: the regular cycle at
+  /// [_nextPollAt] or, with notified OHs pending, a follow-up fetch (T167).
+  /// Both respect [_backToBackPause]. If the regular cycle is due no later
+  /// than the follow-up, it runs instead (it fetches every OH anyway).
+  void _armPollTimer() {
+    if (!_pollingEnabled) return;
+    final now = DateTime.now();
+    final earliest = now.add(_backToBackPause(now));
+    var due = _nextPollAt ?? now;
+    var followUp = false;
+    if (_pollFollowUpOhs.isNotEmpty && earliest.isBefore(due)) {
+      due = earliest;
+      followUp = true;
+    }
+    if (due.isBefore(earliest)) due = earliest;
+    _pollingTimer?.cancel();
+    _pollingTimer = Timer(
+      due.difference(now),
+      followUp ? _runFollowUpTick : _runRegularTick,
+    );
+  }
+
+  /// Timer body of a regular cycle: runs it and schedules the next one.
+  Future<void> _runRegularTick() async {
+    // A cycle is still running (an outside _schedulePoll re-armed the timer
+    // mid-cycle); its end re-arms the timer.
+    if (_pollInProgress) return;
+    final started = DateTime.now();
+    final backToBack = _startsBackToBack(started);
+    try {
+      await _runPollCycle();
+    } catch (e) {
+      // Never let one bad cycle kill the loop — without this, an
+      // exception escaping the cycle would end polling until restart.
+      RpLog.info('RedPandaLightClient: poll cycle failed: $e');
+    } finally {
+      final now = DateTime.now();
+      final elapsed = now.difference(started);
+      final interval = _pollInterval;
+      _lastPollCycleEndedAt = now;
+      _lastPollCycleWasBackToBack = backToBack;
+      _schedulePoll(
+        elapsed >= interval - minPollGap ? minPollGap : interval - elapsed,
+      );
+    }
+  }
+
+  /// Timer body of a follow-up fetch (T167). Leaves [_nextPollAt] alone.
+  Future<void> _runFollowUpTick() async {
+    if (_pollInProgress) return;
+    final started = DateTime.now();
+    final backToBack = _startsBackToBack(started);
+    try {
+      await _runFollowUpFetch();
+    } catch (e) {
+      RpLog.info('RedPandaLightClient: poll follow-up failed: $e');
+    } finally {
+      _lastPollCycleEndedAt = DateTime.now();
+      _lastPollCycleWasBackToBack = backToBack;
+      _armPollTimer();
+    }
+  }
+
+  bool _startsBackToBack(DateTime started) {
+    final lastEnd = _lastPollCycleEndedAt;
+    return lastEnd != null && started.difference(lastEnd) < minPollGap;
+  }
+
+  /// T167: fetches only the OHs whose Notify the previous cycle missed —
+  /// none of the full cycle's maintenance (republish, oh_update resends, ACK
+  /// expiry), which stays on the regular cadence.
+  Future<void> _runFollowUpFetch() async {
+    if (_pollInProgress) return;
+    _pollInProgress = true;
+    final started = DateTime.now();
+    final targets = _registeredOHs
+        .where((oh) => _pollFollowUpOhs.contains(_hexEncode(oh.ohId)))
+        .toList();
+    _pollFollowUpOhs.clear();
+    _startCycleFetchPhases(targets);
+    var fetched = 0;
+    try {
+      for (final oh in targets) {
+        fetched += await _fetchForCycle(oh);
+      }
+    } finally {
+      _pollInProgress = false;
+      _cycleFetchPhase.clear();
+      RpLog.info(
+        'RedPandaLightClient: poll follow-up fetched $fetched message(s) '
+        'from ${targets.length} notified OH(s) in '
+        '${DateTime.now().difference(started).inMilliseconds}ms',
+      );
+    }
+  }
+
+  void _startCycleFetchPhases(List<OHRegistration> ohs) {
+    _cycleFetchPhase
+      ..clear()
+      ..addEntries(
+        ohs.map(
+          (oh) => MapEntry(_hexEncode(oh.ohId), _CycleFetchPhase.pending),
+        ),
+      );
+  }
+
+  /// One OH's fetch inside a cycle: tracks its [_CycleFetchPhase], hands the
+  /// messages to the app and returns how many there were. Never throws.
+  Future<int> _fetchForCycle(OHRegistration oh) async {
+    final ohHex = _hexEncode(oh.ohId);
+    _cycleFetchPhase[ohHex] = _CycleFetchPhase.inFlight;
+    try {
+      final missedAt = _missedNotifyAt.remove(ohHex);
+      final messages = await fetchMessages(oh);
+      if (missedAt != null) {
+        RpLog.debug(
+          'RedPandaLightClient: Notify wait: fetched '
+          '${messages.length} item(s) '
+          '${DateTime.now().difference(missedAt).inMilliseconds}ms after '
+          'a Notify that arrived mid-cycle',
         );
       }
-    });
+      if (messages.isNotEmpty) {
+        // The partner is active — keep the fast cadence going (T27).
+        _lastChatActivity = DateTime.now();
+      }
+      for (final msg in messages) {
+        _incomingMessageController.add(msg);
+      }
+      return messages.length;
+    } catch (e) {
+      RpLog.info('RedPandaLightClient: Polling error: $e');
+      _emitFetchStatus(oh, false, 'error: $e');
+      return 0;
+    } finally {
+      _cycleFetchPhase[ohHex] = _CycleFetchPhase.done;
+    }
   }
 
   /// Records chat activity (own send / fresh registration) so the poll loop
@@ -5343,43 +5505,21 @@ class RedPandaLightClient implements RedPandaClient {
     _pollInProgress = true;
     final started = DateTime.now();
     var fetched = 0;
-    final snapshot = List.of(_registeredOHs);
-    _cycleFetchPhase
-      ..clear()
-      ..addEntries(
-        snapshot.map(
-          (oh) => MapEntry(_hexEncode(oh.ohId), _CycleFetchPhase.pending),
-        ),
-      );
+    // T167: OHs with a missed Notify go first; this cycle covers them, so
+    // the pending follow-up is dropped.
+    final snapshot = [
+      ..._registeredOHs.where(
+        (oh) => _pollFollowUpOhs.contains(_hexEncode(oh.ohId)),
+      ),
+      ..._registeredOHs.where(
+        (oh) => !_pollFollowUpOhs.contains(_hexEncode(oh.ohId)),
+      ),
+    ];
+    _pollFollowUpOhs.clear();
+    _startCycleFetchPhases(snapshot);
     try {
       for (final oh in snapshot) {
-        final ohHex = _hexEncode(oh.ohId);
-        _cycleFetchPhase[ohHex] = _CycleFetchPhase.inFlight;
-        try {
-          final missedAt = _missedNotifyAt.remove(ohHex);
-          final messages = await fetchMessages(oh);
-          if (missedAt != null) {
-            RpLog.debug(
-              'RedPandaLightClient: Notify wait: fetched '
-              '${messages.length} item(s) '
-              '${DateTime.now().difference(missedAt).inMilliseconds}ms after '
-              'a Notify that arrived mid-cycle',
-            );
-          }
-          if (messages.isNotEmpty) {
-            // The partner is active — keep the fast cadence going (T27).
-            _lastChatActivity = DateTime.now();
-            fetched += messages.length;
-          }
-          for (final msg in messages) {
-            _incomingMessageController.add(msg);
-          }
-        } catch (e) {
-          RpLog.info('RedPandaLightClient: Polling error: $e');
-          _emitFetchStatus(oh, false, 'error: $e');
-        } finally {
-          _cycleFetchPhase[ohHex] = _CycleFetchPhase.done;
-        }
+        fetched += await _fetchForCycle(oh);
       }
       // T44: (re)publish rendezvous records that are due or that never got a
       // publish through (e.g. no garlic hops were known at registration time).
