@@ -5438,7 +5438,7 @@ class RedPandaLightClient implements RedPandaClient {
     var fetched = 0;
     try {
       for (final oh in targets) {
-        fetched += await _fetchForCycle(oh);
+        fetched += await _fetchForCycle(oh, followUp: true);
       }
     } finally {
       _pollInProgress = false;
@@ -5463,7 +5463,7 @@ class RedPandaLightClient implements RedPandaClient {
 
   /// One OH's fetch inside a cycle: tracks its [_CycleFetchPhase], hands the
   /// messages to the app and returns how many there were. Never throws.
-  Future<int> _fetchForCycle(OHRegistration oh) async {
+  Future<int> _fetchForCycle(OHRegistration oh, {bool followUp = false}) async {
     final ohHex = _hexEncode(oh.ohId);
     _cycleFetchPhase[ohHex] = _CycleFetchPhase.inFlight;
     try {
@@ -5480,6 +5480,11 @@ class RedPandaLightClient implements RedPandaClient {
       if (messages.isNotEmpty) {
         // The partner is active — keep the fast cadence going (T27).
         _lastChatActivity = DateTime.now();
+        // T167 diagnostics: ties fetched mail to its OH (and Notify).
+        RpLog.debug(
+          'RedPandaLightClient: Poll fetch: ${messages.length} item(s) for '
+          'OH $ohHex (${followUp ? 'follow-up' : 'full cycle'})',
+        );
       }
       for (final msg in messages) {
         _incomingMessageController.add(msg);
