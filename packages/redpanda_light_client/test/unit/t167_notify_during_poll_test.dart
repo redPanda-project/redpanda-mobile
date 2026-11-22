@@ -439,7 +439,7 @@ void main() {
     // away, the poll-start budget is full.
     await Future.delayed(const Duration(milliseconds: 2500));
     final start = DateTime.now();
-    // Three Notifies, each right after the previous one's fetch answered.
+    // pollBurst Notifies, each right after the previous one's fetch answered.
     var sent = 1;
     node.afterFetchAnswered = (ohId) {
       if (sent < RedPandaLightClient.pollBurst) {
@@ -470,9 +470,10 @@ void main() {
     await Future.delayed(const Duration(milliseconds: 2500));
     final start = DateTime.now();
     // The partner deposits into every mailbox: three Notifies within a few ms.
+    // Sent synchronously: on a loaded runner, real gaps could add up past
+    // the coalesce window and make this test flaky.
     for (final oh in ohs) {
       node.notify(oh.ohId);
-      await Future.delayed(const Duration(milliseconds: 3));
     }
     await pumpUntil(
       () => ohs.every(

@@ -1281,12 +1281,19 @@ class RedPandaLightClient implements RedPandaClient {
 
   /// T167: poll-start budget, a token bucket kept as time credit: each cycle
   /// start costs [pollStartRefill], the credit grows with wall time and is
-  /// capped at [pollBurst] × [pollStartRefill]. Credit as of [_pollCreditAt].
+  /// capped at [pollBurst] × [pollStartRefill]. Credit as of
+  /// [_pollCreditAtMicros] on [_pollClock].
   int _pollCreditMicros = pollBurst * pollStartRefill.inMicroseconds;
-  DateTime? _pollCreditAt;
+  int? _pollCreditAtMicros;
+
+  /// T167: monotonic clock for the poll-start budget and the coalesce window.
+  /// `DateTime.now()` can step backwards (NTP, a user changing the time); a
+  /// wall-clock credit would then go negative by the jump and hold back every
+  /// cycle for that long.
+  final Stopwatch _pollClock = Stopwatch()..start();
 
   /// T167: when [_pollFollowUpOhs] last went from empty to non-empty.
-  DateTime? _pollFollowUpSince;
+  int _pollFollowUpSinceMicros = 0;
 
   /// Whether the running cycle (if any) is a full one. A full cycle sets
   /// [_nextPollAt] itself when it ends; a follow-up keeps it, so a pull
@@ -1416,7 +1423,9 @@ class RedPandaLightClient implements RedPandaClient {
     // The full cycle keeps its own cadence either way, so a stream of
     // Notifies cannot drive its maintenance work (oh_update resends,
     // republish, redundancy sweep) faster than [activePollInterval].
-    if (_pollFollowUpOhs.isEmpty) _pollFollowUpSince = DateTime.now();
+    if (_pollFollowUpOhs.isEmpty) {
+      _pollFollowUpSinceMicros = _pollClock.elapsedMicroseconds;
+    }
     _pollFollowUpOhs.add(ohHex);
     // The follow-up does not move the full cycle, so pull a slow (idle
     // cadence) full cycle forward explicitly. The old idle path did this
@@ -5368,11 +5377,11 @@ class RedPandaLightClient implements RedPandaClient {
   }
 
   /// T167: the poll-start budget at [now] (see [_pollCreditMicros]).
-  int _pollCredit(DateTime now) {
-    final at = _pollCreditAt;
+  int _pollCredit(int nowMicros) {
+    final at = _pollCreditAtMicros;
     final cap = pollBurst * pollStartRefill.inMicroseconds;
     if (at == null) return cap;
-    return min(cap, _pollCreditMicros + now.difference(at).inMicroseconds);
+    return min(cap, _pollCreditMicros + (nowMicros - at));
   }
 
   /// T167: how long the next cycle start must wait for budget. Zero while
@@ -5383,14 +5392,19 @@ class RedPandaLightClient implements RedPandaClient {
   /// stream of follow-ups), it cannot spin, and over any window T at most
   /// [pollBurst] + T / [pollStartRefill] cycles start. The regular cadence
   /// (full cycles ≥ [minPollGap] apart) never runs short of budget.
-  Duration _pollStartDelay(DateTime now) {
-    final missing = pollStartRefill.inMicroseconds - _pollCredit(now);
+  Duration _pollStartDelay(int nowMicros) {
+    final missing = pollStartRefill.inMicroseconds - _pollCredit(nowMicros);
     return missing <= 0 ? Duration.zero : Duration(microseconds: missing);
   }
 
-  void _spendPollStart(DateTime now) {
-    _pollCreditMicros = _pollCredit(now) - pollStartRefill.inMicroseconds;
-    _pollCreditAt = now;
+  void _spendPollStart() {
+    final now = _pollClock.elapsedMicroseconds;
+    // Never below zero: a timer that fired a hair early must not carry debt.
+    _pollCreditMicros = max(
+      0,
+      _pollCredit(now) - pollStartRefill.inMicroseconds,
+    );
+    _pollCreditAtMicros = now;
   }
 
   /// Arms the one poll timer for whichever comes first: the regular cycle at
@@ -5400,12 +5414,16 @@ class RedPandaLightClient implements RedPandaClient {
   void _armPollTimer() {
     if (!_pollingEnabled) return;
     final now = DateTime.now();
-    final earliest = now.add(_pollStartDelay(now));
+    final nowMicros = _pollClock.elapsedMicroseconds;
+    final earliest = now.add(_pollStartDelay(nowMicros));
     var due = _nextPollAt ?? now;
     var followUp = false;
     if (_pollFollowUpOhs.isNotEmpty) {
-      final since = _pollFollowUpSince ?? now;
-      final coalesced = since.add(notifyCoalesceDelay);
+      final coalesceLeft =
+          _pollFollowUpSinceMicros +
+          notifyCoalesceDelay.inMicroseconds -
+          nowMicros;
+      final coalesced = now.add(Duration(microseconds: max(0, coalesceLeft)));
       final followUpAt = coalesced.isAfter(earliest) ? coalesced : earliest;
       if (followUpAt.isBefore(due)) {
         due = followUpAt;
@@ -5426,7 +5444,7 @@ class RedPandaLightClient implements RedPandaClient {
     // mid-cycle); its end re-arms the timer.
     if (_pollInProgress) return;
     final started = DateTime.now();
-    _spendPollStart(started);
+    _spendPollStart();
     _fullCycleInProgress = true;
     try {
       await _runPollCycle();
@@ -5448,7 +5466,7 @@ class RedPandaLightClient implements RedPandaClient {
   /// Timer body of a follow-up fetch (T167). Leaves [_nextPollAt] alone.
   Future<void> _runFollowUpTick() async {
     if (_pollInProgress) return;
-    _spendPollStart(DateTime.now());
+    _spendPollStart();
     try {
       await _runFollowUpFetch();
     } catch (e) {
