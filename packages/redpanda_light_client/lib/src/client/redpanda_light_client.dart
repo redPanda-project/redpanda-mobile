@@ -576,53 +576,63 @@ class RedPandaLightClient implements RedPandaClient {
       return false;
     });
 
-    // 2. Classify Current Peers
-    // A. Verify Capacity
-    if (_peers.length > maxConnections) {
-      // Disconnect worst performing extra peers
-      final sortedParams = _peers.values.toList()
-        ..sort(
-          (a, b) => a.averageLatencyMs.compareTo(b.averageLatencyMs),
-        ); // Lower latency first
+    // Nodes hosting one of our own mailboxes (T163). Neither the capacity
+    // trim nor the rotation may pick them: fetch, ack, renew and the Notify
+    // subscription only work over the connection to exactly that node.
+    final mailboxHosts = _ownMailboxHostAddresses();
 
-      // Remove active peers that are worst
-      for (var i = maxConnections; i < sortedParams.length; i++) {
+    final limit = connectionLimit(
+      peerAddresses: _peers.keys,
+      protected: mailboxHosts,
+    );
+
+    // 2. Classify Current Peers
+    // A. Verify Capacity: trim the worst extra peers, never a mailbox host
+    // while an unprotected peer is left.
+    if (_peers.length > limit) {
+      final victims = pickOverCapacityVictims(
+        peers: [
+          for (final p in _peers.values)
+            (address: p.address, latencyMs: p.averageLatencyMs),
+        ],
+        protected: mailboxHosts,
+        limit: limit,
+      );
+      for (final address in victims) {
         RpLog.debug(
-          'RedPandaLightClient: Over capacity. Disconnecting ${sortedParams[i].address}',
+          'RedPandaLightClient: Over capacity. Disconnecting $address',
         );
-        sortedParams[i].disconnect();
+        // Not a failure of the node: no score penalty (as for a rotation).
+        _intentionalDisconnects.add(address);
+        _peers[address]?.disconnect();
       }
     }
 
     // B. Rotate Roaming Peers
-    // B. Rotate Roaming Peers
-    final best3 = _peerRepository.getBestPeers(3).map((p) => p.address).toSet();
-    final connectedRoaming = _peers.values
-        .where((p) => p.isHandshakeVerified && !best3.contains(p.address))
-        .toList();
-
-    if (connectedRoaming.length >= 2) {
-      // Find candidates for rotation (Age > 10s)
-      final candidates = connectedRoaming.where((p) {
-        final age = DateTime.now().difference(p.connectedSince).inSeconds;
-        // print('DEBUG: Rotation Candidate: ${p.address} Age=${age}s');
-        return age >= 10;
-      }).toList();
-
-      // Disconnect ONLY ONE (the oldest)
-      if (candidates.isNotEmpty) {
-        candidates.sort(
-          (a, b) => a.connectedSince.compareTo(b.connectedSince),
-        ); // Oldest first
-        final victim = candidates.first;
-        final age = DateTime.now().difference(victim.connectedSince).inSeconds;
-
-        RpLog.debug(
-          'RedPandaLightClient: Rotating ONE roaming peer ${victim.address} (Connected ${age}s). Keeping others.',
-        );
-        _intentionalDisconnects.add(victim.address);
-        victim.disconnect();
-      }
+    final victimAddress = pickRotationVictim(
+      verifiedPeers: [
+        for (final p in _peers.values)
+          if (p.isHandshakeVerified)
+            (
+              address: p.address,
+              connectedSince: p.connectedSince,
+              score: _peerRepository.getPeer(p.address)?.score ?? 0,
+            ),
+      ],
+      protected: mailboxHosts,
+      slotsTaken: _peers.length,
+      limit: limit,
+      now: DateTime.now(),
+    );
+    final victim = victimAddress == null ? null : _peers[victimAddress];
+    if (victim != null) {
+      final age = DateTime.now().difference(victim.connectedSince).inSeconds;
+      RpLog.debug(
+        'RedPandaLightClient: Rotating ONE roaming peer ${victim.address} (Connected ${age}s). Keeping others. '
+        'Own mailbox hosts (never rotated): ${mailboxHosts.toList()..sort()}',
+      );
+      _intentionalDisconnects.add(victim.address);
+      victim.disconnect();
     }
 
     // 3. Slot Filling
@@ -637,7 +647,7 @@ class RedPandaLightClient implements RedPandaClient {
 
     // A. CORE: Fill up to targetCore with Best Peers
     for (final candidate in candidates) {
-      if (connectedCount >= maxConnections) break; // Hard limit
+      if (connectedCount >= limit) break; // Hard limit
       if (connectedCount >= targetCore && _peers.length >= targetCore) {
         // If we already have enough core-like connections, stop filling from top list
         // Note: _peers.length includes current connections. We need to be careful not to count roaming as core?
@@ -655,10 +665,10 @@ class RedPandaLightClient implements RedPandaClient {
     }
 
     // Random filling if we still have space (Roaming)
-    if (connectedCount < maxConnections) {
+    if (connectedCount < limit) {
       final all = _peerRepository.knownAddresses.toList()..shuffle();
       for (final addr in all) {
-        if (connectedCount >= maxConnections) break;
+        if (connectedCount >= limit) break;
         if (!_peers.containsKey(addr) &&
             !_dialsInFlight.contains(addr) &&
             !toConnect.contains(addr)) {
@@ -716,7 +726,17 @@ class RedPandaLightClient implements RedPandaClient {
             selfNodeId: selfNodeId,
             selfKeys: selfKeys,
             socketFactory: _socketFactory,
-            onStatusChange: _updateStatus,
+            onStatusChange: (status) {
+              // The client-wide connect edge in [_updateStatus] subscribes
+              // every handle; it only fires for the FIRST sendable peer. A
+              // mailbox host that (re)connects while other peers stay up
+              // needs its own re-subscribe (T163).
+              final wasConnected = _currentStatus == ConnectionStatus.connected;
+              _updateStatus(status);
+              if (status == ConnectionStatus.connected && wasConnected) {
+                _onPeerConnected(address);
+              }
+            },
             onNodeIdDiscovered: (nodeId, encryptionPublicKey) {
               _peerRepository.updatePeer(
                 address,
@@ -806,6 +826,152 @@ class RedPandaLightClient implements RedPandaClient {
   }
 
   // --- Helper Methods ---
+
+  /// Connection limit for this cycle (T163 review B): [maxConnections], plus
+  /// exactly one extra slot while EVERY regular slot is held by a node that
+  /// hosts one of our own mailboxes ([protected]). Those nodes are never
+  /// rotated, so without the extra slot nothing would rotate and the client
+  /// would stop meeting new nodes. The extra connection is an ordinary
+  /// unprotected roaming peer and rotates like one.
+  ///
+  /// Depends only on which hosts are connected, not on the repository
+  /// scores, so it does not flip between two values as latencies move.
+  /// Pure; public for tests only.
+  static int connectionLimit({
+    required Iterable<String> peerAddresses,
+    required Set<String> protected,
+  }) {
+    final hosts = peerAddresses.where(protected.contains).length;
+    return hosts >= maxConnections ? maxConnections + 1 : maxConnections;
+  }
+
+  /// The roaming peer the connection check disconnects this cycle, or null.
+  ///
+  /// Nodes in [protected] (hosting one of our own mailboxes, T163) are never
+  /// victims — rotating one away killed its Notify subscription and left
+  /// fetches failing until the redial (~4–5 s per message and spurious T21
+  /// failovers in the 5-node lab).
+  ///
+  /// Slots: [coreSlots] stable + [roamingSlots] rotating. A connected host is
+  /// pinned just like a core peer, so it uses up core budget first; the core
+  /// budget left over goes to the best-scored unprotected peers, every other
+  /// unprotected peer is roaming (T163 review B: when hosts filled the
+  /// roaming slots, the old "not in the repository's best three" rule left
+  /// nothing to rotate). Rotation starts once [slotsTaken] reaches [limit]
+  /// (see [connectionLimit]); the victim is the oldest roaming peer
+  /// connected for at least [minAge].
+  ///
+  /// Pure (no client state) so the selection is testable without sockets or
+  /// a 10 s wall-clock wait. Public for tests only.
+  static String? pickRotationVictim({
+    required Iterable<({String address, DateTime connectedSince, double score})>
+    verifiedPeers,
+    required Set<String> protected,
+    required int slotsTaken,
+    required int limit,
+    required DateTime now,
+    Duration minAge = const Duration(seconds: 10),
+  }) {
+    if (slotsTaken < limit) return null;
+    final peers = verifiedPeers.toList();
+    final hosts = peers.where((p) => protected.contains(p.address)).length;
+    final unprotected =
+        peers.where((p) => !protected.contains(p.address)).toList()
+          ..sort((a, b) => b.score.compareTo(a.score));
+    final coreBudget = max(0, coreSlots - hosts);
+    final candidates =
+        unprotected
+            .skip(coreBudget)
+            .where((p) => now.difference(p.connectedSince) >= minAge)
+            .toList()
+          ..sort((a, b) => a.connectedSince.compareTo(b.connectedSince));
+    return candidates.firstOrNull?.address;
+  }
+
+  /// Peers the capacity trim disconnects when more than [limit] are open:
+  /// everything past the first [limit] after ordering [protected] nodes
+  /// first, then lower latency first. A protected node is therefore only
+  /// trimmed when there are more protected nodes than [limit].
+  /// Pure; public for tests only.
+  static List<String> pickOverCapacityVictims({
+    required Iterable<({String address, int latencyMs})> peers,
+    required Set<String> protected,
+    required int limit,
+  }) {
+    final sorted = peers.toList()
+      ..sort((a, b) {
+        final hostA = protected.contains(a.address) ? 1 : 0;
+        final hostB = protected.contains(b.address) ? 1 : 0;
+        if (hostA != hostB) return hostB - hostA;
+        return a.latencyMs.compareTo(b.latencyMs);
+      });
+    return [for (final p in sorted.skip(limit)) p.address];
+  }
+
+  /// A peer reached [ActivePeer.canSendCommands] while the client was
+  /// already connected (T163). A Notify subscription lives only for its
+  /// connection, so every own mailbox this peer hosts is re-subscribed, and
+  /// the next poll is pulled forward to collect what arrived while the host
+  /// was unreachable — the same two steps the client-wide connect edge in
+  /// [_updateStatus] runs for all handles. Before this, a host that
+  /// reconnected after the first connect edge (rotation, T33 forced
+  /// reconnect, a dropped socket) stayed unsubscribed until the client lost
+  /// ALL peers, and its mail arrived only with the poll.
+  void _onPeerConnected(String address) {
+    final peer = _peers[address];
+    if (peer == null || !peer.canSendCommands) return;
+    var hosted = 0;
+    for (final oh in List.of(_registeredOHs)) {
+      final endpoint = oh.serverEndpoint;
+      if (endpoint == null || !identical(_livePeerFor(endpoint), peer)) {
+        continue;
+      }
+      _enqueueSubscribe(oh);
+      hosted++;
+    }
+    if (hosted == 0) return;
+    // Address only on debug: together with "hosts our mailbox" it is exactly
+    // what the privacy boundary keeps off the info level.
+    RpLog.info(
+      'RedPandaLightClient: a mailbox host reconnected — '
+      're-subscribing $hosted handle(s)',
+    );
+    RpLog.debug('RedPandaLightClient: reconnected mailbox host: $address');
+    const catchUp = Duration(seconds: 1);
+    final next = _nextPollAt;
+    if (_pollingEnabled &&
+        !_pollInProgress &&
+        (next == null || next.isAfter(DateTime.now().add(catchUp)))) {
+      _schedulePoll(catchUp);
+    }
+  }
+
+  /// Addresses of the peers hosting our own mailboxes (T163): every
+  /// registered, not yet locally expired OH's recorded endpoint plus the
+  /// live peer serving it under another name ([_hostAddresses]), and the
+  /// target of every registration still waiting for its response
+  /// ([_registrationsInFlight]).
+  Set<String> _ownMailboxHostAddresses() {
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    return {
+      for (final oh in _registeredOHs)
+        if (oh.serverEndpoint != null && oh.expiresAtMs > nowMs)
+          ..._hostAddresses(oh.serverEndpoint),
+      ..._registrationsInFlight.keys,
+    };
+  }
+
+  /// [_ownMailboxHostAddresses] as the connection check sees it. Tests only.
+  Set<String> get ownMailboxHostAddressesForTesting =>
+      _ownMailboxHostAddresses();
+
+  /// Peer address → number of [registerOutboundHandle] calls currently
+  /// waiting on it (T163 review C). Its node is about to host a mailbox, so
+  /// it is protected from rotation before the registration lands in
+  /// [_registeredOHs] — the register round trip can take up to 10 s, and the
+  /// peer it picks (the oldest sendable one) is the preferred rotation
+  /// victim.
+  final Map<String, int> _registrationsInFlight = {};
 
   /// Whether [address] is still inside its retry backoff and must not be
   /// dialled in this cycle.
@@ -2650,88 +2816,104 @@ class RedPandaLightClient implements RedPandaClient {
     final activePeer = _sendablePeers
         .where((p) => !excludeEndpoints.contains(p.address))
         .firstOrNull;
-
-    var expiresAtMs = expiresAt.millisecondsSinceEpoch;
-    if (activePeer != null) {
-      final buffer = request.writeToBuffer();
-      RpLog.debug(
-        'RedPandaLightClient: registerOutboundHandle() serialized ${buffer.length} bytes',
-      );
-
-      // Await the RegisterOhResponse (command 151). The node may reject with
-      // RATE_LIMIT (MS02b: max 5 registrations/min per connection) — surface
-      // that as a typed error instead of returning a dead registration. On
-      // timeout, keep the legacy optimistic behavior (the handle is returned
-      // and renewed/confirmed later).
-      final completer = _registerResponses.register();
-      activePeer.sendCommand(
-        _cmdOutboundRegisterOhReq,
-        Uint8List.fromList(buffer),
-      );
-
-      List<int>? responseBytes;
-      try {
-        responseBytes = await completer.future.timeout(
-          const Duration(seconds: 10),
+    // T163 review C: protect the target from rotation until the handle is in
+    // [_registeredOHs] (or the registration failed).
+    final target = activePeer?.address;
+    if (target != null) {
+      _registrationsInFlight.update(target, (n) => n + 1, ifAbsent: () => 1);
+    }
+    try {
+      var expiresAtMs = expiresAt.millisecondsSinceEpoch;
+      if (activePeer != null) {
+        final buffer = request.writeToBuffer();
+        RpLog.debug(
+          'RedPandaLightClient: registerOutboundHandle() serialized ${buffer.length} bytes',
         );
-      } on TimeoutException {
-        _registerResponses.abandon(completer);
+
+        // Await the RegisterOhResponse (command 151). The node may reject with
+        // RATE_LIMIT (MS02b: max 5 registrations/min per connection) — surface
+        // that as a typed error instead of returning a dead registration. On
+        // timeout, keep the legacy optimistic behavior (the handle is returned
+        // and renewed/confirmed later).
+        final completer = _registerResponses.register();
+        activePeer.sendCommand(
+          _cmdOutboundRegisterOhReq,
+          Uint8List.fromList(buffer),
+        );
+
+        List<int>? responseBytes;
+        try {
+          responseBytes = await completer.future.timeout(
+            const Duration(seconds: 10),
+          );
+        } on TimeoutException {
+          _registerResponses.abandon(completer);
+          RpLog.info(
+            'RedPandaLightClient: registerOutboundHandle() no response within 10s, '
+            'returning unconfirmed registration',
+          );
+        }
+
+        if (responseBytes != null) {
+          final response = RegisterOhResponse.fromBuffer(responseBytes);
+          if (response.status == Status.RATE_LIMIT) {
+            RpLog.info(
+              'RedPandaLightClient: registerOutboundHandle() rate-limited',
+            );
+            throw RateLimitException();
+          }
+          if (response.status == Status.OK) {
+            // The server may clamp the requested TTL.
+            expiresAtMs = response.expiresAtMs.toInt();
+          } else {
+            RpLog.info(
+              'RedPandaLightClient: registerOutboundHandle() non-OK status: '
+              '${response.status}',
+            );
+          }
+        }
+      } else {
         RpLog.info(
-          'RedPandaLightClient: registerOutboundHandle() no response within 10s, '
-          'returning unconfirmed registration',
+          'RedPandaLightClient: registerOutboundHandle() no active peer available',
         );
       }
 
-      if (responseBytes != null) {
-        final response = RegisterOhResponse.fromBuffer(responseBytes);
-        if (response.status == Status.RATE_LIMIT) {
-          RpLog.info(
-            'RedPandaLightClient: registerOutboundHandle() rate-limited',
-          );
-          throw RateLimitException();
-        }
-        if (response.status == Status.OK) {
-          // The server may clamp the requested TTL.
-          expiresAtMs = response.expiresAtMs.toInt();
+      final registration = OHRegistration(
+        ohId: ohId.toList(),
+        keypair: keypair,
+        expiresAtMs: expiresAtMs,
+        channelId: channelId,
+        serverEndpoint: activePeer?.address,
+      );
+
+      _registeredOHs.add(registration);
+      _startPolling();
+      // T44: a freshly registered mailbox is a new own-OH — publish/refresh the
+      // rendezvous record so peers can discover us over the DHT (idempotent:
+      // only republishes when the own-OH set actually changed). Gated on relay
+      // availability so it schedules ZERO work on a single-node network, keeping
+      // the fragile OH-registration/first-delivery window free of any churn.
+      if (channelId != null && _hasRendezvousRelays) {
+        unawaited(_publishRendezvousIfChanged(channelId));
+      }
+      // T27: a freshly registered handle means a brand-new channel — the
+      // partner's first message is expected shortly, so poll fast right away
+      // (fixes the ~30 s first-message latency after a channel join).
+      _notePollActivity();
+      // T38: subscribe the new handle for real-time Notify.
+      _enqueueSubscribe(registration);
+
+      return registration;
+    } finally {
+      if (target != null) {
+        final left = (_registrationsInFlight[target] ?? 1) - 1;
+        if (left <= 0) {
+          _registrationsInFlight.remove(target);
         } else {
-          RpLog.info(
-            'RedPandaLightClient: registerOutboundHandle() non-OK status: '
-            '${response.status}',
-          );
+          _registrationsInFlight[target] = left;
         }
       }
-    } else {
-      RpLog.info(
-        'RedPandaLightClient: registerOutboundHandle() no active peer available',
-      );
     }
-
-    final registration = OHRegistration(
-      ohId: ohId.toList(),
-      keypair: keypair,
-      expiresAtMs: expiresAtMs,
-      channelId: channelId,
-      serverEndpoint: activePeer?.address,
-    );
-
-    _registeredOHs.add(registration);
-    _startPolling();
-    // T44: a freshly registered mailbox is a new own-OH — publish/refresh the
-    // rendezvous record so peers can discover us over the DHT (idempotent:
-    // only republishes when the own-OH set actually changed). Gated on relay
-    // availability so it schedules ZERO work on a single-node network, keeping
-    // the fragile OH-registration/first-delivery window free of any churn.
-    if (channelId != null && _hasRendezvousRelays) {
-      unawaited(_publishRendezvousIfChanged(channelId));
-    }
-    // T27: a freshly registered handle means a brand-new channel — the
-    // partner's first message is expected shortly, so poll fast right away
-    // (fixes the ~30 s first-message latency after a channel join).
-    _notePollActivity();
-    // T38: subscribe the new handle for real-time Notify.
-    _enqueueSubscribe(registration);
-
-    return registration;
   }
 
   /// Builds a signed RegisterOhRequest. Signing bytes (v2, Ed25519):
