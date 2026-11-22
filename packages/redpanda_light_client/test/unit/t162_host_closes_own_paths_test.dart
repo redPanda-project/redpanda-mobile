@@ -2,6 +2,15 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:hex/hex.dart';
+import 'package:fixnum/fixnum.dart' as fixnum;
+import 'package:redpanda_light_client/src/domain/routing_ack.dart';
+import 'package:redpanda_light_client/src/domain/send_exceptions.dart';
+import 'package:redpanda_light_client/src/domain/state_update.dart';
+import 'package:redpanda_light_client/src/garlic/hop_selector.dart';
+import 'package:redpanda_light_client/src/garlic/rgb_builder.dart';
+import 'package:redpanda_light_client/src/generated/outbound.pb.dart'
+    hide RoutingAck;
+
 import 'package:test/test.dart';
 
 import 'package:redpanda_light_client/src/client/redpanda_light_client.dart';
@@ -63,6 +72,7 @@ void main() {
     int relayCount = 3,
     TestHop? hostAlias,
     TestHop? hostInRepoOnly,
+    TestHop? poisonHostEntry,
   }) async {
     final relays = <TestHop>[];
     final repo = InMemoryPeerRepository();
@@ -116,28 +126,43 @@ void main() {
         description: 'mailbox host identity learned',
       );
     }
+    if (poisonHostEntry != null) {
+      // Another node's peer list overwrites the host's entry (F1).
+      repo.updatePeer(
+        'scripted:1',
+        nodeId: HEX.encode(poisonHostEntry.nodeId),
+        encryptionPublicKey: HEX.encode(poisonHostEntry.keys.publicKey),
+      );
+    }
     return (client, socket, relays);
   }
 
-  Future<Channel> channelWithOwnOh(RedPandaLightClient client) async {
+  Future<Channel> channelWithOwnOh(
+    RedPandaLightClient client, {
+    bool withCounterpart = true,
+    String? pendingRgbHex,
+    void Function(OHRegistration oh)? onOh,
+  }) async {
     final channel = await Channel.generate('T162');
     client.addChannelKeys(
       channel.id,
       channel.encryptionKey,
-      counterpartOhId: counterpartOhId,
+      channelSecret: channel.channelSecret,
+      counterpartOhId: withCounterpart ? counterpartOhId : null,
       isChannelCreator: true,
+      pendingRgbHex: pendingRgbHex,
     );
-    await client.restoreOutboundHandle(
-      OHRegistration(
-        ohId: ownOhId,
-        keypair: await OHKeypair.generate(),
-        expiresAtMs: DateTime.now()
-            .add(const Duration(days: 7))
-            .millisecondsSinceEpoch,
-        channelId: channel.id,
-        serverEndpoint: 'scripted:1',
-      ),
+    final oh = OHRegistration(
+      ohId: ownOhId,
+      keypair: await OHKeypair.generate(),
+      expiresAtMs: DateTime.now()
+          .add(const Duration(days: 7))
+          .millisecondsSinceEpoch,
+      channelId: channel.id,
+      serverEndpoint: 'scripted:1',
     );
+    onOh?.call(oh);
+    await client.restoreOutboundHandle(oh);
     return channel;
   }
 
@@ -150,6 +175,146 @@ void main() {
     final message = await session.decrypt(payload, channel.id);
     final path = message.replyPath;
     return path == null ? null : ReverseGarlicBlock.deserialize(path);
+  }
+
+  /// Peels [packet] with the keys in [keyring] down to its innermost layer:
+  /// the command, the return-path hop ids/keys and ack tag (acked deliver
+  /// and record lookup), and the deliver payload.
+  Future<
+    ({
+      int cmd,
+      List<String>? returnHops,
+      List<String>? returnHopKeys,
+      Uint8List? ackTag,
+      Uint8List payload,
+    })
+  >
+  peelAny(Uint8List packet, List<TestHop> keyring) async {
+    var p = packet;
+    while (true) {
+      final parsed = ParsedPacket.parse(p);
+      final hop = keyring.firstWhere(
+        (h) => HEX.encode(h.nodeId) == HEX.encode(parsed.nextHop),
+        orElse: () => fail('next hop outside the keyring'),
+      );
+      final plain = await parsed.decryptLayer(hop.keys.privateKey);
+      if (plain[0] == GarlicBuilder.cmdForward) {
+        p = GarlicBuilder.buildPacket(plain.sublist(1, 21), plain.sublist(21));
+        continue;
+      }
+      final cmd = plain[0];
+      int? rpOffset;
+      int payloadOffset;
+      if (cmd == GarlicBuilder.cmdDeliverAcked) {
+        rpOffset = 22 + plain[21];
+        payloadOffset = rpOffset + 37 + plain[rpOffset + 36] * 52;
+      } else if (cmd == GarlicBuilder.cmdRecordLookup) {
+        rpOffset = 21;
+        payloadOffset = -1;
+      } else if (cmd == GarlicBuilder.cmdDeliverTagged) {
+        payloadOffset = 37;
+      } else {
+        expect(cmd, GarlicBuilder.cmdDeliver);
+        payloadOffset = 21;
+      }
+      List<String>? ids;
+      List<String>? keys;
+      Uint8List? tag;
+      if (rpOffset != null) {
+        final count = plain[rpOffset + 36];
+        tag = Uint8List.fromList(plain.sublist(rpOffset + 20, rpOffset + 36));
+        ids = [];
+        keys = [];
+        for (var i = 0; i < count; i++) {
+          final at = rpOffset + 37 + i * 52;
+          ids.add(HEX.encode(plain.sublist(at, at + 20)));
+          keys.add(HEX.encode(plain.sublist(at + 20, at + 52)));
+        }
+      }
+      final payload = payloadOffset < 0
+          ? Uint8List(0)
+          : Uint8List.fromList(
+              plain.sublist(
+                payloadOffset + 4,
+                payloadOffset +
+                    4 +
+                    ByteData.sublistView(plain).getUint32(payloadOffset),
+              ),
+            );
+      return (
+        cmd: cmd,
+        returnHops: ids,
+        returnHopKeys: keys,
+        ackTag: tag,
+        payload: payload,
+      );
+    }
+  }
+
+  Future<List<TestHop>> hopPool() async => [
+    for (var i = 0; i < 4; i++) await TestHop.generate(i + 1),
+  ];
+
+  /// v4 payload length of a message with [contentLength] characters and an
+  /// RGB of [rgbHops] hops (null: none) — the layout the client encrypts.
+  int payloadLength(int contentLength, int? rgbHops, List<TestHop> pool) {
+    final rgb = rgbHops == null
+        ? null
+        : ReverseGarlicBlock(
+            expiryTs: DateTime.now()
+                .add(const Duration(hours: 24))
+                .millisecondsSinceEpoch,
+            sessionTag: Uint8List(16),
+            ohId: ownOhId,
+            hops: [for (final h in pool.take(rgbHops)) h.asGarlicHop],
+          );
+    return MessageCryptoV4.minPayloadLength +
+        ChannelMessage(
+          messageId: Uint8List(16),
+          timestampMs: DateTime.now().millisecondsSinceEpoch,
+          content: 'x' * contentLength,
+          replyPath: rgb?.serialize(),
+        ).encode().length;
+  }
+
+  int smallestContent(bool Function(int n) over) {
+    var n = 1000;
+    while (!over(n)) {
+      n++;
+    }
+    return n;
+  }
+
+  /// One forward send of [contentLength] characters with a handshake-known
+  /// host; returns what left the client.
+  Future<
+    ({
+      int cmd,
+      List<String>? returnHops,
+      ReverseGarlicBlock? rgb,
+      OwnReplyPathShape shape,
+      String hostId,
+    })
+  >
+  sendOnce(int contentLength) async {
+    final (host, export) = await makeHost();
+    final (client, socket, relays) = await setupClient(hostExport: export);
+    addTearDown(client.disconnect);
+    final frames = <Uint8List>[];
+    socket.onCommandFrame = (cmd, payload) {
+      if (cmd == 142) frames.add(payload);
+    };
+    final channel = await channelWithOwnOh(client);
+    await client.sendMessage(channel.id, 'x' * contentLength);
+    await waitFor(() => frames.isNotEmpty, description: 'garlic frame');
+    final peeled = await peelAny(frames.single, [...relays, host]);
+    return (
+      cmd: peeled.cmd,
+      returnHops: peeled.returnHops,
+      rgb: await rgbIn(peeled.payload, channel),
+      shape: client.lastOwnRgbShape,
+      hostId: HEX.encode(host.nodeId),
+    );
   }
 
   /// Peels the forward packet down to its CMD_DELIVER_ACKED layer and returns
@@ -327,42 +492,66 @@ void main() {
 
     test('C2: a host known under a second address is never a relay and '
         'closes the RGB exactly once', () async {
-      // Identity via the peer list only: announcing it on the scripted
-      // connection would start a key exchange the plaintext test socket
-      // cannot complete, and the connection would die mid-test.
-      final (host, _) = await makeHost();
-      final (client, socket, relays) = await setupClient(
-        hostInRepoOnly: host,
-        hostAlias: host,
-      );
-      addTearDown(client.disconnect);
-      final frames = <Uint8List>[];
-      socket.onCommandFrame = (cmd, payload) {
-        if (cmd == 142) frames.add(payload);
-      };
-      final channel = await channelWithOwnOh(client);
-      final hostId = HEX.encode(host.nodeId);
+      // One send per client: the plaintext test socket cannot complete the
+      // key exchange the announced public key starts, so a connection lives
+      // only for a short while after the handshake.
+      for (var round = 0; round < 3; round++) {
+        final (host, export) = await makeHost();
+        final (client, socket, relays) = await setupClient(
+          hostExport: export,
+          hostAlias: host,
+        );
+        final frames = <Uint8List>[];
+        socket.onCommandFrame = (cmd, payload) {
+          if (cmd == 142) frames.add(payload);
+        };
+        final channel = await channelWithOwnOh(client);
+        final hostId = HEX.encode(host.nodeId);
 
-      for (var i = 0; i < 6; i++) {
-        await client.sendMessage(channel.id, 'alias $i');
-        await waitFor(() => frames.length == i + 1, description: 'frame $i');
-        // The forward path is not under test here (without a handshake the
-        // submit node's own id is unknown, so its alias may relay).
-        final (_, returnHops, payload) = await peel(frames[i], [
-          ...relays,
-          host,
-        ]);
-        final rgb = (await rgbIn(payload, channel))!;
+        await client.sendMessage(channel.id, 'alias $round');
+        await waitFor(() => frames.isNotEmpty, description: 'frame $round');
+        final peeled = await peelAny(frames.single, [...relays, host]);
+        final rgb = (await rgbIn(peeled.payload, channel))!;
         final ids = rgb.hops.map((h) => HEX.encode(h.nodeId)).toList();
         expect(ids.where((id) => id == hostId), hasLength(1), reason: '$ids');
         expect(ids.last, hostId);
-        expect(returnHops.where((id) => id == hostId), hasLength(1));
-        expect(returnHops.last, hostId);
+        expect(peeled.returnHops!.where((id) => id == hostId), hasLength(1));
+        expect(peeled.returnHops!.last, hostId);
+        await client.disconnect();
       }
     });
 
-    test('C4: the host identity is taken from the peer list when the live '
-        'connection has not announced it', () async {
+    group('C5: content near the payload limit', () {
+      test(
+        'a message that only fits with the 3-hop RGB gets the 3-hop RGB',
+        () async {
+          final pool = await hopPool();
+          final budget = GarlicBuilder.maxPayloadLength(3);
+          final n = smallestContent((n) => payloadLength(n, 4, pool) > budget);
+          expect(payloadLength(n, 3, pool), lessThanOrEqualTo(budget));
+          final sent = await sendOnce(n);
+          expect(sent.rgb, isNotNull);
+          expect(sent.rgb!.hops, hasLength(3));
+          expect(sent.shape, OwnReplyPathShape.open);
+        },
+      );
+
+      test('a message too large for any RGB is sent without one instead of '
+          'failing', () async {
+        final pool = await hopPool();
+        final budget = GarlicBuilder.maxPayloadLength(3);
+        final n = smallestContent((n) => payloadLength(n, 3, pool) > budget);
+        expect(payloadLength(n, null, pool), lessThanOrEqualTo(budget));
+        final sent = await sendOnce(n);
+        expect(sent.rgb, isNull);
+        expect(sent.shape, OwnReplyPathShape.none);
+      });
+    });
+  });
+
+  group('T162 review round 2', () {
+    test('F1: without an own handshake with the host (identity only in the '
+        'peer list) no path is host-closed', () async {
       final (host, _) = await makeHost();
       final (client, socket, relays) = await setupClient(hostInRepoOnly: host);
       addTearDown(client.disconnect);
@@ -374,40 +563,28 @@ void main() {
 
       await client.sendMessage(channel.id, 'repo only');
       await waitFor(() => frames.isNotEmpty, description: 'garlic frame');
-      final (_, returnHops, payload) = await peel(frames.single, relays);
-      final rgb = (await rgbIn(payload, channel))!;
-      expect(HEX.encode(rgb.hops.last.nodeId), HEX.encode(host.nodeId));
-      expect(rgb.hops, hasLength(4));
-      expect(returnHops.last, HEX.encode(host.nodeId));
+      final peeled = await peelAny(frames.single, [...relays, host]);
+      final rgb = (await rgbIn(peeled.payload, channel))!;
+      final hostId = HEX.encode(host.nodeId);
+      expect(rgb.hops, hasLength(3));
+      expect(
+        rgb.hops.map((h) => HEX.encode(h.nodeId)),
+        isNot(contains(hostId)),
+      );
+      expect(peeled.returnHops, hasLength(3));
+      expect(peeled.returnHops, isNot(contains(hostId)));
+      expect(client.lastOwnRgbShape, OwnReplyPathShape.open);
     });
 
-    group('C5: content near the payload limit', () {
-      /// v4 payload length of a message with [content] and an RGB of
-      /// [rgbHops] hops (null: none) — same layout the client encrypts.
-      int payloadLength(int contentLength, int? rgbHops, List<TestHop> pool) {
-        final rgb = rgbHops == null
-            ? null
-            : ReverseGarlicBlock(
-                expiryTs: DateTime.now()
-                    .add(const Duration(hours: 24))
-                    .millisecondsSinceEpoch,
-                sessionTag: Uint8List(16),
-                ohId: ownOhId,
-                hops: [for (final h in pool.take(rgbHops)) h.asGarlicHop],
-              );
-        return MessageCryptoV4.minPayloadLength +
-            ChannelMessage(
-              messageId: Uint8List(16),
-              timestampMs: DateTime.now().millisecondsSinceEpoch,
-              content: 'x' * contentLength,
-              replyPath: rgb?.serialize(),
-            ).encode().length;
-      }
-
-      Future<ReverseGarlicBlock?> sentRgb(int contentLength) async {
-        final (host, _) = await makeHost();
+    test(
+      'F1: a peer list overwriting the host entry after the handshake '
+      'does not change the closing hop (id AND key from the handshake)',
+      () async {
+        final (host, export) = await makeHost();
+        final foreign = await TestHop.generate(0x66);
         final (client, socket, relays) = await setupClient(
-          hostInRepoOnly: host,
+          hostExport: export,
+          poisonHostEntry: foreign,
         );
         addTearDown(client.disconnect);
         final frames = <Uint8List>[];
@@ -415,73 +592,233 @@ void main() {
           if (cmd == 142) frames.add(payload);
         };
         final channel = await channelWithOwnOh(client);
-        await client.sendMessage(channel.id, 'x' * contentLength);
-        await waitFor(() => frames.isNotEmpty, description: 'garlic frame');
-        final packet = frames.single;
-        // Peel without return-path parsing assumptions: the acked budget
-        // may have been exceeded, so accept DELIVER and DELIVER_ACKED.
-        var p = packet;
-        while (true) {
-          final parsed = ParsedPacket.parse(p);
-          final hop = relays.firstWhere(
-            (h) => HEX.encode(h.nodeId) == HEX.encode(parsed.nextHop),
-          );
-          final plain = await parsed.decryptLayer(hop.keys.privateKey);
-          if (plain[0] == GarlicBuilder.cmdForward) {
-            p = GarlicBuilder.buildPacket(
-              plain.sublist(1, 21),
-              plain.sublist(21),
-            );
-            continue;
-          }
-          int offset;
-          if (plain[0] == GarlicBuilder.cmdDeliverAcked) {
-            offset = 22 + plain[21];
-            offset += 37 + plain[offset + 36] * 52;
-          } else {
-            expect(plain[0], GarlicBuilder.cmdDeliver);
-            offset = 21;
-          }
-          final len = ByteData.sublistView(plain).getUint32(offset);
-          final payload = Uint8List.fromList(
-            plain.sublist(offset + 4, offset + 4 + len),
-          );
-          expect(host.nodeId, isNotEmpty);
-          return rgbIn(payload, channel);
-        }
-      }
 
+        await client.sendMessage(channel.id, 'poisoned peer list');
+        await waitFor(() => frames.isNotEmpty, description: 'garlic frame');
+        final peeled = await peelAny(frames.single, [...relays, host]);
+        final rgb = (await rgbIn(peeled.payload, channel))!;
+        expect(HEX.encode(rgb.hops.last.nodeId), HEX.encode(host.nodeId));
+        expect(
+          HEX.encode(rgb.hops.last.encryptionPublicKey),
+          HEX.encode(host.keys.publicKey),
+          reason: 'the key the host can decrypt with, not the overwritten one',
+        );
+        expect(peeled.returnHops!.last, HEX.encode(host.nodeId));
+        expect(peeled.returnHopKeys!.last, HEX.encode(host.keys.publicKey));
+        expect(client.lastOwnRgbShape, OwnReplyPathShape.hostClosed);
+      },
+    );
+
+    group('F2: the R-ACK is kept before the closing host', () {
       test(
-        'a message that only fits with the 3-hop RGB gets the 3-hop RGB',
+        'payload that fits the acked budget only with a 3-hop return '
+        'path: host-closed RGB, R-ACK over the return path without host',
         () async {
-          final pool = [
-            for (var i = 0; i < 4; i++) await TestHop.generate(i + 1),
-          ];
-          final budget = GarlicBuilder.maxPayloadLength(3);
-          var n = 1000;
-          while (payloadLength(n, 4, pool) <= budget) {
-            n++;
-          }
-          expect(payloadLength(n, 3, pool), lessThanOrEqualTo(budget));
-          final rgb = await sentRgb(n);
-          expect(rgb, isNotNull);
-          expect(rgb!.hops, hasLength(3));
+          final pool = await hopPool();
+          final withHostRp = GarlicBuilder.maxAckedPayloadLength(
+            3,
+            tagged: false,
+            returnHopCount: 4,
+          );
+          final withoutHostRp = GarlicBuilder.maxAckedPayloadLength(
+            3,
+            tagged: false,
+            returnHopCount: 3,
+          );
+          final n = smallestContent(
+            (n) => payloadLength(n, 4, pool) > withHostRp,
+          );
+          expect(payloadLength(n, 4, pool), lessThanOrEqualTo(withoutHostRp));
+          final sent = await sendOnce(n);
+          expect(sent.cmd, GarlicBuilder.cmdDeliverAcked, reason: 'R-ACK kept');
+          expect(sent.returnHops, hasLength(3));
+          expect(sent.returnHops, isNot(contains(sent.hostId)));
+          expect(sent.rgb!.hops, hasLength(4));
+          expect(sent.shape, OwnReplyPathShape.hostClosed);
         },
       );
 
-      test('a message too large for any RGB is sent without one instead of '
-          'failing', () async {
-        final pool = [
-          for (var i = 0; i < 4; i++) await TestHop.generate(i + 1),
-        ];
-        final budget = GarlicBuilder.maxPayloadLength(3);
-        var n = 1000;
-        while (payloadLength(n, 3, pool) <= budget) {
-          n++;
-        }
-        expect(payloadLength(n, null, pool), lessThanOrEqualTo(budget));
-        expect(await sentRgb(n), isNull);
+      test('payload that keeps its R-ACK only with the pre-T162 RGB gets '
+          'that RGB', () async {
+        final pool = await hopPool();
+        final withoutHostRp = GarlicBuilder.maxAckedPayloadLength(
+          3,
+          tagged: false,
+          returnHopCount: 3,
+        );
+        final n = smallestContent(
+          (n) => payloadLength(n, 4, pool) > withoutHostRp,
+        );
+        expect(payloadLength(n, 3, pool), lessThanOrEqualTo(withoutHostRp));
+        final sent = await sendOnce(n);
+        expect(sent.cmd, GarlicBuilder.cmdDeliverAcked, reason: 'R-ACK kept');
+        expect(sent.rgb!.hops, hasLength(3));
+        expect(sent.shape, OwnReplyPathShape.open);
       });
+    });
+
+    test('budget over a pending RGB (no counterpart mailbox known): the RGB '
+        'falls back when it only fits the forward budget', () async {
+      final pool = await hopPool();
+      final rgbBudget = GarlicBuilder.maxPayloadLength(3, tagged: true);
+      final forwardBudget = GarlicBuilder.maxPayloadLength(3);
+      final n = smallestContent((n) => payloadLength(n, 4, pool) > rgbBudget);
+      expect(payloadLength(n, 4, pool), lessThanOrEqualTo(forwardBudget));
+      expect(payloadLength(n, 3, pool), lessThanOrEqualTo(rgbBudget));
+
+      final (host, export) = await makeHost();
+      final (client, socket, relays) = await setupClient(hostExport: export);
+      addTearDown(client.disconnect);
+      final frames = <Uint8List>[];
+      socket.onCommandFrame = (cmd, payload) {
+        if (cmd == 142) frames.add(payload);
+      };
+      // The partner's RGB over our three relays; no counterpart OH known,
+      // so the only path is the pending RGB (tagged budget).
+      final partnerRgb = ReverseGarlicBlock(
+        expiryTs: DateTime.now()
+            .add(const Duration(hours: 1))
+            .millisecondsSinceEpoch,
+        sessionTag: Uint8List(16),
+        ohId: counterpartOhId,
+        hops: [for (final h in relays) h.asGarlicHop],
+      );
+      final channel = await channelWithOwnOh(
+        client,
+        withCounterpart: false,
+        pendingRgbHex: HEX.encode(partnerRgb.serialize()),
+      );
+      await client.sendMessage(channel.id, 'x' * n);
+      await waitFor(() => frames.isNotEmpty, description: 'garlic frame');
+      expect(client.lastSendViaRgb, isTrue);
+      final peeled = await peelAny(frames.single, [...relays, host]);
+      final rgb = (await rgbIn(peeled.payload, channel))!;
+      expect(rgb.hops, hasLength(3));
+      expect(client.lastOwnRgbShape, OwnReplyPathShape.open);
+    });
+
+    test(
+      'C3: the rendezvous lookup return path is closed by the host',
+      () async {
+        final (host, export) = await makeHost();
+        final (client, socket, relays) = await setupClient(hostExport: export);
+        addTearDown(client.disconnect);
+        final frames = <Uint8List>[];
+        socket.onCommandFrame = (cmd, payload) {
+          if (cmd == 142) frames.add(payload);
+        };
+        final channel = await channelWithOwnOh(client, withCounterpart: false);
+        // No counterpart mailbox known → the send fails and kicks off the
+        // rendezvous recovery (record lookups over garlic).
+        await expectLater(
+          client.sendMessage(channel.id, 'who is there?'),
+          throwsA(isA<UnknownCounterpartException>()),
+        );
+        await waitFor(
+          () => frames.isNotEmpty,
+          timeout: const Duration(seconds: 20),
+          description: 'record lookup frame',
+        );
+        final peeled = await peelAny(frames.first, [...relays, host]);
+        expect(peeled.cmd, GarlicBuilder.cmdRecordLookup);
+        expect(peeled.returnHops, hasLength(4));
+        expect(peeled.returnHops!.last, HEX.encode(host.nodeId));
+      },
+    );
+
+    test('C7: the closing host is not fed to the node scorer', () async {
+      final (host, export) = await makeHost();
+      final (client, socket, relays) = await setupClient(hostExport: export);
+      addTearDown(client.disconnect);
+      final frames = <Uint8List>[];
+      final scores = <NodeScoreUpdate>[];
+      client.stateUpdates.of<NodeScoreUpdate>().listen(scores.add);
+      late OHRegistration oh;
+      final channel = await channelWithOwnOh(client, onOh: (o) => oh = o);
+      socket.onCommandFrame = (cmd, payload) {
+        if (cmd == 142) frames.add(payload);
+      };
+      await client.sendMessage(channel.id, 'please ack');
+      await waitFor(() => frames.isNotEmpty, description: 'garlic frame');
+      final peeled = await peelAny(frames.single, [...relays, host]);
+      expect(peeled.returnHops!.last, HEX.encode(host.nodeId));
+
+      // Deliver the R-ACK into our mailbox and let the client fetch it.
+      final rAck = RoutingAck(
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        status: RoutingAck.statusStored,
+      ).encode();
+      socket.onCommandFrame = (cmd, payload) {
+        if (cmd == 152) {
+          final response = FetchResponse()
+            ..status = Status.OK
+            ..nextCursor = fixnum.Int64(1);
+          response.items.add(
+            MailItem(
+              receivedAtMs: fixnum.Int64(DateTime.now().millisecondsSinceEpoch),
+              payload: rAck,
+              sequenceId: fixnum.Int64(1),
+              sessionTag: peeled.ackTag,
+            ),
+          );
+          socket.replyCommand(153, response.writeToBuffer());
+        } else if (cmd == 156) {
+          socket.replyCommand(
+            157,
+            (AckFetchResponse()..status = Status.OK).writeToBuffer(),
+          );
+        }
+      };
+      await client.fetchMessages(oh);
+      await waitFor(() => scores.isNotEmpty, description: 'node scores');
+      final scored = scores.last.scores.map((s) => s.nodeIdHex).toSet();
+      expect(scored, isNot(contains(HEX.encode(host.nodeId))));
+      expect(
+        scored,
+        containsAll(peeled.returnHops!.take(3)),
+        reason: 'the relays are scored',
+      );
+    });
+
+    test('RgbBuilder: a selector that returns the closing host never makes it '
+        'a relay', () async {
+      final (host, _) = await makeHost();
+      final repo = InMemoryPeerRepository();
+      final relays = [
+        for (var i = 0; i < 3; i++) await TestHop.generate(i + 1),
+      ];
+      for (final (i, hop) in [...relays, host].indexed) {
+        repo.updatePeer(
+          '10.3.0.$i:5000',
+          nodeId: HEX.encode(hop.nodeId),
+          encryptionPublicKey: HEX.encode(hop.keys.publicKey),
+        );
+      }
+      final builder = RgbBuilder(HopSelector(repo));
+      final hostId = HEX.encode(host.nodeId);
+      var sawFilter = false;
+      for (var i = 0; i < 40; i++) {
+        final rgb = builder.build(ohId: ownOhId, closingHop: host.asGarlicHop)!;
+        final ids = rgb.hops.map((h) => HEX.encode(h.nodeId)).toList();
+        expect(ids.where((id) => id == hostId), hasLength(1), reason: '$ids');
+        expect(ids.last, hostId);
+        if (ids.length < 4) sawFilter = true;
+      }
+      expect(sawFilter, isTrue, reason: 'the selector did return the host');
+
+      // Only the host as candidate: no relay left → no RGB at all.
+      final onlyHost = InMemoryPeerRepository()
+        ..updatePeer(
+          '10.4.0.1:5000',
+          nodeId: hostId,
+          encryptionPublicKey: HEX.encode(host.keys.publicKey),
+        );
+      expect(
+        RgbBuilder(
+          HopSelector(onlyHost),
+        ).build(ohId: ownOhId, closingHop: host.asGarlicHop),
+        isNull,
+      );
     });
   });
 }

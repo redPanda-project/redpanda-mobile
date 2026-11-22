@@ -111,6 +111,13 @@ class ActivePeer {
   /// KademliaId (hex) of this peer, set once its public key was received.
   String? discoveredNodeId;
 
+  /// X25519 encryption public key (hex) from the same 64-byte public export
+  /// this connection received in its own handshake — the key that belongs
+  /// to [discoveredNodeId]. Unlike the peer repository entry for this
+  /// address (overwritten by every peer list any node sends), it cannot be
+  /// replaced by a third party (T162 review, F1).
+  String? discoveredEncryptionKey;
+
   /// Consecutive fetch timeouts on THIS connection (T33), maintained by the
   /// client: incremented per fetch timeout, reset on any fetch response. A
   /// fresh connection starts at 0 by construction — the counter must never
@@ -513,6 +520,7 @@ class ActivePeer {
     // (needed for garlic hop selection, MS04).
     final nodeId = NodeId.fromPublicKeyBytes(Uint8List.fromList(keyBytes));
     discoveredNodeId = nodeId.toHex();
+    discoveredEncryptionKey = HEX.encode(keyBytes.sublist(32, 64));
     onNodeIdDiscovered?.call(
       nodeId.toHex(),
       HEX.encode(keyBytes.sublist(32, 64)),

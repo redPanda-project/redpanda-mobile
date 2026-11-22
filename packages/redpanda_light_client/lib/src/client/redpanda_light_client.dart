@@ -247,6 +247,12 @@ class RedPandaLightClient implements RedPandaClient {
   /// path (CMD_DELIVER_TAGGED over the partner's RGB hops). Diagnostic only.
   bool lastSendViaRgb = false;
 
+  /// Shape of the reply path (RGB) the most recent sendMessage embedded:
+  /// closed by our mailbox host, the pre-T162 shape ending at the last relay
+  /// (no host identity from a handshake, or the payload too large for the
+  /// host-closed one), or none. Diagnostic only (T162 review F5).
+  OwnReplyPathShape lastOwnRgbShape = OwnReplyPathShape.none;
+
   /// True when the most recent sendMessage requested an R-ACK
   /// (CMD_DELIVER_ACKED with return path, MS06). Diagnostic only.
   bool lastSendAckRequested = false;
@@ -1092,32 +1098,18 @@ class RedPandaLightClient implements RedPandaClient {
   /// last relay no longer learns the oh_id either (only the host, which
   /// knows it anyway, decrypts the deliver layer).
   ///
-  /// The host's identity comes from the live connection serving the OH
-  /// endpoint (node id from its handshake, X25519 key from the peer list),
-  /// or — without a usable live connection — from the peer list entry for
-  /// that endpoint. Null only when neither knows the host's node id and
-  /// encryption key; the path then ends at the last relay as before.
+  /// The host's identity (node id AND X25519 key) is taken only from our
+  /// own handshake with the live connection serving the OH endpoint — never
+  /// from the peer repository, whose entries any node can overwrite with
+  /// its peer lists (T162 review F1: a stale or planted pair would make the
+  /// host unable to decrypt — or a third node able to drop — every reply
+  /// and every R-ACK). Null without such a connection; the path then ends at
+  /// the last relay as before (pre-T162 shape).
   GarlicHop? _ownHostHop(OHRegistration ownOh) {
     final endpoint = ownOh.serverEndpoint;
     if (endpoint == null) return null;
     final live = _livePeerFor(endpoint);
-    final fromLive = live == null ? null : _selfHop(live);
-    if (fromLive != null) return fromLive;
-    for (final address in _hostAddresses(endpoint)) {
-      final peer = _peerRepository.getPeer(address);
-      final nodeIdHex = peer?.nodeId;
-      final keyHex = peer?.encryptionPublicKey;
-      if (nodeIdHex != null &&
-          nodeIdHex.length == GarlicHop.nodeIdLength * 2 &&
-          keyHex != null &&
-          keyHex.length == 64) {
-        return GarlicHop(
-          nodeId: _hexDecode(nodeIdHex),
-          encryptionPublicKey: _hexDecode(keyHex),
-        );
-      }
-    }
-    return null;
+    return live == null ? null : _selfHop(live);
   }
 
   /// T162: [relays] closed by the host of [ownOh] (see [_ownHostHop]).
@@ -2049,6 +2041,11 @@ class RedPandaLightClient implements RedPandaClient {
     );
     final rgb = _fitOwnRgb(channelId, _buildOwnRgb(channelId), messageWith);
     if (rgb != null) _commitOwnRgb(channelId, rgb);
+    lastOwnRgbShape = rgb == null
+        ? OwnReplyPathShape.none
+        : _endsAtOwnHost(channelId, rgb.hops)
+        ? OwnReplyPathShape.hostClosed
+        : OwnReplyPathShape.open;
     final channelMessage = messageWith(rgb);
     final session = await _ratchetSessions[channelId]!;
     final payload = await session.encrypt(channelMessage, channelId);
@@ -2581,9 +2578,11 @@ class RedPandaLightClient implements RedPandaClient {
     if (nodeIdHex == null || nodeIdHex.length != GarlicHop.nodeIdLength * 2) {
       return null;
     }
-    final keyHex = _peerRepository
-        .getPeer(submitVia.address)
-        ?.encryptionPublicKey;
+    // T162 review F1: node id AND key from this connection's own handshake
+    // (one public export). The peer repository entry for the address may
+    // have been overwritten by another node's peer list with a stale or
+    // foreign key the node cannot decrypt with.
+    final keyHex = submitVia.discoveredEncryptionKey;
     if (keyHex == null || keyHex.length != 64) return null;
     return GarlicHop(
       nodeId: _hexDecode(nodeIdHex),
@@ -2764,32 +2763,60 @@ class RedPandaLightClient implements RedPandaClient {
     return rgb;
   }
 
-  /// T162/C5: the RGB rides inside the encrypted payload, and closing it at
-  /// the host adds a hop descriptor (~56 bytes) while the reply onion over
-  /// it loses one layer of budget. A message that fit with the 3-hop RGB
-  /// must not become permanently undeliverable: when the payload with
-  /// [rgb] would exceed the largest budget a path for it offers, fall back
-  /// to the pre-T162 RGB without the closing host, then to no RGB at all.
+  /// T162/C5 + review F2: the RGB rides inside the encrypted payload, and
+  /// closing it at the host adds a hop descriptor (~58 bytes); the R-ACK
+  /// return path closed at the host costs another 52 bytes of the acked
+  /// budget. Neither may cost a message what it had before T162:
+  ///
+  /// 1. the R-ACK — a send without one is never re-sent when it is lost. The
+  ///    RGB is kept host-closed only while the payload still fits the acked
+  ///    budget with a return path WITHOUT the host (the return path itself
+  ///    falls back to that shape first, see [_buildReturnPath]); otherwise
+  ///    the pre-T162 RGB is used if that keeps the R-ACK;
+  /// 2. deliverability — beyond any acked budget, the host-closed RGB, then
+  ///    the pre-T162 one, then none, whichever still fits the hard budget.
   ReverseGarlicBlock? _fitOwnRgb(
     String channelId,
     ReverseGarlicBlock? rgb,
     ChannelMessage Function(ReverseGarlicBlock? rgb) messageWith,
   ) {
     if (rgb == null) return null;
-    final budget = _hardPayloadBudget(channelId);
-    if (budget <= 0) return rgb; // no path at all — the send fails anyway
+    final hard = _payloadBudget(channelId);
+    if (hard <= 0) return rgb; // no path at all — the send fails anyway
+    final acked = _payloadBudget(channelId, ackReturnHops: defaultHopCount);
     int lengthWith(ReverseGarlicBlock? r) =>
         MessageCryptoV4.minPayloadLength + messageWith(r).encode().length;
-    if (lengthWith(rgb) <= budget) return rgb;
-    final open = _buildOwnRgb(channelId, closeAtHost: false);
-    if (open != null &&
-        open.hops.length < rgb.hops.length &&
-        lengthWith(open) <= budget) {
+    ReverseGarlicBlock? open;
+    var openBuilt = false;
+    ReverseGarlicBlock? openRgb() {
+      if (!openBuilt) {
+        openBuilt = true;
+        final candidate = _endsAtOwnHost(channelId, rgb.hops)
+            ? _buildOwnRgb(channelId, closeAtHost: false)
+            : null;
+        open = candidate != null && candidate.hops.length < rgb.hops.length
+            ? candidate
+            : null;
+      }
+      return open;
+    }
+
+    if (lengthWith(rgb) <= acked) return rgb;
+    final shorter = openRgb();
+    if (shorter != null && lengthWith(shorter) <= acked) {
+      RpLog.info(
+        'RedPandaLightClient: sendMessage() attaching the pre-T162 reply '
+        'path to keep the R-ACK',
+      );
+      return shorter;
+    }
+    if (lengthWith(rgb) <= hard) return rgb;
+    if (shorter != null && lengthWith(shorter) <= hard) {
       RpLog.info(
         'RedPandaLightClient: sendMessage() payload too large for a '
         'host-closed reply path, attaching the shorter one',
       );
-      return open;
+      return shorter;
     }
     RpLog.info(
       'RedPandaLightClient: sendMessage() payload too large to carry a reply '
@@ -2798,23 +2825,42 @@ class RedPandaLightClient implements RedPandaClient {
     return null;
   }
 
-  /// The largest payload a send on [channelId] can carry right now: over
-  /// the pending RGB (tagged reply) or the forward garlic path (only when a
-  /// counterpart OH is known). 0 when neither exists.
-  int _hardPayloadBudget(String channelId) {
+  /// The largest payload a send on [channelId] can carry right now over the
+  /// pending RGB (tagged reply) or the forward garlic path (only when a
+  /// counterpart OH is known); 0 when neither exists. With [ackReturnHops]
+  /// the budget of an acked send whose return path has that many hops.
+  int _payloadBudget(String channelId, {int? ackReturnHops}) {
     final pending = _pendingRgbs[channelId];
-    final viaRgb = pending != null && !pending.isExpired()
-        ? GarlicBuilder.maxPayloadLength(pending.hops.length, tagged: true)
+    final rgbHops = pending != null && !pending.isExpired()
+        ? pending.hops.length
         : 0;
     final hasTargets =
         _channelCounterpartOhSet[channelId]?.any(
           (t) => t.ohId.length == GarlicHop.nodeIdLength,
         ) ??
         false;
-    final forward = hasTargets
-        ? GarlicBuilder.maxPayloadLength(defaultHopCount)
-        : 0;
+    int budget(int hops, {required bool tagged}) => ackReturnHops == null
+        ? GarlicBuilder.maxPayloadLength(hops, tagged: tagged)
+        : GarlicBuilder.maxAckedPayloadLength(
+            hops,
+            tagged: tagged,
+            returnHopCount: ackReturnHops,
+          );
+    final viaRgb = rgbHops > 0 ? budget(rgbHops, tagged: true) : 0;
+    final forward = hasTargets ? budget(defaultHopCount, tagged: false) : 0;
     return max(viaRgb, forward);
+  }
+
+  /// Whether [hops] end at the host of the own OH of [channelId] (as known
+  /// from our own handshake, see [_ownHostHop]).
+  bool _endsAtOwnHost(String channelId, List<GarlicHop> hops) {
+    if (hops.isEmpty) return false;
+    final ownOh = _registeredOHs
+        .where((oh) => oh.channelId == channelId)
+        .firstOrNull;
+    final host = ownOh == null ? null : _ownHostHop(ownOh);
+    return host != null &&
+        _hexEncode(hops.last.nodeId) == _hexEncode(host.nodeId);
   }
 
   /// Registers the session tag of the RGB that is actually sent.
@@ -2822,11 +2868,8 @@ class RedPandaLightClient implements RedPandaClient {
     final ownOh = _registeredOHs
         .where((oh) => oh.channelId == channelId)
         .firstOrNull;
-    final hostHex = ownOh == null ? null : _ownHostHop(ownOh)?.nodeId;
-    final closes =
-        hostHex != null &&
-        _hexEncode(rgb.hops.last.nodeId) == _hexEncode(hostHex);
-    final relayCount = rgb.hops.length - (closes ? 1 : 0);
+    final relayCount =
+        rgb.hops.length - (_endsAtOwnHost(channelId, rgb.hops) ? 1 : 0);
     if (relayCount < defaultHopCount) {
       RpLog.info(
         'RedPandaLightClient: sendMessage() reply path has only '
@@ -2913,7 +2956,7 @@ class RedPandaLightClient implements RedPandaClient {
     // Return hops: same selector and exclusions as the RGB (the ack OH host
     // never relays its own acks; the submit node sees us directly). Like the
     // RGB, the path is closed by the ack OH host itself (T162).
-    final returnHops = _closeAtOwnHost(
+    final closed = _closeAtOwnHost(
       _hopSelector.selectHops(
         count: defaultHopCount,
         excludeAddresses: {
@@ -2927,14 +2970,27 @@ class RedPandaLightClient implements RedPandaClient {
       ),
       ownOh,
     );
-    final withinBudget =
+    bool fits(List<GarlicHop> hops) =>
         payloadLength <=
         GarlicBuilder.maxAckedPayloadLength(
           forwardHops.length,
           tagged: tagged,
-          returnHopCount: returnHops.length,
+          returnHopCount: hops.length,
         );
-    if (!withinBudget) {
+    // T162 review F2: the closing host costs a hop descriptor of the acked
+    // budget — rather drop the host than the R-ACK (a lost unacked send is
+    // never re-sent).
+    final List<GarlicHop> returnHops;
+    if (fits(closed)) {
+      returnHops = closed;
+    } else if (_endsAtOwnHost(channelId, closed) &&
+        fits(closed.sublist(0, closed.length - 1))) {
+      RpLog.info(
+        'RedPandaLightClient: sendMessage() payload of $payloadLength bytes '
+        'too large for a host-closed return path, using the shorter one',
+      );
+      returnHops = closed.sublist(0, closed.length - 1);
+    } else {
       RpLog.info(
         'RedPandaLightClient: sendMessage() payload of $payloadLength bytes '
         'exceeds the acked budget — sending without an R-ACK request',
@@ -5790,4 +5846,17 @@ class _ResponseQueue {
     _pending.clear();
     _abandoned = 0;
   }
+}
+
+/// Shape of the reply path embedded in an outgoing message (see
+/// [RedPandaLightClient.lastOwnRgbShape]).
+enum OwnReplyPathShape {
+  /// Relays closed by our own mailbox host (T162).
+  hostClosed,
+
+  /// Relays only, ending at the last relay (pre-T162 shape).
+  open,
+
+  /// No reply path attached.
+  none,
 }
