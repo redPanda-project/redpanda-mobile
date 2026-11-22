@@ -492,9 +492,9 @@ void main() {
 
       // Set once pairing has started; the tear-down completes the entry
       // with what the creator learned after the hello had arrived.
+      const hello = 'lab pairing hello bob->alice';
       Map<String, Object?>? pairingReport;
       _Party? creator;
-      int? helloArrivedAtMs;
 
       // In a tear-down, not a `finally`: a test that runs into its timeout
       // is abandoned without unwinding, and that is exactly the run whose
@@ -504,7 +504,10 @@ void main() {
         if (pairingEntry != null) {
           // Always written once pairing has started, so a reader can tell
           // "never happened" (null) from a report cut off earlier.
-          final helloAt = helloArrivedAtMs;
+          // Read from the creator's own arrivals, not from the pairing
+          // step's result: a hello that arrived after that step gave up, or
+          // in a run that was abandoned on its timeout, still counts.
+          final helloAt = creator?.arrivals[hello];
           final learnedMs = creator?.counterpartOhLearnedMs;
           pairingEntry['aliceLearnedBobMailboxAfterHelloMs'] =
               helloAt == null || learnedMs == null ? null : learnedMs - helloAt;
@@ -650,7 +653,6 @@ void main() {
       // Bob says hello. A send that fails because Alice's mailbox is still
       // unknown kicks off the rendezvous lookup and is repeated on the app
       // outbox's backoff; once the mailbox is known the lab sends at once.
-      const hello = 'lab pairing hello bob->alice';
       final attempts = <Map<String, Object?>>[];
       pairing['attempts'] = attempts;
       String? helloId;
@@ -722,7 +724,6 @@ void main() {
       pairing['aliceLearnedBobMailboxMs'] = sinceScan(
         alice.counterpartOhLearnedMs,
       );
-      helloArrivedAtMs = helloArrivedMs;
       pairing['withinBudget'] =
           firstDeliveryMs != null &&
           firstDeliveryMs <= pairingBudget.inMilliseconds;
