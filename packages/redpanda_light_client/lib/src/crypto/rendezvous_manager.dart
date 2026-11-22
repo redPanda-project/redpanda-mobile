@@ -61,6 +61,24 @@ class RendezvousManager {
   List<int>? channelSecretOf(String channelId) =>
       _states[channelId]?.channelSecret;
 
+  /// Whether the local side created [channelId] (null for an unknown
+  /// channel).
+  bool? isCreatorOf(String channelId) => _states[channelId]?.isCreator;
+
+  /// Whether the merge state of [channelId] holds an entry of the
+  /// counterpart role — i.e. a resolved record (or a restored snapshot) has
+  /// told us about the other side. T160: a side without one must READ the
+  /// record before it writes, or its publish erases what it never saw.
+  bool knowsCounterpartEntry(String channelId) {
+    final state = _states[channelId];
+    if (state == null) return false;
+    final counterpartId = ChannelRendezvous.participantId(
+      state.channelSecret,
+      isCreator: !state.isCreator,
+    );
+    return state.knownEntries.containsKey(_hex(counterpartId));
+  }
+
   /// The `[today, yesterday]` Kademlia record keys to look a channel's record
   /// up under (records rotate under the UTC-day key, TTL 48 h).
   Future<List<Uint8List>> lookupKeys(String channelId, int nowMs) async {
@@ -123,6 +141,7 @@ class RendezvousManager {
       merged,
       nowMs,
     );
+    state.lastBuiltRecordTs = signed.timestampMs;
     return KademliaStore(
       timestamp: Int64(signed.timestampMs),
       publicKey: signed.publicKey,
@@ -150,6 +169,24 @@ class RendezvousManager {
   /// the record is invalid/stale, undecryptable, or carries nothing newer for
   /// the counterpart.
   Future<List<OHDescriptor>?> applyResolvedRecord(
+    String channelId,
+    SignedRendezvousRecord record,
+    int nowMs,
+  ) async => (await applyResolvedRecordDetailed(
+    channelId,
+    record,
+    nowMs,
+  ))?.counterpartOhs;
+
+  /// [applyResolvedRecord] plus the read-repair verdict (T160): whether the
+  /// record is NEWER than the last one we built ourselves, carries another
+  /// participant's entry, and lacks our own current entry (missing, or with
+  /// an OH list that is not our current one). Such a record was written by
+  /// someone who had not seen our entry — the node keeps only the newest
+  /// record, so our entry is gone from the DHT until we write the merged
+  /// record back. Returns null when the record is invalid (signature, TTL,
+  /// key pin, decryption) — then nothing was merged and nothing is repaired.
+  Future<ResolvedRecord?> applyResolvedRecordDetailed(
     String channelId,
     SignedRendezvousRecord record,
     int nowMs,
@@ -183,6 +220,25 @@ class RendezvousManager {
       return null; // wrong key / tampered / malformed
     }
 
+    final ownIdHex = _hex(
+      ChannelRendezvous.participantId(
+        state.channelSecret,
+        isCreator: state.isCreator,
+      ),
+    );
+    final ownInRecord = entries
+        .where((e) => _hex(e.participantId) == ownIdHex)
+        .firstOrNull;
+    final hasForeignEntry = entries.any(
+      (e) => _hex(e.participantId) != ownIdHex,
+    );
+    final lastBuilt = state.lastBuiltRecordTs;
+    final needsRepair =
+        state.ownOhs.isNotEmpty &&
+        hasForeignEntry &&
+        (lastBuilt == null || record.timestampMs > lastBuilt) &&
+        (ownInRecord == null || !_sameOhList(ownInRecord.ohs, state.ownOhs));
+
     final counterpartId = ChannelRendezvous.participantId(
       state.channelSecret,
       isCreator: !state.isCreator,
@@ -193,11 +249,12 @@ class RendezvousManager {
       ChannelRendezvous.mergeEntries(state.knownEntries.values, entries),
     );
     final after = state.knownEntries[counterpartIdHex];
-    if (after == null) return null;
-    if (before != null && after.entryTs <= before.entryTs) {
-      return null; // nothing newer for the counterpart
-    }
-    return after.ohs;
+    final advanced =
+        after != null && (before == null || after.entryTs > before.entryTs);
+    return ResolvedRecord(
+      counterpartOhs: advanced ? after.ohs : null,
+      needsRepair: needsRepair,
+    );
   }
 
   /// Serializes the merge state of [channelId] — the newest-known entry per
@@ -287,11 +344,32 @@ class RendezvousManager {
   }
 }
 
+/// The outcome of applying a resolved rendezvous record
+/// ([RendezvousManager.applyResolvedRecordDetailed]).
+class ResolvedRecord {
+  /// The counterpart's OH list if the record advanced it, else null.
+  final List<OHDescriptor>? counterpartOhs;
+
+  /// Whether the record overwrote our own current entry (T160 read-repair):
+  /// publish the merged record again.
+  final bool needsRepair;
+
+  const ResolvedRecord({
+    required this.counterpartOhs,
+    required this.needsRepair,
+  });
+}
+
 class _ChannelRendezvousState {
   final Uint8List channelSecret;
   final bool isCreator;
   String ownName;
   List<OHDescriptor> ownOhs = const [];
+
+  /// Timestamp of the last record this side built for publishing (null:
+  /// never, or not since a worker respawn). A resolved record that is not
+  /// newer than this one predates our own write and is no reason to repair.
+  int? lastBuiltRecordTs;
 
   /// Newest-known entry per participant id (hex), the client-side merge state.
   final Map<String, RendezvousEntry> knownEntries = {};

@@ -70,6 +70,31 @@ Future<GarlicDeposit?> peelGarlicDeposit(
   }
 }
 
+/// Peels every forward layer of a submitted garlic [packet] with the known
+/// [hops] and returns the innermost layer's plaintext, whatever it is (its
+/// first byte is the command: a deposit, or a T44 `CMD_RECORD_STORE` /
+/// `CMD_RECORD_LOOKUP`). Fails if a layer is addressed to an unknown hop.
+Future<Uint8List> peelGarlicInnermost(
+  Uint8List packet,
+  List<TestHop> hops,
+) async {
+  while (true) {
+    final parsed = ParsedPacket.parse(packet);
+    final hop = hops.firstWhere(
+      (h) => _hex(h.nodeId) == _hex(parsed.nextHop),
+      orElse: () => fail('garlic next_hop is not one of the known relays'),
+    );
+    final plaintext = await parsed.decryptLayer(hop.keys.privateKey);
+    if (plaintext[0] != GarlicBuilder.cmdForward) {
+      return Uint8List.fromList(plaintext);
+    }
+    packet = GarlicBuilder.buildPacket(
+      plaintext.sublist(1, 21),
+      plaintext.sublist(21),
+    );
+  }
+}
+
 String _hex(List<int> b) =>
     b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
 
